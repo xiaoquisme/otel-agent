@@ -133,10 +133,10 @@
 
 **Purpose**: Final cleanup and documentation
 
-- [ ] T028 Update `README.md` with new `otel-agent` command names (replace all `otel-proxy` references)
-- [ ] T029 Update `pyproject.toml` description, classifiers, and homepage URL for PyPI readiness
-- [ ] T030 Run full test suite `uv run pytest tests/ -v -m "not integration"` — all pass
-- [ ] T031 Run quickstart validation from `specs/001-global-cli-tool/quickstart.md`
+- [x] T028 Update `README.md` with new `otel-agent` command names (replace all `otel-proxy` references)
+- [x] T029 Update `pyproject.toml` description, classifiers, and homepage URL for PyPI readiness
+- [x] T030 Run full test suite `uv run pytest tests/ -v -m "not integration"` — all pass
+- [x] T031 Run quickstart validation from `specs/001-global-cli-tool/quickstart.md`
 
 ---
 
