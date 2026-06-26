@@ -2,13 +2,92 @@
 
 Intercept, log, and redirect LLM API calls. Config-driven multi-key rotation.
 
+## Install
+
+```bash
+# Run without installing
+uvx otel-agent --version
+
+# Install globally
+uv tool install otel-agent
+
+# pip fallback
+pip install otel-agent
+```
+
 ## Quick Start
 
 ```bash
-uv sync
-uv run otel-agent init       # creates ~/.otel-agent/config.yaml
-# edit config to add your API keys
-uv run otel-proxy proxy      # start proxy on :8080
+# 1. Create config
+otel-agent init
+
+# 2. Edit config to add your API keys
+otel-agent config edit
+
+# 3. Start proxy
+otel-agent proxy
+
+# 4. View logged requests
+otel-agent view
+```
+
+## Commands
+
+```
+otel-agent --version          Print version
+otel-agent init               Create default config file
+otel-agent proxy              Start the MITM proxy
+otel-agent view               View logged requests
+otel-agent config path|show|edit  Manage configuration
+otel-agent doctor             Check installation health
+```
+
+### `otel-agent init`
+
+Creates `~/.otel-agent/config.yaml` with a documented template. Won't overwrite existing config.
+
+```bash
+otel-agent init
+otel-agent init -c ./custom-config.yaml
+```
+
+### `otel-agent proxy`
+
+Start the MITM proxy with config-driven key rotation.
+
+```bash
+otel-agent proxy                    # port 8080, default config
+otel-agent proxy -p 9090            # custom port
+otel-agent proxy -u https://api.anthropic.com  # override upstream
+otel-agent proxy -c ./config.yaml   # custom config
+```
+
+### `otel-agent view`
+
+Display logged requests.
+
+```bash
+otel-agent view                     # last 20 requests
+otel-agent view --filter openai     # filter by upstream
+otel-agent view --limit 50          # show more rows
+```
+
+### `otel-agent config`
+
+Manage configuration without remembering the file path.
+
+```bash
+otel-agent config path              # print config file path
+otel-agent config show              # display config (keys masked)
+otel-agent config edit              # open in $EDITOR
+```
+
+### `otel-agent doctor`
+
+Check installation health.
+
+```bash
+otel-agent doctor                   # check Python, mitmproxy, config, port
 ```
 
 ## Config File
@@ -32,40 +111,11 @@ providers:
     keys:
       - key: sk-ant-key1
         active: true
-      - key: sk-ant-key2
-        active: true
-
-  deepseek:
-    base_url: https://api.deepseek.com/v1
-    keys:
-      - key: sk-ds-key1
-        active: true
 ```
 
 - **Round-robin** among active keys per provider
 - **Hot-reload**: edit the file, changes take effect on next request (no restart)
 - Toggle `active: true/false` to enable/disable keys
-- Provider matched by host substring: request to `api.openai.com` uses `openai` provider
-
-## Usage
-
-```bash
-# Start proxy
-uv run otel-proxy proxy
-
-# Custom port and DB
-uv run otel-proxy proxy -p 9090 -d /tmp/logs.db
-
-# Override upstream (ignores config base_url)
-uv run otel-proxy proxy -u https://custom-endpoint.com
-
-# Use different config file
-uv run otel-proxy proxy -c ./project-config.yaml
-
-# View logged requests
-uv run otel-proxy view
-uv run otel-proxy view --filter openai --limit 50
-```
 
 ## Client Usage
 
@@ -76,21 +126,11 @@ hermes config set model.base_url http://127.0.0.1:8080
 hermes config set model.api_key dummy
 ```
 
-Or in `~/.hermes/config.yaml`:
-```yaml
-model:
-  default: claude-sonnet-4-20250514
-  provider: anthropic
-  base_url: http://127.0.0.1:8080
-  api_key: dummy
-```
-
 ### Claude Code
 
 ```bash
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
-export ANTHROPIC_API_KEY=dummy
-claude -p "your task"
+export ANTHROPIC_API_KEY=*** -p "your task"
 ```
 
 ### OpenAI SDK
@@ -104,23 +144,6 @@ client = OpenAI(
     http_client=httpx.Client(proxies="http://127.0.0.1:8080", verify=False),
 )
 ```
-
-### curl
-
-```bash
-export https_proxy=http://127.0.0.1:8080
-curl -k https://api.openai.com/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}'
-```
-
-## Schema
-
-Each logged request includes:
-- `timestamp`, `method`, `url`, `upstream`
-- `request_headers`, `request_body` (full JSON)
-- `response_status`, `response_headers`, `response_body`
-- `latency_ms`
 
 ## Testing
 
