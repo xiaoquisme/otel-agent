@@ -1,5 +1,6 @@
 installed:
 - agent-context
+- bugfix
 settings:
   auto_execute_hooks: true
 hooks:
@@ -20,4 +21,13 @@ hooks:
     priority: 10
     prompt: Execute speckit.agent-context.update?
     description: Refresh agent context after planning
+    condition: null
+  after_implement:
+  - extension: bugfix
+    command: speckit.bugfix.verify
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Run bugfix consistency check after implementation?
+    description: Verify spec artifact consistency after implementation completes
     condition: null
