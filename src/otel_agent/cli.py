@@ -88,6 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Port to check (default: 8080)",
     )
 
+    # --- routes ---
+    routes_p = sub.add_parser("routes", help="Display routing table")
+    routes_p.add_argument(
+        "-c", "--config", type=str,
+        default="~/.otel-agent/config.yaml",
+        help="Config file path",
+    )
+
     return parser
 
 
@@ -115,6 +123,9 @@ def main() -> None:
     elif args.command == "doctor":
         from otel_agent.commands.doctor import handle_doctor
         handle_doctor(args)
+    elif args.command == "routes":
+        from otel_agent.commands.routes import handle_routes
+        handle_routes(args)
     else:
         parser.print_help()
         sys.exit(1)

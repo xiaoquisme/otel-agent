@@ -20,7 +20,7 @@ providers:
     cfg = Config(config_file)
     rotator = KeyRotator(cfg)
 
-    seen = [rotator.next("api.openai.com") for _ in range(6)]
+    seen = [rotator.next("openai") for _ in range(6)]
     assert seen == ["sk-a", "sk-b", "sk-c", "sk-a", "sk-b", "sk-c"]
 
 
@@ -41,7 +41,7 @@ providers:
     cfg = Config(config_file)
     rotator = KeyRotator(cfg)
 
-    seen = [rotator.next("api.openai.com") for _ in range(4)]
+    seen = [rotator.next("openai") for _ in range(4)]
     assert seen == ["sk-a", "sk-c", "sk-a", "sk-c"]
 
 
@@ -58,7 +58,7 @@ providers:
     cfg = Config(config_file)
     rotator = KeyRotator(cfg)
 
-    assert rotator.next("api.openai.com") == "sk-a"
+    assert rotator.next("openai") == "sk-a"
 
     config_file.write_text("""
 providers:
@@ -70,7 +70,7 @@ providers:
       - key: sk-b
         active: true
 """)
-    assert rotator.next("api.openai.com") == "sk-b"
+    assert rotator.next("openai") == "sk-b"
 
 
 def test_rotator_no_keys_returns_none(tmp_path):
@@ -83,4 +83,19 @@ providers:
 """)
     cfg = Config(config_file)
     rotator = KeyRotator(cfg)
-    assert rotator.next("api.openai.com") is None
+    assert rotator.next("openai") is None
+
+
+def test_rotator_unknown_provider_returns_none(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    keys:
+      - key: sk-a
+        active: true
+""")
+    cfg = Config(config_file)
+    rotator = KeyRotator(cfg)
+    assert rotator.next("nonexistent") is None

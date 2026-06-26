@@ -162,3 +162,48 @@ def test_handle_doctor_checks(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "Python" in captured.out
     assert "mitmproxy" in captured.out
+
+
+def test_handle_routes(tmp_path, capsys):
+    from otel_agent.commands.routes import handle_routes
+    import argparse
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  openai:
+    type: openai
+    prefix: /openai
+    base_url: https://api.openai.com/v1
+    keys:
+      - key: sk-a
+        active: true
+  anthropic:
+    type: anthropic
+    prefix: /anthropic
+    base_url: https://api.anthropic.com
+    keys:
+      - key: sk-b
+        active: true
+""")
+    args = argparse.Namespace(config=str(config_file))
+    handle_routes(args)
+    captured = capsys.readouterr()
+    assert "/openai" in captured.out
+    assert "/anthropic" in captured.out
+    assert "openai" in captured.out
+    assert "anthropic" in captured.out
+    assert "https://api.openai.com/v1" in captured.out
+    assert "https://api.anthropic.com" in captured.out
+
+
+def test_handle_routes_no_config(tmp_path, capsys):
+    from otel_agent.commands.routes import handle_routes
+    import argparse
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("providers: {}")
+    args = argparse.Namespace(config=str(config_file))
+    handle_routes(args)
+    captured = capsys.readouterr()
+    assert "No providers configured" in captured.out

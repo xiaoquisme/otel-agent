@@ -10,9 +10,10 @@ class KeyRotator:
         self.config = config
         self._indices: dict[str, int] = {}  # provider_name -> current index
 
-    def next(self, host: str) -> str | None:
-        """Return the next active key for the provider matching host."""
-        provider = self.config.get_provider(host)
+    def next(self, provider_name: str) -> str | None:
+        """Return the next active key for the named provider."""
+        self.config._reload()
+        provider = self.config._providers.get(provider_name)
         if not provider:
             return None
 
@@ -20,8 +21,7 @@ class KeyRotator:
         if not active:
             return None
 
-        name = provider.name
-        idx = self._indices.get(name, 0) % len(active)
+        idx = self._indices.get(provider_name, 0) % len(active)
         key = active[idx]
-        self._indices[name] = idx + 1
+        self._indices[provider_name] = idx + 1
         return key
