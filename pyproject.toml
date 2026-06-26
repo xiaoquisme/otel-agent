@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [project.scripts]
-otel-proxy = "otel_agent.proxy:main"
+otel-agent = "otel_agent.cli:main"
 
 [build-system]
 requires = ["hatchling"]

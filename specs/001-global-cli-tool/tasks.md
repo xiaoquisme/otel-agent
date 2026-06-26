@@ -16,8 +16,8 @@
 
 **Purpose**: Project structure for new CLI layout
 
-- [ ] T001 Create commands package directory at `src/otel_agent/commands/__init__.py`
-- [ ] T002 Update `pyproject.toml` entry point from `otel-proxy = "otel_agent.proxy:main"` to `otel-agent = "otel_agent.cli:main"` and add `otel-agent = "otel_agent.cli:main"` under `[project.scripts]`
+- [x] T001 Create commands package directory at `src/otel_agent/commands/__init__.py`
+- [x] T002 Update `pyproject.toml` entry point from `otel-proxy = "otel_agent.proxy:main"` to `otel-agent = "otel_agent.cli:main"` and add `otel-agent = "otel_agent.cli:main"` under `[project.scripts]`
 
 ---
 
@@ -27,16 +27,16 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T003 Create `src/otel_agent/__init__.py` with version helper using `importlib.metadata.version("otel-agent")`
-- [ ] T004 Create `src/otel_agent/__main__.py` that calls `otel_agent.cli:main` (enables `python -m otel_agent`)
-- [ ] T005 Create `src/otel_agent/cli.py` with main argparse dispatcher: top-level parser with `--version`, subcommand registration for `init`, `proxy`, `view`, `config`, `doctor`, and help text for each
-- [ ] T006 Move `run_proxy` async function from `src/otel_agent/proxy.py` to `src/otel_agent/commands/proxy.py`, import it from `cli.py`
-- [ ] T007 Move init handler from `src/otel_agent/proxy.py` to `src/otel_agent/commands/init.py`
-- [ ] T008 Move view handler from `src/otel_agent/proxy.py` to `src/otel_agent/commands/view.py`
-- [ ] T009 Delete `src/otel_agent/proxy.py` (all logic moved to cli.py + commands/)
-- [ ] T010 Run `uv run pytest tests/ -v -m "not integration"` — verify all existing tests still pass after restructuring
+- [x] T003 Create `src/otel_agent/__init__.py` with version helper using `importlib.metadata.version("otel-agent")`
+- [x] T004 Create `src/otel_agent/__main__.py` that calls `otel_agent.cli:main` (enables `python -m otel_agent`)
+- [x] T005 Create `src/otel_agent/cli.py` with main argparse dispatcher: top-level parser with `--version`, subcommand registration for `init`, `proxy`, `view`, `config`, `doctor`, and help text for each
+- [x] T006 Move `run_proxy` async function from `src/otel_agent/proxy.py` to `src/otel_agent/commands/proxy.py`, import it from `cli.py`
+- [x] T007 Move init handler from `src/otel_agent/proxy.py` to `src/otel_agent/commands/init.py`
+- [x] T008 Move view handler from `src/otel_agent/proxy.py` to `src/otel_agent/commands/view.py`
+- [x] T009 Delete `src/otel_agent/proxy.py` (all logic moved to cli.py + commands/)
+- [x] T010 Run `uv run pytest tests/ -v -m "not integration"` — verify all existing tests still pass after restructuring
 
-**Checkpoint**: CLI dispatcher works, `otel-agent --help` shows all subcommands, existing tests pass
+**Checkpoint**: CLI dispatcher works, `otel-agent --help` shows all subcommands, existing tests pass ✅
 
 ---
 
@@ -48,10 +48,10 @@
 
 ### Implementation
 
-- [ ] T011 [US1] Verify `pyproject.toml` has correct `[project.scripts]` entry: `otel-agent = "otel_agent.cli:main"` and `requires-python = ">=3.10"`
-- [ ] T012 [US1] Test install with `uv pip install -e .` and run `otel-agent --version` locally
+- [x] T011 [US1] Verify `pyproject.toml` has correct `[project.scripts]` entry: `otel-agent = "otel_agent.cli:main"` and `requires-python = ">=3.10"`
+- [x] T012 [US1] Test install with `uv pip install -e .` and run `otel-agent --version` locally
 
-**Checkpoint**: `otel-agent` command available after install, `--version` works
+**Checkpoint**: `otel-agent` command available after install, `--version` works ✅
 
 ---
 
@@ -63,11 +63,11 @@
 
 ### Implementation
 
-- [ ] T013 [US2] Create `src/otel_agent/commands/init.py` with `handle_init(args)` function that creates `~/.otel-agent/config.yaml` from `DEFAULT_CONFIG` in `config.py`, warns if exists
-- [ ] T014 [US2] Register `init` subcommand in `src/otel_agent/cli.py` with `--config` flag
-- [ ] T015 [P] [US2] Add test for init command in `tests/test_cli.py`: test creates config, test warns on existing config
+- [x] T013 [US2] Create `src/otel_agent/commands/init.py` with `handle_init(args)` function that creates `~/.otel-agent/config.yaml` from `DEFAULT_CONFIG` in `config.py`, warns if exists
+- [x] T014 [US2] Register `init` subcommand in `src/otel_agent/cli.py` with `--config` flag
+- [x] T015 [P] [US2] Add test for init command in `tests/test_cli.py`: test creates config, test warns on existing config
 
-**Checkpoint**: `otel-agent init` creates config, `otel-agent init` on existing config warns
+**Checkpoint**: `otel-agent init` creates config, `otel-agent init` on existing config warns ✅
 
 ---
 
@@ -79,11 +79,11 @@
 
 ### Implementation
 
-- [ ] T016 [US3] Finalize `src/otel_agent/commands/proxy.py` with `handle_proxy(args)` function wrapping the existing `run_proxy` logic
-- [ ] T017 [US3] Register `proxy` subcommand in `src/otel_agent/cli.py` with `-p`, `-u`, `-d`, `-c` flags
-- [ ] T018 [P] [US3] Add test for proxy command parsing in `tests/test_cli.py`: verify default port, custom port, upstream override
+- [x] T016 [US3] Finalize `src/otel_agent/commands/proxy.py` with `handle_proxy(args)` function wrapping the existing `run_proxy` logic
+- [x] T017 [US3] Register `proxy` subcommand in `src/otel_agent/cli.py` with `-p`, `-u`, `-d`, `-c` flags
+- [x] T018 [P] [US3] Add test for proxy command parsing in `tests/test_cli.py`: verify default port, custom port, upstream override
 
-**Checkpoint**: `otel-agent proxy` starts proxy, Ctrl+C shuts down gracefully
+**Checkpoint**: `otel-agent proxy` starts proxy, Ctrl+C shuts down gracefully ✅
 
 ---
 
@@ -95,11 +95,11 @@
 
 ### Implementation
 
-- [ ] T019 [US4] Create `src/otel_agent/commands/view.py` with `handle_view(args)` function wrapping existing viewer logic
-- [ ] T020 [US4] Register `view` subcommand in `src/otel_agent/cli.py` with `-f`, `-n`, `-d` flags
-- [ ] T021 [P] [US4] Add test for view command parsing in `tests/test_cli.py`: verify defaults, filter, limit
+- [x] T019 [US4] Create `src/otel_agent/commands/view.py` with `handle_view(args)` function wrapping existing viewer logic
+- [x] T020 [US4] Register `view` subcommand in `src/otel_agent/cli.py` with `-f`, `-n`, `-d` flags
+- [x] T021 [P] [US4] Add test for view command parsing in `tests/test_cli.py`: verify defaults, filter, limit
 
-**Checkpoint**: `otel-agent view` displays requests, `--filter` works
+**Checkpoint**: `otel-agent view` displays requests, `--filter` works ✅
 
 ---
 
@@ -111,11 +111,11 @@
 
 ### Implementation
 
-- [ ] T022 [US5] Create `src/otel_agent/commands/config_cmd.py` with `handle_config(args)` function supporting `path`, `show`, `edit` sub-subcommands. `show` masks API keys. `edit` opens `$EDITOR`.
-- [ ] T023 [US5] Register `config` subcommand in `src/otel_agent/cli.py` with subparsers for `path`, `show`, `edit`
-- [ ] T024 [P] [US5] Add tests for config subcommand in `tests/test_cli.py`: test `path` output, test `show` masks keys, test unknown subcommand error
+- [x] T022 [US5] Create `src/otel_agent/commands/config_cmd.py` with `handle_config(args)` function supporting `path`, `show`, `edit` sub-subcommands. `show` masks API keys. `edit` opens `$EDITOR`.
+- [x] T023 [US5] Register `config` subcommand in `src/otel_agent/cli.py` with subparsers for `path`, `show`, `edit`
+- [x] T024 [P] [US5] Add tests for config subcommand in `tests/test_cli.py`: test `path` output, test `show` masks keys, test unknown subcommand error
 
-**Checkpoint**: `otel-agent config path` prints path, `otel-agent config show` masks keys
+**Checkpoint**: `otel-agent config path` prints path, `otel-agent config show` masks keys ✅
 
 ---
 
@@ -123,9 +123,9 @@
 
 **Purpose**: Health check for installation diagnostics
 
-- [ ] T025 Create `src/otel_agent/commands/doctor.py` with `handle_doctor(args)` function that checks Python version >= 3.10, mitmproxy importable, config valid YAML, and port availability
-- [ ] T026 Register `doctor` subcommand in `src/otel_agent/cli.py`
-- [ ] T027 [P] Add test for doctor command in `tests/test_cli.py`: verify all checks reported
+- [x] T025 Create `src/otel_agent/commands/doctor.py` with `handle_doctor(args)` function that checks Python version >= 3.10, mitmproxy importable, config valid YAML, and port availability
+- [x] T026 Register `doctor` subcommand in `src/otel_agent/cli.py`
+- [x] T027 [P] Add test for doctor command in `tests/test_cli.py`: verify all checks reported
 
 ---
 

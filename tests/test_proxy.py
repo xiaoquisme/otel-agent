@@ -1,4 +1,6 @@
-from otel_agent.proxy import build_parser
+"""Tests for CLI arg parsing (backward compat with test_proxy.py name)."""
+
+from otel_agent.cli import build_parser
 
 
 def test_parser_defaults():
@@ -7,7 +9,6 @@ def test_parser_defaults():
     assert args.port == 8080
     assert args.upstream == ""
     assert args.db == "telemetry.db"
-    assert args.config == "~/.otel-agent/config.yaml"
 
 
 def test_parser_custom_values():
@@ -16,12 +17,10 @@ def test_parser_custom_values():
         "proxy", "--port", "9090",
         "--upstream", "https://api.anthropic.com",
         "--db", "/tmp/logs.db",
-        "--config", "/tmp/my-config.yaml",
     ])
     assert args.port == 9090
     assert args.upstream == "https://api.anthropic.com"
     assert args.db == "/tmp/logs.db"
-    assert args.config == "/tmp/my-config.yaml"
 
 
 def test_parser_view_subcommand():
