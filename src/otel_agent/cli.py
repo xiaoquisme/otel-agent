@@ -28,73 +28,68 @@ def build_parser() -> argparse.ArgumentParser:
         help="Config file path",
     )
 
-    # --- proxy ---
-    proxy_p = sub.add_parser("proxy", help="Start the MITM proxy")
-    proxy_p.add_argument(
-        "-p", "--port", type=int, default=8080,
-        help="Proxy listen port (default: 8080)",
-    )
-    proxy_p.add_argument(
-        "-u", "--upstream", type=str, default="",
-        help="Override upstream target (overrides config base_url)",
-    )
-    proxy_p.add_argument(
-        "-d", "--db", type=str, default="telemetry.db",
-        help="SQLite database path (default: telemetry.db)",
-    )
-    proxy_p.add_argument(
-        "-c", "--config", type=str,
-        default="~/.otel-agent/config.yaml",
-        help="Config file path",
-    )
+    # --- proxy (command group) ---
+    proxy_p = sub.add_parser("proxy", help="Manage the MITM proxy")
+    proxy_sub = proxy_p.add_subparsers(dest="proxy_action", help="Proxy actions")
+
+    # proxy start (default)
+    start_p = proxy_sub.add_parser("start", help="Start proxy (default)")
+    start_p.add_argument("-p", "--port", type=int, default=8080, help="Listen port (default: 8080)")
+    start_p.add_argument("-u", "--upstream", type=str, default="", help="Override upstream target")
+    start_p.add_argument("-d", "--db", type=str, default="telemetry.db", help="SQLite database path")
+    start_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
+    start_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
+
+    # proxy stop
+    stop_p = proxy_sub.add_parser("stop", help="Stop the running proxy")
+    stop_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
+
+    # proxy restart
+    restart_p = proxy_sub.add_parser("restart", help="Restart the proxy")
+    restart_p.add_argument("-p", "--port", type=int, default=8080, help="Listen port (default: 8080)")
+    restart_p.add_argument("-u", "--upstream", type=str, default="", help="Override upstream target")
+    restart_p.add_argument("-d", "--db", type=str, default="telemetry.db", help="SQLite database path")
+    restart_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
+    restart_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
+
+    # proxy status
+    status_p = proxy_sub.add_parser("status", help="Check proxy status")
+    status_p.add_argument("-p", "--port", type=int, default=8080, help="Expected port")
+    status_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
+
+    # proxy logs
+    logs_p = proxy_sub.add_parser("logs", help="View proxy logs")
+    logs_p.add_argument("-F", "--follow", action="store_true", help="Stream logs in real-time")
+    logs_p.add_argument("-n", "--lines", type=int, default=50, help="Number of recent lines (default: 50)")
+    logs_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
+
+    # Also support `otel-agent proxy` with no subcommand (default to start)
+    proxy_p.add_argument("-p", "--port", type=int, default=8080, help="Listen port (default: 8080)")
+    proxy_p.add_argument("-u", "--upstream", type=str, default="", help="Override upstream target")
+    proxy_p.add_argument("-d", "--db", type=str, default="telemetry.db", help="SQLite database path")
+    proxy_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
+    proxy_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
 
     # --- view ---
     view_p = sub.add_parser("view", help="View logged requests")
-    view_p.add_argument(
-        "-d", "--db", type=str, default="telemetry.db",
-        help="SQLite database path",
-    )
-    view_p.add_argument(
-        "-f", "--filter", type=str, default="",
-        help="Filter by upstream (substring match)",
-    )
-    view_p.add_argument(
-        "-n", "--limit", type=int, default=20,
-        help="Max rows to display (default: 20)",
-    )
+    view_p.add_argument("-d", "--db", type=str, default="telemetry.db", help="SQLite database path")
+    view_p.add_argument("-f", "--filter", type=str, default="", help="Filter by upstream (substring match)")
+    view_p.add_argument("-n", "--limit", type=int, default=20, help="Max rows to display (default: 20)")
 
     # --- config ---
     config_p = sub.add_parser("config", help="Manage configuration")
-    config_p.add_argument(
-        "-c", "--config", type=str,
-        default="~/.otel-agent/config.yaml",
-        help="Config file path",
-    )
-    config_p.add_argument(
-        "config_action", nargs="?", default="path",
-        choices=["path", "show", "edit"],
-        help="Action: path (print path), show (display masked), edit (open in editor)",
-    )
+    config_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
+    config_p.add_argument("config_action", nargs="?", default="path", choices=["path", "show", "edit"],
+                          help="Action: path (print path), show (display masked), edit (open in editor)")
 
     # --- doctor ---
     doctor_p = sub.add_parser("doctor", help="Check installation health")
-    doctor_p.add_argument(
-        "-c", "--config", type=str,
-        default="~/.otel-agent/config.yaml",
-        help="Config file path",
-    )
-    doctor_p.add_argument(
-        "-p", "--port", type=int, default=8080,
-        help="Port to check (default: 8080)",
-    )
+    doctor_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
+    doctor_p.add_argument("-p", "--port", type=int, default=8080, help="Port to check (default: 8080)")
 
     # --- routes ---
     routes_p = sub.add_parser("routes", help="Display routing table")
-    routes_p.add_argument(
-        "-c", "--config", type=str,
-        default="~/.otel-agent/config.yaml",
-        help="Config file path",
-    )
+    routes_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
 
     return parser
 

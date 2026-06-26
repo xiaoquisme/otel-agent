@@ -24,16 +24,19 @@ otel-agent init
 # 2. Edit config to add your API keys
 otel-agent config edit
 
-# 3. View routing table
-otel-agent routes
-
-# 4. Start proxy
+# 3. Start proxy (runs in background)
 otel-agent proxy
 
-# 5. Send requests with path prefix
+# 4. Send requests
 curl http://localhost:8080/openai/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}'
+
+# 5. View logs
+otel-agent proxy logs
+
+# 6. Stop proxy
+otel-agent proxy stop
 ```
 
 ## Commands
@@ -41,16 +44,60 @@ curl http://localhost:8080/openai/v1/chat/completions \
 ```
 otel-agent --version          Print version
 otel-agent init               Create default config file
-otel-agent proxy              Start the MITM proxy
+otel-agent proxy              Start proxy in background (default)
+otel-agent proxy stop         Stop the running proxy
+otel-agent proxy restart      Restart the proxy
+otel-agent proxy status       Check if proxy is running
+otel-agent proxy logs         View proxy log output
+otel-agent proxy logs -F      Stream logs in real-time
+otel-agent proxy --foreground Run in foreground (blocking)
 otel-agent routes             Display routing table
 otel-agent view               View logged requests
 otel-agent config path|show|edit  Manage configuration
 otel-agent doctor             Check installation health
 ```
 
+## Proxy Management
+
+### Start
+
+```bash
+# Background (default)
+otel-agent proxy
+
+# Foreground (blocking, for debugging)
+otel-agent proxy --foreground
+
+# Custom port
+otel-agent proxy -p 9090
+```
+
+### Stop / Restart
+
+```bash
+otel-agent proxy stop
+otel-agent proxy restart
+```
+
+### Status
+
+```bash
+otel-agent proxy status
+```
+
+Output: `Proxy running on :8080 (PID 12345)` or `Proxy is not running.`
+
+### Logs
+
+```bash
+otel-agent proxy logs              # Last 50 lines
+otel-agent proxy logs -n 100       # Last 100 lines
+otel-agent proxy logs -F           # Stream in real-time (Ctrl+C to stop)
+```
+
 ## Path-Based Routing
 
-Requests are routed by URL path prefix. The prefix is stripped before forwarding to the upstream.
+Requests are routed by URL path prefix:
 
 ```
 /openai/v1/chat/completions    → https://api.openai.com/v1/chat/completions
@@ -64,30 +111,20 @@ Requests are routed by URL path prefix. The prefix is stripped before forwarding
 otel-agent routes
 ```
 
-Output:
-```
-Path Prefix      Provider         Type         Upstream
-/anthropic       anthropic        anthropic    https://api.anthropic.com
-/openai          openai           openai       https://api.openai.com/v1
-```
-
 ## Config File
 
 `~/.otel-agent/config.yaml`:
 
 ```yaml
-# Default provider for requests without a matching prefix
 default_provider: openai
 
 providers:
   openai:
-    type: openai              # API style: openai or anthropic
-    prefix: /openai           # URL path prefix for routing
+    type: openai
+    prefix: /openai
     base_url: https://api.openai.com/v1
     keys:
       - key: sk-proj-key1
-        active: true
-      - key: sk-proj-key2
         active: true
 
   anthropic:
@@ -97,85 +134,30 @@ providers:
     keys:
       - key: ***
         active: true
-
-  # OpenAI-compatible provider with custom prefix
-  deepseek:
-    type: openai
-    prefix: /deepseek
-    base_url: https://api.deepseek.com/v1
-    keys:
-      - key: ***
-        active: true
 ```
-
-### Config Fields
-
-| Field | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `type` | No | Inferred from name | API style: `openai` or `anthropic` |
-| `prefix` | No | `/<provider_name>` | URL path prefix for routing |
-| `base_url` | Yes | — | Upstream API base URL |
-| `keys` | Yes | — | API keys with `active` flag |
-
-### Auth Headers by Type
-
-- `openai` → `Authorization: Bearer <key>`
-- `anthropic` → `x-api-key: <key>`
-
-### Validation
-
-The proxy rejects configs with:
-- Duplicate prefixes
-- Invalid prefix format (must start with `/`)
-- Unknown `type` values
-- Empty `base_url`
 
 ## Client Usage
 
-### OpenAI SDK (path-based)
+### OpenAI SDK
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(
     base_url="http://localhost:8080/openai/v1",
-    api_key="dummy",  # proxy injects real key
+    api_key="dummy",
 )
 ```
 
-### Anthropic SDK (path-based)
+### Anthropic SDK
 
 ```python
 import anthropic
 
 client = anthropic.Anthropic(
     base_url="http://localhost:8080/anthropic",
-    api_key="dummy",  # proxy injects real key
+    api_key="dummy",
 )
-```
-
-### curl
-
-```bash
-# OpenAI
-curl http://localhost:8080/openai/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}'
-
-# Anthropic
-curl http://localhost:8080/anthropic/v1/messages \
-  -H "Content-Type: application/json" \
-  -d '{"model":"claude-sonnet-4-20250514","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}'
-```
-
-## Other Commands
-
-```bash
-otel-agent proxy -p 9090              # Custom port
-otel-agent proxy -c ./config.yaml     # Custom config
-otel-agent view --filter openai       # Filter logs
-otel-agent config show                # Show config (keys masked)
-otel-agent doctor                     # Health check
 ```
 
 ## Testing

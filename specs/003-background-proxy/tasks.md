@@ -16,8 +16,8 @@
 
 **Purpose**: No new dependencies needed. Create runtime directory support.
 
-- [ ] T001 Verify current test suite passes: `uv run pytest tests/ -v -m "not integration"`
-- [ ] T002 Add `ensure_agent_dir()` helper to `src/otel_agent/process.py` that creates `~/.otel-agent/` if it doesn't exist and returns the Path
+- [x] T001 Verify current test suite passes: `uv run pytest tests/ -v -m "not integration"`
+- [x] T002 Add `ensure_agent_dir()` helper to `src/otel_agent/process.py` that creates `~/.otel-agent/` if it doesn't exist and returns the Path
 
 ---
 
@@ -27,14 +27,14 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T003 Add `PID_FILE` constant (`~/.otel-agent/proxy.pid`) and `LOG_FILE` constant (`~/.otel-agent/proxy.log`) to `src/otel_agent/process.py`
-- [ ] T004 Add `write_pid(pid: int) -> None` function that writes PID to the PID file in `src/otel_agent/process.py`
-- [ ] T005 Add `read_pid() -> int | None` function that reads PID from file, returns None if file doesn't exist or contains invalid content in `src/otel_agent/process.py`
-- [ ] T006 Add `is_running(pid: int) -> bool` function that checks if process is alive using `os.kill(pid, 0)` in `src/otel_agent/process.py`
-- [ ] T007 Add `get_proxy_status() -> dict | None` function that reads PID, checks if running, returns `{"pid": int, "port": int}` or None in `src/otel_agent/process.py`
-- [ ] T008 Add `cleanup_pid() -> None` function that deletes the PID file in `src/otel_agent/process.py`
-- [ ] T009 [P] Add tests for all process.py functions: write/read/cleanup PID, is_running, stale PID detection in `tests/test_process.py`
-- [ ] T010 Run `uv run pytest tests/test_process.py -v` — all pass
+- [x] T003 Add `PID_FILE` constant (`~/.otel-agent/proxy.pid`) and `LOG_FILE` constant (`~/.otel-agent/proxy.log`) to `src/otel_agent/process.py`
+- [x] T004 Add `write_pid(pid: int) -> None` function that writes PID to the PID file in `src/otel_agent/process.py`
+- [x] T005 Add `read_pid() -> int | None` function that reads PID from file, returns None if file doesn't exist or contains invalid content in `src/otel_agent/process.py`
+- [x] T006 Add `is_running(pid: int) -> bool` function that checks if process is alive using `os.kill(pid, 0)` in `src/otel_agent/process.py`
+- [x] T007 Add `get_proxy_status() -> dict | None` function that reads PID, checks if running, returns `{"pid": int, "port": int}` or None in `src/otel_agent/process.py`
+- [x] T008 Add `cleanup_pid() -> None` function that deletes the PID file in `src/otel_agent/process.py`
+- [x] T009 [P] Add tests for all process.py functions: write/read/cleanup PID, is_running, stale PID detection in `tests/test_process.py`
+- [x] T010 Run `uv run pytest tests/test_process.py -v` — all pass
 
 **Checkpoint**: PID file management works, stale detection works ✅
 
@@ -48,11 +48,11 @@
 
 ### Implementation
 
-- [ ] T011 [US1] Create `start_background(args) -> int` function in `src/otel_agent/commands/proxy.py` that spawns the proxy as a detached subprocess using `subprocess.Popen` with `start_new_session=True`, stdout/stderr redirected to log file, returns PID
-- [ ] T012 [US1] Create `handle_proxy_start(args)` function in `src/otel_agent/commands/proxy.py` that checks if already running (print error), starts background, writes PID, prints status
-- [ ] T013 [US1] Add `--foreground` flag to proxy subcommand in `src/otel_agent/cli.py` that runs the proxy in the current process (blocking, existing behavior)
-- [ ] T014 [US1] Register `start` as default proxy subcommand in `src/otel_agent/cli.py` — when `otel-agent proxy` is called with no subcommand, default to `start`
-- [ ] T015 [P] [US1] Add test for background start: verify PID file created, process is running, terminal returns in `tests/test_cli.py`
+- [x] T011 [US1] Create `start_background(args) -> int` function in `src/otel_agent/commands/proxy.py` that spawns the proxy as a detached subprocess using `subprocess.Popen` with `start_new_session=True`, stdout/stderr redirected to log file, returns PID
+- [x] T012 [US1] Create `handle_proxy_start(args)` function in `src/otel_agent/commands/proxy.py` that checks if already running (print error), starts background, writes PID, prints status
+- [x] T013 [US1] Add `--foreground` flag to proxy subcommand in `src/otel_agent/cli.py` that runs the proxy in the current process (blocking, existing behavior)
+- [x] T014 [US1] Register `start` as default proxy subcommand in `src/otel_agent/cli.py` — when `otel-agent proxy` is called with no subcommand, default to `start`
+- [x] T015 [P] [US1] Add test for background start: verify PID file created, process is running, terminal returns in `tests/test_cli.py`
 
 **Checkpoint**: `otel-agent proxy` starts in background, PID file exists, terminal available ✅
 
@@ -66,10 +66,10 @@
 
 ### Implementation
 
-- [ ] T016 [US2] Create `handle_proxy_stop(args)` function in `src/otel_agent/commands/proxy.py` that reads PID, sends SIGTERM, waits up to 5s for process to exit, cleans up PID file
-- [ ] T017 [US2] Register `stop` subcommand in `src/otel_agent/cli.py` under proxy command group
-- [ ] T018 [US2] Add SIGTERM handler in `_run_proxy()` in `src/otel_agent/commands/proxy.py` that calls `master.shutdown()` and `logger.close()` for graceful shutdown
-- [ ] T019 [P] [US2] Add test for stop: start background, stop, verify PID file deleted and process gone in `tests/test_cli.py`
+- [x] T016 [US2] Create `handle_proxy_stop(args)` function in `src/otel_agent/commands/proxy.py` that reads PID, sends SIGTERM, waits up to 5s for process to exit, cleans up PID file
+- [x] T017 [US2] Register `stop` subcommand in `src/otel_agent/cli.py` under proxy command group
+- [x] T018 [US2] Add SIGTERM handler in `_run_proxy()` in `src/otel_agent/commands/proxy.py` that calls `master.shutdown()` and `logger.close()` for graceful shutdown
+- [x] T019 [P] [US2] Add test for stop: start background, stop, verify PID file deleted and process gone in `tests/test_cli.py`
 
 **Checkpoint**: `otel-agent proxy stop` works, graceful shutdown ✅
 
@@ -83,9 +83,9 @@
 
 ### Implementation
 
-- [ ] T020 [US3] Create `handle_proxy_restart(args)` function in `src/otel_agent/commands/proxy.py` that calls stop (if running) then start in `src/otel_agent/commands/proxy.py`
-- [ ] T021 [US3] Register `restart` subcommand in `src/otel_agent/cli.py` under proxy command group
-- [ ] T022 [P] [US3] Add test for restart: start, restart, verify new PID in `tests/test_cli.py`
+- [x] T020 [US3] Create `handle_proxy_restart(args)` function in `src/otel_agent/commands/proxy.py` that calls stop (if running) then start in `src/otel_agent/commands/proxy.py`
+- [x] T021 [US3] Register `restart` subcommand in `src/otel_agent/cli.py` under proxy command group
+- [x] T022 [P] [US3] Add test for restart: start, restart, verify new PID in `tests/test_cli.py`
 
 **Checkpoint**: `otel-agent proxy restart` works ✅
 
@@ -99,9 +99,9 @@
 
 ### Implementation
 
-- [ ] T023 [US4] Create `handle_proxy_status(args)` function in `src/otel_agent/commands/proxy.py` that calls `get_proxy_status()` and prints formatted output
-- [ ] T024 [US4] Register `status` subcommand in `src/otel_agent/cli.py` under proxy command group
-- [ ] T025 [P] [US4] Add test for status: running and not-running cases in `tests/test_cli.py`
+- [x] T023 [US4] Create `handle_proxy_status(args)` function in `src/otel_agent/commands/proxy.py` that calls `get_proxy_status()` and prints formatted output
+- [x] T024 [US4] Register `status` subcommand in `src/otel_agent/cli.py` under proxy command group
+- [x] T025 [P] [US4] Add test for status: running and not-running cases in `tests/test_cli.py`
 
 **Checkpoint**: `otel-agent proxy status` works ✅
 
@@ -115,9 +115,9 @@
 
 ### Implementation
 
-- [ ] T026 [US5] Create `handle_proxy_logs(args)` function in `src/otel_agent/commands/proxy.py` that reads last N lines from log file, supports `--follow` (tail -f behavior)
-- [ ] T027 [US5] Register `logs` subcommand in `src/otel_agent/cli.py` under proxy command group with `--follow` and `--lines` flags
-- [ ] T028 [P] [US5] Add test for logs: write to log file, read back last N lines in `tests/test_cli.py`
+- [x] T026 [US5] Create `handle_proxy_logs(args)` function in `src/otel_agent/commands/proxy.py` that reads last N lines from log file, supports `--follow` (tail -f behavior)
+- [x] T027 [US5] Register `logs` subcommand in `src/otel_agent/cli.py` under proxy command group with `--follow` and `--lines` flags
+- [x] T028 [P] [US5] Add test for logs: write to log file, read back last N lines in `tests/test_cli.py`
 
 **Checkpoint**: `otel-agent proxy logs` and `--follow` work ✅
 
@@ -127,9 +127,9 @@
 
 **Purpose**: Final validation and documentation
 
-- [ ] T029 Update `README.md` with background proxy documentation: start/stop/restart/status/logs commands, --foreground flag
-- [ ] T030 Run full test suite `uv run pytest tests/ -v -m "not integration"` — all pass
-- [ ] T031 Run quickstart validation from `specs/003-background-proxy/quickstart.md`
+- [x] T029 Update `README.md` with background proxy documentation: start/stop/restart/status/logs commands, --foreground flag
+- [x] T030 Run full test suite `uv run pytest tests/ -v -m "not integration"` — all pass
+- [x] T031 Run quickstart validation from `specs/003-background-proxy/quickstart.md`
 
 ---
 
