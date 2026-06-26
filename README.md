@@ -1,112 +1,112 @@
 # otel-agent — LLM Telemetry Proxy
 
-Intercept, log, and redirect LLM API calls (OpenAI, Anthropic, etc.).
-Inject API keys in the proxy so clients don't need to know them.
+Intercept, log, and redirect LLM API calls. Config-driven multi-key rotation.
 
-## Install
+## Quick Start
 
 ```bash
 uv sync
+uv run otel-agent init       # creates ~/.otel-agent/config.yaml
+# edit config to add your API keys
+uv run otel-proxy proxy      # start proxy on :8080
 ```
+
+## Config File
+
+`~/.otel-agent/config.yaml`:
+
+```yaml
+providers:
+  openai:
+    base_url: https://api.openai.com/v1
+    keys:
+      - key: sk-proj-key1
+        active: true
+      - key: sk-proj-key2
+        active: true
+      - key: sk-proj-key3
+        active: false   # disabled
+
+  anthropic:
+    base_url: https://api.anthropic.com
+    keys:
+      - key: sk-ant-key1
+        active: true
+      - key: sk-ant-key2
+        active: true
+
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    keys:
+      - key: sk-ds-key1
+        active: true
+```
+
+- **Round-robin** among active keys per provider
+- **Hot-reload**: edit the file, changes take effect on next request (no restart)
+- Toggle `active: true/false` to enable/disable keys
+- Provider matched by host substring: request to `api.openai.com` uses `openai` provider
 
 ## Usage
 
-### Start proxy (default port 8080)
-
 ```bash
+# Start proxy
 uv run otel-proxy proxy
-```
 
-### Inject API keys (3 ways)
+# Custom port and DB
+uv run otel-proxy proxy -p 9090 -d /tmp/logs.db
 
-**CLI args (repeatable):**
-```bash
-uv run otel-proxy proxy \
-  -k openai.com:sk-proj-xxx \
-  -k anthropic.com:sk-ant-xxx
-```
+# Override upstream (ignores config base_url)
+uv run otel-proxy proxy -u https://custom-endpoint.com
 
-**Environment variable:**
-```bash
-export OTEL_API_KEYS="openai.com:sk-proj-xxx,anthropic.com:sk-ant-xxx"
-uv run otel-proxy proxy
-```
+# Use different config file
+uv run otel-proxy proxy -c ./project-config.yaml
 
-**Key file (one HOST:KEY per line):**
-```bash
-cat > keys.txt << 'EOF'
-# comment
-openai.com:sk-proj-xxx
-anthropic.com:sk-ant-xxx
-EOF
-uv run otel-proxy proxy --key-file keys.txt
-```
-
-Priority: `--api-key` CLI > `--key-file` > `OTEL_API_KEYS` env var.
-
-The proxy auto-detects the auth header:
-- `openai.com` → `Authorization: Bearer <key>`
-- `anthropic.com` → `x-api-key: <key>`
-- Everything else → `Authorization: Bearer <key>`
-
-### Redirect all traffic to a different upstream
-
-```bash
-uv run otel-proxy proxy --upstream https://api.anthropic.com
-```
-
-### Custom port and DB path
-
-```bash
-uv run otel-proxy proxy -p 9090 -d /tmp/llm-logs.db
-```
-
-### View logged requests
-
-```bash
+# View logged requests
 uv run otel-proxy view
 uv run otel-proxy view --filter openai --limit 50
 ```
 
 ## Client Usage
 
-When API keys are configured in the proxy, clients send **no auth header** — the proxy injects it:
+### Hermes Agent
 
-### Python requests
-```python
-import requests
+```bash
+hermes config set model.base_url http://127.0.0.1:8080
+hermes config set model.api_key dummy
+```
 
-resp = requests.post(
-    "https://api.openai.com/v1/chat/completions",
-    json={"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]},
-    proxies={"https": "http://127.0.0.1:8080", "http": "http://127.0.0.1:8080"},
-    verify=False,
-)
+Or in `~/.hermes/config.yaml`:
+```yaml
+model:
+  default: claude-sonnet-4-20250514
+  provider: anthropic
+  base_url: http://127.0.0.1:8080
+  api_key: dummy
+```
+
+### Claude Code
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8080
+export ANTHROPIC_API_KEY=dummy
+claude -p "your task"
 ```
 
 ### OpenAI SDK
+
 ```python
 import httpx
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="dummy",  # proxy overrides this
-    http_client=httpx.Client(proxies="http://127.0.0.1:8080", verify=False),
-)
-```
-
-### Anthropic SDK
-```python
-import httpx
-import anthropic
-
-client = anthropic.Anthropic(
-    api_key="dummy",  # proxy overrides this
+    api_key="dummy",
     http_client=httpx.Client(proxies="http://127.0.0.1:8080", verify=False),
 )
 ```
 
 ### curl
+
 ```bash
 export https_proxy=http://127.0.0.1:8080
 curl -k https://api.openai.com/v1/chat/completions \

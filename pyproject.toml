@@ -5,6 +5,7 @@ description = "LLM API telemetry proxy"
 requires-python = ">=3.10"
 dependencies = [
     "mitmproxy>=10.0",
+    "pyyaml>=6.0.3",
 ]
 
 [project.scripts]

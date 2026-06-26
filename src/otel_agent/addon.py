@@ -1,6 +1,8 @@
 from urllib.parse import urlparse
 from mitmproxy import http
+from otel_agent.config import Config
 from otel_agent.logger import TelemetryLogger
+from otel_agent.rotator import KeyRotator
 
 # Provider auth header mapping
 PROVIDER_AUTH = {
@@ -14,20 +16,14 @@ class TelemetryAddon:
     def __init__(
         self,
         logger: TelemetryLogger,
+        config: Config,
+        rotator: KeyRotator,
         upstream_override: str = "",
-        api_keys: dict | None = None,
     ):
         self.logger = logger
+        self.config = config
+        self.rotator = rotator
         self.upstream_override = upstream_override
-        # {host_pattern: api_key}  e.g. {"openai.com": "sk-xxx", "anthropic.com": "sk-ant-xxx"}
-        self.api_keys = api_keys or {}
-
-    def _match_key(self, host: str) -> str | None:
-        """Return the API key whose pattern matches the given host."""
-        for pattern, key in self.api_keys.items():
-            if pattern in host:
-                return key
-        return None
 
     def _inject_auth(self, flow: http.HTTPFlow, key: str):
         """Inject the appropriate auth header based on the target host."""
@@ -45,6 +41,7 @@ class TelemetryAddon:
 
     def request(self, flow: http.HTTPFlow):
         """Rewrite upstream target and inject API key."""
+        # Upstream override from CLI arg
         if self.upstream_override:
             parsed = urlparse(self.upstream_override)
             flow.request.scheme = parsed.scheme
@@ -56,8 +53,21 @@ class TelemetryAddon:
             else:
                 flow.request.port = 80
 
-        # Inject API key (matches against the final host after rewrite)
-        key = self._match_key(flow.request.host)
+        # Check if config has a provider with base_url for this host
+        provider = self.config.get_provider(flow.request.host)
+        if provider and provider.base_url and not self.upstream_override:
+            parsed = urlparse(provider.base_url)
+            flow.request.scheme = parsed.scheme
+            flow.request.host = parsed.hostname
+            if parsed.port:
+                flow.request.port = parsed.port
+            elif parsed.scheme == "https":
+                flow.request.port = 443
+            else:
+                flow.request.port = 80
+
+        # Inject API key via rotator
+        key = self.rotator.next(flow.request.host)
         if key:
             self._inject_auth(flow, key)
 
