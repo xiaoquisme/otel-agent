@@ -11,6 +11,12 @@ DEFAULT_CONFIG = """\
 # otel-agent configuration
 # Docs: https://github.com/your-org/otel-agent
 
+# Default provider for requests to localhost (reverse proxy mode)
+# When a client sends requests directly to http://127.0.0.1:8080,
+# the proxy forwards them to this provider's base_url.
+# If not set and only one provider exists, it's used automatically.
+# default_provider: openai
+
 providers:
   openai:
     base_url: https://api.openai.com/v1
@@ -52,6 +58,7 @@ class Config:
         self.path = path
         self._mtime: float = 0
         self._providers: dict[str, ProviderConfig] = {}
+        self._default_provider: str = ""
         self._reload()
 
     def _reload(self):
@@ -66,6 +73,8 @@ class Config:
 
         with open(self.path) as f:
             data = yaml.safe_load(f) or {}
+
+        self._default_provider = data.get("default_provider", "")
 
         providers = {}
         for name, pconf in (data.get("providers") or {}).items():
@@ -85,12 +94,31 @@ class Config:
             )
         self._providers = providers
 
+    @property
+    def default_provider_name(self) -> str:
+        """Return the default provider name (explicit or auto-detected)."""
+        self._reload()
+        if self._default_provider and self._default_provider in self._providers:
+            return self._default_provider
+        # Auto-detect: if only one provider, use it
+        if len(self._providers) == 1:
+            return next(iter(self._providers))
+        return ""
+
     def get_provider(self, host: str) -> Optional[ProviderConfig]:
-        """Find a provider whose name is a substring of host."""
+        """Find a provider whose name is a substring of host.
+
+        Falls back to default_provider for localhost requests.
+        """
         self._reload()
         for name, provider in self._providers.items():
             if name in host:
                 return provider
+        # Fallback: use default provider for localhost/127.0.0.1
+        if host in ("127.0.0.1", "localhost"):
+            default_name = self.default_provider_name
+            if default_name:
+                return self._providers.get(default_name)
         return None
 
     def get_active_keys(self, host: str) -> list[str]:

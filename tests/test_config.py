@@ -100,3 +100,113 @@ providers:
         active: true
 """)
     assert cfg.get_active_keys("openai.com") == ["sk-b"]
+
+
+def test_default_provider_explicit(tmp_path):
+    """Explicit default_provider in config."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+default_provider: xiaomi
+
+providers:
+  xiaomi:
+    base_url: https://api.xiaomi.com/v1
+    keys:
+      - key: sk-a
+        active: true
+  xiaomi-anthropic:
+    base_url: https://api.xiaomi.com/anthropic
+    keys:
+      - key: sk-b
+        active: true
+""")
+    cfg = Config(config_file)
+    # localhost should use default_provider
+    provider = cfg.get_provider("127.0.0.1")
+    assert provider is not None
+    assert provider.name == "xiaomi"
+    assert provider.base_url == "https://api.xiaomi.com/v1"
+
+
+def test_default_provider_auto_single(tmp_path):
+    """Auto-detect default when only one provider exists."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  xiaomi:
+    base_url: https://api.xiaomi.com/v1
+    keys:
+      - key: sk-a
+        active: true
+""")
+    cfg = Config(config_file)
+    provider = cfg.get_provider("127.0.0.1")
+    assert provider is not None
+    assert provider.name == "xiaomi"
+
+
+def test_default_provider_no_match_multiple(tmp_path):
+    """No default when multiple providers and no explicit default."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  xiaomi:
+    base_url: https://api.xiaomi.com/v1
+    keys:
+      - key: sk-a
+        active: true
+  anthropic:
+    base_url: https://api.anthropic.com
+    keys:
+      - key: sk-b
+        active: true
+""")
+    cfg = Config(config_file)
+    # No explicit default, multiple providers -> no match for localhost
+    provider = cfg.get_provider("127.0.0.1")
+    assert provider is None
+
+
+def test_localhost_matching(tmp_path):
+    """localhost also matches default provider."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+default_provider: xiaomi
+
+providers:
+  xiaomi:
+    base_url: https://api.xiaomi.com/v1
+    keys:
+      - key: sk-a
+        active: true
+""")
+    cfg = Config(config_file)
+    provider = cfg.get_provider("localhost")
+    assert provider is not None
+    assert provider.name == "xiaomi"
+
+
+def test_host_matching_still_works(tmp_path):
+    """Normal host matching still works with default_provider set."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+default_provider: xiaomi
+
+providers:
+  xiaomi:
+    base_url: https://api.xiaomi.com/v1
+    keys:
+      - key: sk-a
+        active: true
+  anthropic:
+    base_url: https://api.anthropic.com
+    keys:
+      - key: sk-b
+        active: true
+""")
+    cfg = Config(config_file)
+    # Direct host matching still works
+    assert cfg.get_provider("api.anthropic.com").name == "anthropic"
+    assert cfg.get_provider("api.xiaomi.com").name == "xiaomi"
+    # localhost uses default
+    assert cfg.get_provider("127.0.0.1").name == "xiaomi"
