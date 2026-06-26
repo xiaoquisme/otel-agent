@@ -16,13 +16,13 @@ A developer hears about otel-agent and wants to try it. They run a single instal
 
 **Why this priority**: If installation is hard, nobody uses the tool. This is the first impression.
 
-**Independent Test**: Run `uvx otel-agent --version` on a clean machine. Verify the command exists and prints a version number.
+**Independent Test**: Run `uvx --from git+https://github.com/xiaoquisme/otel-agent.git otel-agent --version` on a clean machine. Verify the command exists and prints a version number.
 
 **Acceptance Scenarios**:
 
-1. **Given** the user has `uv` installed, **When** they run `uvx otel-agent --version`, **Then** the tool installs temporarily and prints the version.
-2. **Given** the user has `uv` installed, **When** they run `uv tool install otel-agent`, **Then** the tool is installed globally and `otel-agent` is available on PATH.
-3. **Given** the user has `pip` installed, **When** they run `pip install otel-agent`, **Then** the tool installs and `otel-agent` is available on PATH.
+1. **Given** the user has `uv` installed, **When** they run `uvx --from git+https://github.com/xiaoquisme/otel-agent.git otel-agent --version`, **Then** the tool installs temporarily and prints the version.
+2. **Given** the user has `uv` installed, **When** they run `uv tool install git+https://github.com/xiaoquisme/otel-agent.git`, **Then** the tool is installed globally and `otel-agent` is available on PATH.
+3. **Given** the user has `pip` installed, **When** they run `pip install git+https://github.com/xiaoquisme/otel-agent.git`, **Then** the tool installs and `otel-agent` is available on PATH.
 4. **Given** the tool is installed, **When** they run `otel-agent --help`, **Then** all available subcommands are listed with descriptions.
 
 ---
@@ -102,9 +102,9 @@ A user wants to check or edit their config without remembering the file path.
 
 ### Functional Requirements
 
-- **FR-001**: The tool MUST be installable via `uvx otel-agent` (ephemeral run) without prior setup.
-- **FR-002**: The tool MUST be installable via `uv tool install otel-agent` (persistent global install).
-- **FR-003**: The tool MUST be installable via `pip install otel-agent` as a fallback.
+- **FR-001**: The tool MUST be installable via `uvx --from git+https://github.com/xiaoquisme/otel-agent.git otel-agent` (ephemeral run) without prior setup.
+- **FR-002**: The tool MUST be installable via `uv tool install git+https://github.com/xiaoquisme/otel-agent.git` (persistent global install).
+- **FR-003**: The tool MUST be installable via `pip install git+https://github.com/xiaoquisme/otel-agent.git` as a fallback.
 - **FR-004**: A single `otel-agent` command MUST expose all subcommands: `init`, `proxy`, `view`, `config`.
 - **FR-005**: The `init` subcommand MUST create `~/.otel-agent/config.yaml` with a documented template.
 - **FR-006**: The `proxy` subcommand MUST start the MITM proxy with config-driven key rotation.
@@ -112,7 +112,7 @@ A user wants to check or edit their config without remembering the file path.
 - **FR-008**: The `config` subcommand MUST support `path`, `show`, and `edit` actions.
 - **FR-009**: The tool MUST print a version with `--version`.
 - **FR-010**: Every subcommand MUST have `--help` with usage examples.
-- **FR-011**: The published package name on PyPI MUST be `otel-agent`.
+- **FR-011**: The tool MUST be published as a git-installable package at `https://github.com/xiaoquisme/otel-agent`.
 - **FR-012**: The tool MUST work on Linux, macOS, and WSL.
 
 ### Key Entities
@@ -136,5 +136,5 @@ A user wants to check or edit their config without remembering the file path.
 - Users have Python 3.10+ installed (required by mitmproxy dependency).
 - Users have `uv` installed (primary install method). `pip` is the fallback.
 - Users are familiar with LLM API providers and know their API keys.
-- The tool will be published to PyPI under the name `otel-agent`.
+- The tool will be published as a git-installable package (not PyPI).
 - The config file format (`~/.otel-agent/config.yaml`) remains backward-compatible.

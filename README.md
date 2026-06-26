@@ -6,13 +6,13 @@ Intercept, log, and redirect LLM API calls. Config-driven multi-key rotation.
 
 ```bash
 # Run without installing
-uvx otel-agent --version
+uvx --from git+https://github.com/xiaoquisme/otel-agent.git otel-agent --version
 
 # Install globally
-uv tool install otel-agent
+uv tool install git+https://github.com/xiaoquisme/otel-agent.git
 
 # pip fallback
-pip install otel-agent
+pip install git+https://github.com/xiaoquisme/otel-agent.git
 ```
 
 ## Quick Start

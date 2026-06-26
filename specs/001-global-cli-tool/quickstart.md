@@ -12,13 +12,13 @@
 
 ```bash
 # Option 1: Run without installing
-uvx otel-agent --version
+uvx --from git+https://github.com/xiaoquisme/otel-agent.git otel-agent --version
 
 # Option 2: Install globally
-uv tool install otel-agent
+uv tool install git+https://github.com/xiaoquisme/otel-agent.git
 
 # Option 3: pip fallback
-pip install otel-agent
+pip install git+https://github.com/xiaoquisme/otel-agent.git
 ```
 
 ## First-Time Setup
@@ -44,7 +44,7 @@ otel-agent proxy
 
 Expected output:
 ```
-otel-proxy listening on :8080
+otel-agent proxy listening on :8080
 logging to telemetry.db
 config: ~/.otel-agent/config.yaml
   provider: openai (1/1 keys active)
