@@ -21,6 +21,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         """Suppress default access logs."""
         pass
 
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """Suppress connection reset tracebacks."""
+        import sys
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError)):
+            return  # Client disconnected — not an error
+        super().handle_error(request, client_address)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
