@@ -41,7 +41,22 @@ A user types in the search box and results update quickly.
 
 ---
 
-### User Story 3 - Real-Time Updates Without Lag (Priority: P2)
+### User Story 3 - Fast Detail View (Priority: P1)
+
+A user clicks a request row and sees full details immediately.
+
+**Why this priority**: Debugging requires quick access to full request/response payloads. Slow detail view defeats the purpose.
+
+**Independent Test**: Click a request row with a large response body. Verify detail panel appears within 1 second.
+
+**Acceptance Scenarios**:
+
+1. **Given** the database has 1000 requests, **When** the user clicks a row, **Then** the detail panel appears within 1 second.
+2. **Given** the request has a large response body (100KB+), **When** the user clicks the row, **Then** the detail panel still appears within 1 second.
+
+---
+
+### User Story 4 - Real-Time Updates Without Lag (Priority: P2)
 
 New requests appear in the dashboard without causing the entire page to slow down.
 
@@ -62,6 +77,13 @@ New requests appear in the dashboard without causing the entire page to slow dow
 - What happens if the database is being written to heavily? The dashboard MUST not block on WAL locks.
 - What happens if the user pagates to page 100? Pagination MUST not slow down with high page numbers (no OFFSET-based pagination).
 
+## Clarifications
+
+### Session 2026-06-26
+
+- Q: What should the target load time be for the detail page? → A: Under 1 second
+- Q: How should the COUNT query be optimized? → A: Cache count for 5 seconds (stale count acceptable)
+
 ## Requirements
 
 ### Functional Requirements
@@ -69,10 +91,11 @@ New requests appear in the dashboard without causing the entire page to slow dow
 - **FR-001**: The `requests` table MUST have indexes on `id`, `timestamp`, `method`, and `response_status` columns.
 - **FR-002**: The dashboard API MUST use a persistent connection pool instead of creating a new connection per request.
 - **FR-003**: The `get_requests` endpoint MUST use cursor-based pagination instead of OFFSET for consistent performance.
-- **FR-004**: The COUNT query MUST be optimized (cached or approximate) to avoid full table scans on every request.
+- **FR-004**: The COUNT query MUST be cached for 5 seconds to avoid full table scans on every request. Stale counts are acceptable.
 - **FR-005**: The SSE endpoint MUST reuse a single connection instead of opening/closing per poll cycle.
 - **FR-006**: Search queries MUST use indexes where possible (exact matches on method, status) before applying LIKE filters.
 - **FR-007**: The dashboard MUST load the first page of results within 1 second for databases with up to 10,000 requests.
+- **FR-008**: The detail page MUST load within 1 second, including for requests with large response bodies (100KB+).
 
 ### Key Entities
 
@@ -86,8 +109,9 @@ New requests appear in the dashboard without causing the entire page to slow dow
 - **SC-001**: Dashboard initial load (first page) completes in under 1 second with 1000 requests.
 - **SC-002**: Dashboard initial load completes in under 2 seconds with 10,000 requests.
 - **SC-003**: Search results appear within 500ms with 1000 requests.
-- **SC-004**: Pagination to any page completes in under 500ms.
-- **SC-005**: SSE updates don't cause visible UI lag.
+- **SC-004**: Detail page loads within 1 second for any single request.
+- **SC-005**: Pagination to any page completes in under 500ms.
+- **SC-006**: SSE updates don't cause visible UI lag.
 
 ## Assumptions
 
