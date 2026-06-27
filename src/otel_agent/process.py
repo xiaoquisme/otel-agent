@@ -8,6 +8,7 @@ from pathlib import Path
 
 AGENT_DIR = Path.home() / ".otel-agent"
 PID_FILE = AGENT_DIR / "proxy.pid"
+PORT_FILE = AGENT_DIR / "proxy.port"
 LOG_FILE = AGENT_DIR / "proxy.log"
 
 
@@ -50,16 +51,22 @@ def get_proxy_status() -> dict | None:
     if not is_running(pid):
         cleanup_pid()
         return None
-    # Port detection: read from PID file companion or default
-    return {"pid": pid}
+    port = 8080
+    if PORT_FILE.exists():
+        try:
+            port = int(PORT_FILE.read_text().strip())
+        except (ValueError, OSError):
+            pass
+    return {"pid": pid, "port": port}
 
 
 def cleanup_pid() -> None:
-    """Delete the PID file."""
-    try:
-        PID_FILE.unlink(missing_ok=True)
-    except OSError:
-        pass
+    """Delete the PID and port files."""
+    for f in (PID_FILE, PORT_FILE):
+        try:
+            f.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def stop_proxy(timeout: float = 5.0) -> bool:

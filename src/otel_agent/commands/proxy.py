@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ from pathlib import Path
 from otel_agent.process import (
     LOG_FILE,
     PID_FILE,
+    PORT_FILE,
     cleanup_pid,
     ensure_agent_dir,
     get_proxy_status,
@@ -40,6 +42,12 @@ def handle_proxy(args) -> None:
         handle_proxy_start(args)
 
 
+def _is_port_in_use(port: int) -> bool:
+    """Check if a port is already in use."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def handle_proxy_start(args) -> None:
     """Start the proxy (background or foreground)."""
     foreground = getattr(args, "foreground", False)
@@ -53,6 +61,11 @@ def handle_proxy_start(args) -> None:
     if status is not None:
         print(f"Proxy already running (PID {status['pid']}).")
         print("Use 'otel-agent proxy stop' to stop it first.")
+        sys.exit(1)
+
+    # Check if port is in use
+    if _is_port_in_use(args.port):
+        print(f"Port {args.port} is already in use. Try: otel-agent proxy -p 9090")
         sys.exit(1)
 
     # Start background process
@@ -78,6 +91,7 @@ def handle_proxy_start(args) -> None:
     )
 
     write_pid(proc.pid)
+    PORT_FILE.write_text(str(args.port))
 
     # Wait a moment to verify it started
     time.sleep(0.5)
@@ -173,8 +187,7 @@ def handle_proxy_status(args) -> None:
     """Show proxy status."""
     status = get_proxy_status()
     if status is not None:
-        port = getattr(args, "port", 8080)
-        print(f"Proxy running on :{port} (PID {status['pid']})")
+        print(f"Proxy running on :{status['port']} (PID {status['pid']})")
     else:
         print("Proxy is not running.")
 
