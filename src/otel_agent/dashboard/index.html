@@ -116,7 +116,8 @@ tr:hover { background: #161b22; cursor: pointer; }
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
-let currentPage = 1;
+let currentCursor = 0;
+let cursorStack = [];  // Stack of previous cursors for "Prev" navigation
 let chart = null;
 let chartData = [];
 
@@ -127,18 +128,18 @@ const statusFilter = document.getElementById('status-filter');
 let debounceTimer;
 searchInput.addEventListener('input', () => {
   clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => { currentPage = 1; loadRequests(); }, 300);
+  debounceTimer = setTimeout(() => { currentCursor = 0; cursorStack = []; loadRequests(); }, 300);
 });
-methodFilter.addEventListener('change', () => { currentPage = 1; loadRequests(); });
-statusFilter.addEventListener('change', () => { currentPage = 1; loadRequests(); });
+methodFilter.addEventListener('change', () => { currentCursor = 0; cursorStack = []; loadRequests(); });
+statusFilter.addEventListener('change', () => { currentCursor = 0; cursorStack = []; loadRequests(); });
 
 function getParams() {
   const p = new URLSearchParams();
   if (searchInput.value) p.set('search', searchInput.value);
   if (methodFilter.value) p.set('method', methodFilter.value);
   if (statusFilter.value !== '0') p.set('status', statusFilter.value);
-  p.set('page', currentPage);
-  p.set('per_page', 50);
+  if (currentCursor > 0) p.set('cursor', currentCursor);
+  p.set('limit', 50);
   return p.toString();
 }
 
@@ -147,7 +148,7 @@ async function loadRequests() {
     const resp = await fetch('/api/requests?' + getParams());
     const data = await resp.json();
     renderTable(data.data);
-    renderPagination(data.total, data.page, data.per_page);
+    renderPagination(data);
     document.getElementById('status').textContent = data.total + ' requests';
   } catch (e) {
     document.getElementById('status').textContent = 'Error loading';
@@ -175,22 +176,28 @@ function renderTable(requests) {
   `).join('');
 }
 
-function renderPagination(total, page, perPage) {
-  const totalPages = Math.ceil(total / perPage) || 1;
-  const start = (page - 1) * perPage + 1;
-  const end = Math.min(page * perPage, total);
-  document.getElementById('pagination-info').textContent = total ? `${start}-${end} of ${total}` : 'No results';
+function renderPagination(data) {
+  const { total, has_more, next_cursor } = data;
+  document.getElementById('pagination-info').textContent = total ? `${total} total requests` : 'No results';
   const pages = document.getElementById('pagination-pages');
   let html = '';
-  html += `<button ${page<=1?'disabled':''} onclick="goPage(${page-1})">Prev</button>`;
-  for (let i = Math.max(1, page-2); i <= Math.min(totalPages, page+2); i++) {
-    html += `<button class="${i===page?'active':''}" onclick="goPage(${i})">${i}</button>`;
-  }
-  html += `<button ${page>=totalPages?'disabled':''} onclick="goPage(${page+1})">Next</button>`;
+  html += `<button ${cursorStack.length === 0 ? 'disabled' : ''} onclick="goPrev()">Prev</button>`;
+  html += `<button ${!has_more ? 'disabled' : ''} onclick="goNext(${next_cursor})">Next</button>`;
   pages.innerHTML = html;
 }
 
-function goPage(p) { currentPage = p; loadRequests(); }
+function goNext(nextCursor) {
+  cursorStack.push(currentCursor);
+  currentCursor = nextCursor;
+  loadRequests();
+}
+
+function goPrev() {
+  if (cursorStack.length > 0) {
+    currentCursor = cursorStack.pop();
+    loadRequests();
+  }
+}
 
 async function showDetail(id) {
   const resp = await fetch('/api/requests/' + id);
@@ -282,12 +289,34 @@ function connectSSE() {
     try {
       const req = JSON.parse(e.data);
       addToChart(req);
-      if (currentPage === 1 && !searchInput.value && !methodFilter.value && statusFilter.value === '0') {
-        loadRequests();
+      // Only prepend if on first page (cursor=0) and no filters active
+      if (currentCursor === 0 && !searchInput.value && !methodFilter.value && statusFilter.value === '0') {
+        prependRow(req);
       }
     } catch (err) {}
   };
   es.onerror = () => { setTimeout(connectSSE, 5000); };
+}
+
+function prependRow(r) {
+  const tbody = document.getElementById('requests-body');
+  const empty = document.getElementById('empty-state');
+  empty.style.display = 'none';
+  const row = document.createElement('tr');
+  row.onclick = () => showDetail(r.id);
+  row.innerHTML = `
+    <td>${r.id}</td>
+    <td>${new Date(r.timestamp).toLocaleString()}</td>
+    <td><span class="method method-${r.method}">${r.method}</span></td>
+    <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.url}</td>
+    <td><span class="status-${Math.floor(r.response_status/100)}xx">${r.response_status}</span></td>
+    <td>${r.latency_ms?.toFixed(0) || 0}ms</td>
+  `;
+  tbody.insertBefore(row, tbody.firstChild);
+  // Keep max 50 rows visible
+  while (tbody.children.length > 50) {
+    tbody.removeChild(tbody.lastChild);
+  }
 }
 
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetail(); });

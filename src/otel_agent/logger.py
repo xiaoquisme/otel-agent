@@ -7,6 +7,7 @@ from pathlib import Path
 class TelemetryLogger:
     def __init__(self, db_path: Path):
         self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(db_path))
         self.conn.execute("PRAGMA journal_mode=WAL")
         self._create_tables()
@@ -27,6 +28,9 @@ class TelemetryLogger:
                 latency_ms REAL
             )
         """)
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_method ON requests(method)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(response_status)")
         self.conn.commit()
 
     def log_request(

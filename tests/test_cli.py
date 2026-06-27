@@ -10,7 +10,7 @@ def test_parser_defaults():
     args = parser.parse_args(["proxy"])
     assert args.port == 8080
     assert args.upstream == ""
-    assert args.db == "telemetry.db"
+    assert args.db == "~/.otel-agent/telemetry.db"
     assert args.config == "~/.otel-agent/config.yaml"
 
 

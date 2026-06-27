@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
-from otel_agent.dashboard.api import DashboardAPI
+from otel_agent.dashboard.api import DashboardAPI, CountCache
 
 
 def _create_test_db(db_path: Path, n: int = 5) -> None:
@@ -52,7 +52,7 @@ def test_get_requests_empty(tmp_path):
     db = tmp_path / "test.db"
     api = DashboardAPI(db)
     result = api.get_requests()
-    assert result == {"data": [], "total": 0, "page": 1, "per_page": 50}
+    assert result == {"data": [], "total": 0, "cursor": 0, "next_cursor": 0, "has_more": False}
 
 
 def test_get_requests_with_data(tmp_path):
@@ -62,20 +62,21 @@ def test_get_requests_with_data(tmp_path):
     result = api.get_requests()
     assert result["total"] == 5
     assert len(result["data"]) == 5
-    assert result["page"] == 1
-    assert result["per_page"] == 50
+    assert result["cursor"] == 0
+    assert result["has_more"] is False
 
 
-def test_get_requests_pagination(tmp_path):
+def test_get_requests_cursor_pagination(tmp_path):
     db = tmp_path / "test.db"
     _create_test_db(db, 10)
     api = DashboardAPI(db)
-    result = api.get_requests(page=1, per_page=3)
+    result = api.get_requests(limit=3)
     assert result["total"] == 10
     assert len(result["data"]) == 3
-    assert result["page"] == 1
+    assert result["has_more"] is True
+    next_cursor = result["next_cursor"]
 
-    result2 = api.get_requests(page=2, per_page=3)
+    result2 = api.get_requests(cursor=next_cursor, limit=3)
     assert len(result2["data"]) == 3
     # Different page = different rows
     assert result["data"][0]["id"] != result2["data"][0]["id"]
@@ -95,7 +96,6 @@ def test_get_requests_filter_method(tmp_path):
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_requests(method="POST")
-    # POST = odd ids (1, 3, 5)
     assert result["total"] == 3
     for r in result["data"]:
         assert r["method"] == "POST"
@@ -106,7 +106,6 @@ def test_get_requests_filter_status(tmp_path):
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_requests(status=500)
-    # 500 = ids 4, 5
     assert result["total"] == 2
     for r in result["data"]:
         assert r["response_status"] == 500
@@ -159,3 +158,41 @@ def test_get_all_filtered(tmp_path):
     result = api.get_all_filtered(method="POST")
     assert len(result) == 3
     assert all(r["method"] == "POST" for r in result)
+
+
+def test_count_cache():
+    cache = CountCache(ttl=5.0)
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER)")
+    for i in range(10):
+        conn.execute("INSERT INTO t VALUES (?)", (i,))
+    conn.commit()
+
+    # First call queries DB
+    result1 = cache.get("test", conn, "SELECT COUNT(*) FROM t", [])
+    assert result1 == 10
+
+    # Second call returns cached
+    conn.execute("INSERT INTO t VALUES (99)")
+    conn.commit()
+    result2 = cache.get("test", conn, "SELECT COUNT(*) FROM t", [])
+    assert result2 == 10  # Still cached
+
+    # After clear, gets fresh value
+    cache.clear()
+    result3 = cache.get("test", conn, "SELECT COUNT(*) FROM t", [])
+    assert result3 == 11
+
+
+def test_persistent_connection(tmp_path):
+    db = tmp_path / "test.db"
+    _create_test_db(db, 3)
+    api = DashboardAPI(db)
+    # Multiple calls should reuse connection
+    r1 = api.get_requests()
+    r2 = api.get_requests()
+    r3 = api.get_request(1)
+    assert r1["total"] == 3
+    assert r2["total"] == 3
+    assert r3["id"] == 1
+    api.close()

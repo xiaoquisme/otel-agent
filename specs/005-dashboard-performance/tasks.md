@@ -16,8 +16,8 @@
 
 **Purpose**: Fix default database path (BUG-001).
 
-- [ ] T001 Change default `--db` from `telemetry.db` to `~/.otel-agent/telemetry.db` in `src/otel_agent/cli.py` (all subcommands: proxy start/restart, view, dashboard)
-- [ ] T002 Ensure `~/.otel-agent/` directory is created before database write in `src/otel_agent/logger.py`
+- [x] T001 Change default `--db` from `telemetry.db` to `~/.otel-agent/telemetry.db` in `src/otel_agent/cli.py` (all subcommands: proxy start/restart, view, dashboard)
+- [x] T002 Ensure `~/.otel-agent/` directory is created before database write in `src/otel_agent/logger.py`
 
 ---
 
@@ -27,11 +27,11 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T003 Add `CREATE INDEX IF NOT EXISTS` statements for `timestamp`, `method`, `response_status` columns in `_create_tables()` in `src/otel_agent/logger.py`
-- [ ] T004 Refactor `DashboardAPI` to use a single persistent `sqlite3.Connection` instead of creating a new connection per request in `src/otel_agent/dashboard/api.py`
-- [ ] T005 [P] Add test for index creation: verify indexes exist on `requests` table in `tests/test_logger.py`
-- [ ] T006 [P] Add test for persistent connection: verify multiple API calls reuse the same connection in `tests/test_dashboard.py`
-- [ ] T007 Run `uv run pytest tests/test_logger.py tests/test_dashboard.py -v` — all pass
+- [x] T003 Add `CREATE INDEX IF NOT EXISTS` statements for `timestamp`, `method`, `response_status` columns in `_create_tables()` in `src/otel_agent/logger.py`
+- [x] T004 Refactor `DashboardAPI` to use a single persistent `sqlite3.Connection` instead of creating a new connection per request in `src/otel_agent/dashboard/api.py`
+- [x] T005 [P] Add test for index creation: verify indexes exist on `requests` table in `tests/test_logger.py`
+- [x] T006 [P] Add test for persistent connection: verify multiple API calls reuse the same connection in `tests/test_dashboard.py`
+- [x] T007 Run `uv run pytest tests/test_logger.py tests/test_dashboard.py -v` — all pass
 
 **Checkpoint**: Indexes exist, connection reused ✅
 
@@ -45,13 +45,13 @@
 
 ### Implementation
 
-- [ ] T008 [US1] Add `CountCache` class to `src/otel_agent/dashboard/api.py` with 5-second TTL: `get_count(where, params)` returns cached value or queries and caches
-- [ ] T009 [US1] Update `get_requests()` in `src/otel_agent/dashboard/api.py` to use `CountCache` instead of `SELECT COUNT(*)` on every call
-- [ ] T010 [US1] Update `get_requests()` to use cursor-based pagination: `WHERE id < cursor ORDER BY id DESC LIMIT ?` instead of `LIMIT ? OFFSET ?`
-- [ ] T011 [US1] Update `DashboardHandler._serve_requests()` in `src/otel_agent/dashboard/server.py` to accept `cursor` and `limit` params instead of `page` and `per_page`
-- [ ] T012 [US1] Update `index.html` JavaScript to use cursor-based pagination: send `cursor` param, use `next_cursor` from response, update pagination buttons
-- [ ] T013 [P] [US1] Add tests for COUNT caching and cursor pagination in `tests/test_dashboard.py`
-- [ ] T014 [US1] Run `uv run pytest tests/test_dashboard.py -v` — all pass
+- [x] T008 [US1] Add `CountCache` class to `src/otel_agent/dashboard/api.py` with 5-second TTL: `get_count(where, params)` returns cached value or queries and caches
+- [x] T009 [US1] Update `get_requests()` in `src/otel_agent/dashboard/api.py` to use `CountCache` instead of `SELECT COUNT(*)` on every call
+- [x] T010 [US1] Update `get_requests()` to use cursor-based pagination: `WHERE id < cursor ORDER BY id DESC LIMIT ?` instead of `LIMIT ? OFFSET ?`
+- [x] T011 [US1] Update `DashboardHandler._serve_requests()` in `src/otel_agent/dashboard/server.py` to accept `cursor` and `limit` params instead of `page` and `per_page`
+- [x] T012 [US1] Update `index.html` JavaScript to use cursor-based pagination: send `cursor` param, use `next_cursor` from response, update pagination buttons
+- [x] T013 [P] [US1] Add tests for COUNT caching and cursor pagination in `tests/test_dashboard.py`
+- [x] T014 [US1] Run `uv run pytest tests/test_dashboard.py -v` — all pass
 
 **Checkpoint**: Initial load <1s, cursor pagination works ✅
 
@@ -65,8 +65,8 @@
 
 ### Implementation
 
-- [ ] T015 [US2] Update `_build_where()` in `src/otel_agent/dashboard/api.py` to apply indexed filters (method, status) before LIKE filter for query optimization
-- [ ] T016 [P] [US2] Add test for search performance: verify search with indexed filter returns quickly in `tests/test_dashboard.py`
+- [x] T015 [US2] Update `_build_where()` in `src/otel_agent/dashboard/api.py` to apply indexed filters (method, status) before LIKE filter for query optimization
+- [x] T016 [P] [US2] Add test for search performance: verify search with indexed filter returns quickly in `tests/test_dashboard.py`
 
 **Checkpoint**: Search <500ms ✅
 
@@ -80,8 +80,8 @@
 
 ### Implementation
 
-- [ ] T017 [US3] Verify `get_request()` uses the persistent connection (already done in T004). No code change needed — validate via test.
-- [ ] T018 [P] [US3] Add test for detail page performance: verify single request lookup is fast in `tests/test_dashboard.py`
+- [x] T017 [US3] Verify `get_request()` uses the persistent connection (already done in T004). No code change needed — validate via test.
+- [x] T018 [P] [US3] Add test for detail page performance: verify single request lookup is fast in `tests/test_dashboard.py`
 
 **Checkpoint**: Detail page <1s ✅
 
@@ -95,8 +95,8 @@
 
 ### Implementation
 
-- [ ] T019 [US4] Update `get_requests_since()` in `src/otel_agent/dashboard/api.py` to use the persistent connection (already done in T004). Validate via test.
-- [ ] T020 [US4] Update `index.html` SSE handler to append new rows without re-rendering the entire table (only prepend new rows)
+- [x] T019 [US4] Update `get_requests_since()` in `src/otel_agent/dashboard/api.py` to use the persistent connection (already done in T004). Validate via test.
+- [x] T020 [US4] Update `index.html` SSE handler to append new rows without re-rendering the entire table (only prepend new rows)
 
 **Checkpoint**: SSE updates smooth ✅
 
@@ -106,9 +106,9 @@
 
 **Purpose**: Final validation and documentation
 
-- [ ] T021 Update `README.md` with performance notes: cursor pagination, COUNT caching
-- [ ] T022 Run full test suite `uv run pytest tests/ -v -m "not integration"` — all pass
-- [ ] T023 Run quickstart validation from `specs/005-dashboard-performance/quickstart.md`
+- [x] T021 Update `README.md` with performance notes: cursor pagination, COUNT caching
+- [x] T022 Run full test suite `uv run pytest tests/ -v -m "not integration"` — all pass
+- [x] T023 Run quickstart validation from `specs/005-dashboard-performance/quickstart.md`
 
 ---
 

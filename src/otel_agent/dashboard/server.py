@@ -36,6 +36,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_sse()
         elif path == "/api/export":
             self._serve_export(params)
+        elif path == "/api/cache/clear":
+            self._serve_cache_clear()
         else:
             self._serve_404()
 
@@ -51,20 +53,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
         search = params.get("search", [""])[0]
         method = params.get("method", [""])[0]
         status_str = params.get("status", ["0"])[0]
-        page_str = params.get("page", ["1"])[0]
-        per_page_str = params.get("per_page", ["50"])[0]
+        cursor_str = params.get("cursor", ["0"])[0]
+        limit_str = params.get("limit", ["50"])[0]
 
         try:
             status = int(status_str)
-            page = int(page_str)
-            per_page = min(int(per_page_str), 500)
+            cursor = int(cursor_str)
+            limit = min(int(limit_str), 500)
         except ValueError:
             self._serve_json({"error": "Invalid parameter"}, 400)
             return
 
         result = self.api.get_requests(
             search=search, method=method, status=status,
-            page=max(page, 1), per_page=max(per_page, 1),
+            cursor=max(cursor, 0), limit=max(limit, 1),
         )
         self._serve_json(result)
 
@@ -149,6 +151,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _serve_404(self) -> None:
         self.send_response(404)
         self.end_headers()
+
+    def _serve_cache_clear(self) -> None:
+        self.api.clear_cache()
+        self._serve_json({"status": "ok"})
 
 
 class DashboardServer:
