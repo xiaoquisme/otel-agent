@@ -1,6 +1,6 @@
 # otel-agent — LLM Telemetry Proxy
 
-Intercept, log, and redirect LLM API calls. Config-driven key rotation with path-based routing.
+Intercept, log, and redirect LLM API calls. Config-driven key rotation with path-based routing and a web dashboard.
 
 ## Install
 
@@ -27,16 +27,13 @@ otel-agent config edit
 # 3. Start proxy (runs in background)
 otel-agent proxy
 
-# 4. Send requests
+# 4. Open web dashboard
+otel-agent dashboard
+
+# 5. Send requests
 curl http://localhost:8080/openai/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}'
-
-# 5. View logs
-otel-agent proxy logs
-
-# 6. Stop proxy
-otel-agent proxy stop
 ```
 
 ## Commands
@@ -44,56 +41,36 @@ otel-agent proxy stop
 ```
 otel-agent --version          Print version
 otel-agent init               Create default config file
-otel-agent proxy              Start proxy in background (default)
+otel-agent proxy              Start proxy in background
 otel-agent proxy stop         Stop the running proxy
 otel-agent proxy restart      Restart the proxy
 otel-agent proxy status       Check if proxy is running
 otel-agent proxy logs         View proxy log output
-otel-agent proxy logs -F      Stream logs in real-time
 otel-agent proxy --foreground Run in foreground (blocking)
 otel-agent routes             Display routing table
-otel-agent view               View logged requests
+otel-agent dashboard          Start web dashboard
+otel-agent view               View logged requests (CLI)
 otel-agent config path|show|edit  Manage configuration
 otel-agent doctor             Check installation health
 ```
 
-## Proxy Management
-
-### Start
+## Web Dashboard
 
 ```bash
-# Background (default)
-otel-agent proxy
-
-# Foreground (blocking, for debugging)
-otel-agent proxy --foreground
-
-# Custom port
-otel-agent proxy -p 9090
+otel-agent dashboard              # Start on :9090
+otel-agent dashboard -p 3000      # Custom port
+otel-agent dashboard -d logs.db   # Custom database
 ```
 
-### Stop / Restart
+Open `http://localhost:9090` in a browser.
 
-```bash
-otel-agent proxy stop
-otel-agent proxy restart
-```
-
-### Status
-
-```bash
-otel-agent proxy status
-```
-
-Output: `Proxy running on :8080 (PID 12345)` or `Proxy is not running.`
-
-### Logs
-
-```bash
-otel-agent proxy logs              # Last 50 lines
-otel-agent proxy logs -n 100       # Last 100 lines
-otel-agent proxy logs -F           # Stream in real-time (Ctrl+C to stop)
-```
+Features:
+- Request table with timestamp, method, URL, status, latency
+- Real-time auto-refresh (SSE)
+- Text search and method/status filters
+- Click row for full request/response details
+- Latency chart over time
+- CSV/JSON export
 
 ## Path-Based Routing
 
@@ -105,10 +82,8 @@ Requests are routed by URL path prefix:
 /deepseek/v1/chat/completions  → https://api.deepseek.com/v1/chat/completions
 ```
 
-### View Routes
-
 ```bash
-otel-agent routes
+otel-agent routes  # View routing table
 ```
 
 ## Config File
@@ -136,28 +111,32 @@ providers:
         active: true
 ```
 
+## Proxy Management
+
+```bash
+otel-agent proxy              # Start in background
+otel-agent proxy --foreground # Run in terminal (blocking)
+otel-agent proxy stop         # Stop
+otel-agent proxy restart      # Restart
+otel-agent proxy status       # Check status
+otel-agent proxy logs         # View logs
+otel-agent proxy logs -F      # Stream logs (tail -f)
+```
+
 ## Client Usage
 
 ### OpenAI SDK
 
 ```python
 from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8080/openai/v1",
-    api_key="dummy",
-)
+client = OpenAI(base_url="http://localhost:8080/openai/v1", api_key="dummy")
 ```
 
 ### Anthropic SDK
 
 ```python
 import anthropic
-
-client = anthropic.Anthropic(
-    base_url="http://localhost:8080/anthropic",
-    api_key="dummy",
-)
+client = anthropic.Anthropic(base_url="http://localhost:8080/anthropic", api_key="dummy")
 ```
 
 ## Testing

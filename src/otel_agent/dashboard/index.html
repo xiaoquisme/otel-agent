@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>otel-agent Dashboard</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e1e4e8; }
+.header { background: #161b22; border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+.header h1 { font-size: 18px; font-weight: 600; }
+.header .status { font-size: 13px; color: #8b949e; }
+.controls { padding: 16px 24px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.controls input, .controls select { background: #161b22; border: 1px solid #30363d; color: #e1e4e8; padding: 8px 12px; border-radius: 6px; font-size: 14px; }
+.controls input { min-width: 250px; }
+.controls select { min-width: 120px; }
+.controls .btn { background: #238636; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.controls .btn:hover { background: #2ea043; }
+.controls .btn.secondary { background: #21262d; border: 1px solid #30363d; }
+.controls .btn.secondary:hover { background: #30363d; }
+.table-wrap { padding: 0 24px; overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th { background: #161b22; text-align: left; padding: 10px 12px; border-bottom: 2px solid #30363d; font-weight: 600; color: #8b949e; font-size: 12px; text-transform: uppercase; }
+td { padding: 10px 12px; border-bottom: 1px solid #21262d; }
+tr:hover { background: #161b22; cursor: pointer; }
+.status-2xx { color: #3fb950; }
+.status-4xx { color: #d29922; }
+.status-5xx { color: #f85149; }
+.method { font-weight: 600; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
+.method-GET { background: #1f3a2e; color: #3fb950; }
+.method-POST { background: #2a1f3a; color: #a371f7; }
+.method-PUT { background: #3a2a1f; color: #d29922; }
+.method-DELETE { background: #3a1f1f; color: #f85149; }
+.empty { text-align: center; padding: 60px; color: #8b949e; }
+.detail-overlay { display: none; position: fixed; top: 0; right: 0; bottom: 0; width: 50%; background: #161b22; border-left: 1px solid #30363d; overflow-y: auto; z-index: 100; }
+.detail-overlay.active { display: block; }
+.detail-header { padding: 16px 24px; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
+.detail-header h2 { font-size: 16px; }
+.detail-header .close { background: none; border: none; color: #8b949e; cursor: pointer; font-size: 20px; }
+.detail-body { padding: 16px 24px; }
+.detail-section { margin-bottom: 20px; }
+.detail-section h3 { font-size: 13px; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; }
+.detail-section pre { background: #0d1117; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+.detail-section .copy-btn { background: #21262d; border: 1px solid #30363d; color: #8b949e; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-top: 8px; }
+.detail-section .copy-btn:hover { background: #30363d; color: #e1e4e8; }
+.pagination { padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+.pagination .info { color: #8b949e; font-size: 13px; }
+.pagination .pages { display: flex; gap: 8px; }
+.pagination .pages button { background: #21262d; border: 1px solid #30363d; color: #e1e4e8; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+.pagination .pages button.active { background: #238636; border-color: #238636; }
+.pagination .pages button:disabled { opacity: 0.5; cursor: not-allowed; }
+.chart-wrap { padding: 16px 24px; }
+.chart-wrap canvas { max-height: 200px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>otel-agent Dashboard</h1>
+  <div class="status" id="status">Loading...</div>
+</div>
+
+<div class="controls">
+  <input type="text" id="search" placeholder="Search URL or upstream...">
+  <select id="method-filter">
+    <option value="">All Methods</option>
+    <option value="GET">GET</option>
+    <option value="POST">POST</option>
+    <option value="PUT">PUT</option>
+    <option value="DELETE">DELETE</option>
+  </select>
+  <select id="status-filter">
+    <option value="0">All Status</option>
+    <option value="200">200</option>
+    <option value="400">400</option>
+    <option value="404">404</option>
+    <option value="500">500</option>
+  </select>
+  <button class="btn secondary" onclick="exportData('csv')">Export CSV</button>
+  <button class="btn secondary" onclick="exportData('json')">Export JSON</button>
+</div>
+
+<div class="chart-wrap">
+  <canvas id="latency-chart"></canvas>
+</div>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Timestamp</th>
+        <th>Method</th>
+        <th>URL</th>
+        <th>Status</th>
+        <th>Latency</th>
+      </tr>
+    </thead>
+    <tbody id="requests-body">
+    </tbody>
+  </table>
+  <div class="empty" id="empty-state" style="display:none;">No requests logged yet.</div>
+</div>
+
+<div class="pagination">
+  <div class="info" id="pagination-info"></div>
+  <div class="pages" id="pagination-pages"></div>
+</div>
+
+<div class="detail-overlay" id="detail-overlay">
+  <div class="detail-header">
+    <h2>Request Details</h2>
+    <button class="close" onclick="closeDetail()">&times;</button>
+  </div>
+  <div class="detail-body" id="detail-body"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+let currentPage = 1;
+let chart = null;
+let chartData = [];
+
+const searchInput = document.getElementById('search');
+const methodFilter = document.getElementById('method-filter');
+const statusFilter = document.getElementById('status-filter');
+
+let debounceTimer;
+searchInput.addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => { currentPage = 1; loadRequests(); }, 300);
+});
+methodFilter.addEventListener('change', () => { currentPage = 1; loadRequests(); });
+statusFilter.addEventListener('change', () => { currentPage = 1; loadRequests(); });
+
+function getParams() {
+  const p = new URLSearchParams();
+  if (searchInput.value) p.set('search', searchInput.value);
+  if (methodFilter.value) p.set('method', methodFilter.value);
+  if (statusFilter.value !== '0') p.set('status', statusFilter.value);
+  p.set('page', currentPage);
+  p.set('per_page', 50);
+  return p.toString();
+}
+
+async function loadRequests() {
+  try {
+    const resp = await fetch('/api/requests?' + getParams());
+    const data = await resp.json();
+    renderTable(data.data);
+    renderPagination(data.total, data.page, data.per_page);
+    document.getElementById('status').textContent = data.total + ' requests';
+  } catch (e) {
+    document.getElementById('status').textContent = 'Error loading';
+  }
+}
+
+function renderTable(requests) {
+  const tbody = document.getElementById('requests-body');
+  const empty = document.getElementById('empty-state');
+  if (!requests.length) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  tbody.innerHTML = requests.map(r => `
+    <tr onclick="showDetail(${r.id})">
+      <td>${r.id}</td>
+      <td>${new Date(r.timestamp).toLocaleString()}</td>
+      <td><span class="method method-${r.method}">${r.method}</span></td>
+      <td style="max-width:400px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.url}</td>
+      <td><span class="status-${Math.floor(r.response_status/100)}xx">${r.response_status}</span></td>
+      <td>${r.latency_ms?.toFixed(0) || 0}ms</td>
+    </tr>
+  `).join('');
+}
+
+function renderPagination(total, page, perPage) {
+  const totalPages = Math.ceil(total / perPage) || 1;
+  const start = (page - 1) * perPage + 1;
+  const end = Math.min(page * perPage, total);
+  document.getElementById('pagination-info').textContent = total ? `${start}-${end} of ${total}` : 'No results';
+  const pages = document.getElementById('pagination-pages');
+  let html = '';
+  html += `<button ${page<=1?'disabled':''} onclick="goPage(${page-1})">Prev</button>`;
+  for (let i = Math.max(1, page-2); i <= Math.min(totalPages, page+2); i++) {
+    html += `<button class="${i===page?'active':''}" onclick="goPage(${i})">${i}</button>`;
+  }
+  html += `<button ${page>=totalPages?'disabled':''} onclick="goPage(${page+1})">Next</button>`;
+  pages.innerHTML = html;
+}
+
+function goPage(p) { currentPage = p; loadRequests(); }
+
+async function showDetail(id) {
+  const resp = await fetch('/api/requests/' + id);
+  const r = await resp.json();
+  const body = document.getElementById('detail-body');
+  body.innerHTML = `
+    <div class="detail-section">
+      <h3>General</h3>
+      <pre>${r.method} ${r.url}\nStatus: ${r.response_status} | Latency: ${r.latency_ms?.toFixed(0)}ms</pre>
+      <button class="copy-btn" onclick="copyCurl(${JSON.stringify(JSON.stringify(r)).replace(/"/g, '&quot;')})">Copy as curl</button>
+    </div>
+    <div class="detail-section">
+      <h3>Request Headers</h3>
+      <pre>${formatHeaders(r.request_headers)}</pre>
+    </div>
+    <div class="detail-section">
+      <h3>Request Body</h3>
+      <pre>${formatBody(r.request_body)}</pre>
+    </div>
+    <div class="detail-section">
+      <h3>Response Headers</h3>
+      <pre>${formatHeaders(r.response_headers)}</pre>
+    </div>
+    <div class="detail-section">
+      <h3>Response Body</h3>
+      <pre>${formatBody(r.response_body)}</pre>
+    </div>
+  `;
+  document.getElementById('detail-overlay').classList.add('active');
+}
+
+function closeDetail() {
+  document.getElementById('detail-overlay').classList.remove('active');
+}
+
+function formatHeaders(h) {
+  if (!h) return '(none)';
+  if (typeof h === 'string') { try { h = JSON.parse(h); } catch(e) { return h; } }
+  return Object.entries(h).map(([k,v]) => `${k}: ${v}`).join('\n');
+}
+
+function formatBody(b) {
+  if (!b) return '(empty)';
+  try { return JSON.stringify(JSON.parse(b), null, 2); } catch(e) { return b; }
+}
+
+function copyCurl(rJson) {
+  const r = JSON.parse(rJson);
+  let curl = `curl -X ${r.method} '${r.url}'`;
+  const headers = typeof r.request_headers === 'string' ? JSON.parse(r.request_headers) : r.request_headers;
+  if (headers) {
+    for (const [k, v] of Object.entries(headers)) {
+      if (k.toLowerCase() !== 'host') curl += ` \\\n  -H '${k}: ${v}'`;
+    }
+  }
+  if (r.request_body) curl += ` \\\n  -d '${r.request_body}'`;
+  navigator.clipboard.writeText(curl);
+}
+
+function exportData(format) {
+  const params = getParams().replace(/page=\d+&?/, '').replace(/per_page=\d+&?/, '');
+  window.location.href = '/api/export?format=' + format + '&' + params;
+}
+
+function initChart() {
+  const ctx = document.getElementById('latency-chart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [{ label: 'Latency (ms)', data: [], borderColor: '#58a6ff', backgroundColor: 'rgba(88,166,255,0.1)', fill: true, tension: 0.3 }] },
+    options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { display: false }, y: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } } } }
+  });
+}
+
+function addToChart(req) {
+  if (!chart) return;
+  const label = req.method + ' ' + (req.url?.split('?')[0] || '');
+  chart.data.labels.push(label);
+  chart.data.datasets[0].data.push(req.latency_ms || 0);
+  if (chart.data.labels.length > 50) {
+    chart.data.labels.shift();
+    chart.data.datasets[0].data.shift();
+  }
+  chart.update();
+}
+
+function connectSSE() {
+  const es = new EventSource('/api/events');
+  es.onmessage = (e) => {
+    try {
+      const req = JSON.parse(e.data);
+      addToChart(req);
+      if (currentPage === 1 && !searchInput.value && !methodFilter.value && statusFilter.value === '0') {
+        loadRequests();
+      }
+    } catch (err) {}
+  };
+  es.onerror = () => { setTimeout(connectSSE, 5000); };
+}
+
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetail(); });
+initChart();
+loadRequests();
+connectSSE();
+</script>
+</body>
+</html>

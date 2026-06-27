@@ -91,6 +91,11 @@ def build_parser() -> argparse.ArgumentParser:
     routes_p = sub.add_parser("routes", help="Display routing table")
     routes_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
 
+    # --- dashboard ---
+    dash_p = sub.add_parser("dashboard", help="Start web dashboard")
+    dash_p.add_argument("-p", "--port", type=int, default=9090, help="Dashboard port (default: 9090)")
+    dash_p.add_argument("-d", "--db", type=str, default="telemetry.db", help="SQLite database path")
+
     return parser
 
 
@@ -121,6 +126,9 @@ def main() -> None:
     elif args.command == "routes":
         from otel_agent.commands.routes import handle_routes
         handle_routes(args)
+    elif args.command == "dashboard":
+        from otel_agent.commands.dashboard import handle_dashboard
+        handle_dashboard(args)
     else:
         parser.print_help()
         sys.exit(1)
