@@ -36,7 +36,7 @@ A user filters requests by URL, method, status code, or provider to find specifi
 
 **Acceptance Scenarios**:
 
-1. **Given** the dashboard shows requests, **When** the user types in the search box, **Then** only requests matching the URL or provider are shown.
+1. **Given** the dashboard shows requests, **When** the user types in the search box, **Then** only requests matching the URL or upstream (provider) are shown.
 2. **Given** the dashboard is open, **When** the user selects a method filter (GET/POST), **Then** only requests with that method are shown.
 3. **Given** the dashboard is open, **When** the user selects a status filter (200/400/500), **Then** only requests with that status code are shown.
 4. **Given** filters are active, **When** the user clears filters, **Then** all requests are shown again.
@@ -102,8 +102,8 @@ A user exports filtered request data as CSV or JSON for external analysis.
 
 - **FR-001**: The dashboard MUST be accessible at `http://localhost:9090` by default.
 - **FR-002**: The dashboard MUST display a table of requests with timestamp, method, URL, status, and latency.
-- **FR-003**: The dashboard MUST auto-refresh when new requests arrive (WebSocket or polling).
-- **FR-004**: The dashboard MUST support text search across URL and provider fields.
+- **FR-003**: The dashboard MUST auto-refresh when new requests arrive via SSE (Server-Sent Events).
+- **FR-004**: The dashboard MUST support text search across URL and upstream fields (upstream substring match serves as provider filter).
 - **FR-005**: The dashboard MUST support filtering by HTTP method and status code.
 - **FR-006**: The dashboard MUST show full request/response details when a row is clicked.
 - **FR-007**: The dashboard MUST display a latency chart over time.
