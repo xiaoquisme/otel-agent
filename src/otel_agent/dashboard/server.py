@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, parse_qs
@@ -177,7 +177,7 @@ class DashboardServer:
             "api": self.api,
             "html_content": self.html_content,
         })
-        server = HTTPServer(("0.0.0.0", self.port), handler)
+        server = ThreadingHTTPServer(("0.0.0.0", self.port), handler)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
