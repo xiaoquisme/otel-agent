@@ -196,3 +196,56 @@ def test_persistent_connection(tmp_path):
     assert r2["total"] == 3
     assert r3["id"] == 1
     api.close()
+
+
+def test_historical_requests_visible(tmp_path):
+    """All requests in DB are returned on first call, not just new ones."""
+    db = tmp_path / "test.db"
+    _create_test_db(db, 10)
+    api = DashboardAPI(db)
+    result = api.get_requests(limit=50)
+    assert result["total"] == 10
+    assert len(result["data"]) == 10
+    api.close()
+
+
+def test_historical_requests_after_new_data(tmp_path):
+    """Historical + new requests are all visible."""
+    db = tmp_path / "test.db"
+    _create_test_db(db, 5)
+    api = DashboardAPI(db)
+    r1 = api.get_requests(limit=50)
+    assert r1["total"] == 5
+
+    # Add more requests directly to DB
+    import sqlite3
+    conn = sqlite3.connect(str(db))
+    for i in range(6, 9):
+        conn.execute(
+            "INSERT INTO requests (timestamp, method, url, upstream, request_headers, "
+            "request_body, response_status, response_headers, response_body, latency_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (f"2026-06-27T10:00:{i:02d}Z", "GET", f"/test/{i}", f"https://test.com/{i}",
+             '{}', '{}', 200, '{}', '{}', 50.0),
+        )
+    conn.commit()
+    conn.close()
+
+    api.clear_cache()
+    r2 = api.get_requests(limit=50)
+    assert r2["total"] == 8
+    assert len(r2["data"]) == 8
+    api.close()
+
+
+def test_empty_database_no_crash(tmp_path):
+    """Non-existent database returns empty result without error."""
+    db = tmp_path / "nonexistent" / "test.db"
+    api = DashboardAPI(db)
+    result = api.get_requests()
+    assert result == {"data": [], "total": 0, "cursor": 0, "next_cursor": 0, "has_more": False}
+    assert api.get_request(1) is None
+    assert api.get_requests_since(0) == []
+    assert api.get_max_id() == 0
+    assert api.get_all_filtered() == []
+    api.close()

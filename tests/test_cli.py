@@ -207,3 +207,25 @@ def test_handle_routes_no_config(tmp_path, capsys):
     handle_routes(args)
     captured = capsys.readouterr()
     assert "No providers configured" in captured.out
+
+
+def test_default_db_path_is_absolute():
+    """Default DB path must be absolute (starts with / or ~)."""
+    from otel_agent.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["dashboard"])
+    assert args.db.startswith("/") or args.db.startswith("~"), \
+        f"Default DB path should be absolute, got: {args.db}"
+
+
+def test_default_db_path_consistent_across_commands():
+    """All commands use the same default DB path."""
+    from otel_agent.cli import build_parser
+    parser = build_parser()
+
+    proxy_args = parser.parse_args(["proxy"])
+    dashboard_args = parser.parse_args(["dashboard"])
+    view_args = parser.parse_args(["view"])
+
+    assert proxy_args.db == dashboard_args.db == view_args.db, \
+        f"Inconsistent default DB paths: proxy={proxy_args.db}, dashboard={dashboard_args.db}, view={view_args.db}"

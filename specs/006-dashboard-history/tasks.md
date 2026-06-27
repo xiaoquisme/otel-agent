@@ -16,7 +16,7 @@
 
 **Purpose**: Verify existing tests pass.
 
-- [ ] T001 Verify current test suite passes: `uv run pytest tests/ -v -m "not integration"`
+- [x] T001 Verify current test suite passes: `uv run pytest tests/ -v -m "not integration"`
 
 ---
 
@@ -28,9 +28,9 @@
 
 ### Implementation
 
-- [ ] T002 [US1] Add test `test_historical_requests_visible` in `tests/test_dashboard.py`: create a database with 10 requests, initialize DashboardAPI, call `get_requests()`, verify all 10 are returned
-- [ ] T003 [US1] Add test `test_historical_requests_after_new_data` in `tests/test_dashboard.py`: create a database with 5 requests, call `get_requests()`, add 3 more requests, call `get_requests()` again, verify all 8 are returned
-- [ ] T004 [US1] Add test `test_empty_database_no_crash` in `tests/test_dashboard.py`: create DashboardAPI with non-existent database path, call `get_requests()`, verify returns empty result without error
+- [x] T002 [US1] Add test `test_historical_requests_visible` in `tests/test_dashboard.py`: create a database with 10 requests, initialize DashboardAPI, call `get_requests()`, verify all 10 are returned
+- [x] T003 [US1] Add test `test_historical_requests_after_new_data` in `tests/test_dashboard.py`: create a database with 5 requests, call `get_requests()`, add 3 more requests, call `get_requests()` again, verify all 8 are returned
+- [x] T004 [US1] Add test `test_empty_database_no_crash` in `tests/test_dashboard.py`: create DashboardAPI with non-existent database path, call `get_requests()`, verify returns empty result without error
 
 **Checkpoint**: Historical data tests pass ✅
 
@@ -44,8 +44,8 @@
 
 ### Implementation
 
-- [ ] T005 [US2] Add test `test_default_db_path_is_absolute` in `tests/test_cli.py`: parse `otel-agent dashboard` args, verify `args.db` starts with `/` or `~`
-- [ ] T006 [US2] Add test `test_default_db_path_consistent_across_commands` in `tests/test_cli.py`: parse proxy, view, and dashboard args, verify all use the same default DB path
+- [x] T005 [US2] Add test `test_default_db_path_is_absolute` in `tests/test_cli.py`: parse `otel-agent dashboard` args, verify `args.db` starts with `/` or `~`
+- [x] T006 [US2] Add test `test_default_db_path_consistent_across_commands` in `tests/test_cli.py`: parse proxy, view, and dashboard args, verify all use the same default DB path
 
 **Checkpoint**: Consistent path tests pass ✅
 
@@ -55,7 +55,7 @@
 
 **Purpose**: Final validation
 
-- [ ] T007 Run full test suite `uv run pytest tests/ -v -m "not integration"` — all pass
+- [x] T007 Run full test suite `uv run pytest tests/ -v -m "not integration"` — all pass
 
 ---
 
