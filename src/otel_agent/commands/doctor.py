@@ -1,12 +1,14 @@
-"""otel-agent doctor subcommand."""
+"otel-agent doctor subcommand."
 
 import socket
 import sys
 from pathlib import Path
 
+from otel_agent.config import Config
+
 
 def handle_doctor(args) -> None:
-    """Check installation health."""
+    "Check installation health."
     print("otel-agent doctor\n")
     all_ok = True
 
@@ -33,9 +35,15 @@ def handle_doctor(args) -> None:
     config_path = Path(getattr(args, 'config', '~/.otel-agent/config.yaml')).expanduser()
     if config_path.exists():
         try:
-            import yaml
-            yaml.safe_load(config_path.read_text())
-            print(f"  Config valid  ✅")
+            config = Config(config_path)
+            print("  Config valid  ✅")
+            routes = config.routes
+            if routes:
+                print("  Active routes:")
+                for route in routes:
+                    print(f"    {route['prefix']:<12} {route['provider']:<16} {route['base_url']}")
+            else:
+                print("  No active routes configured")
         except Exception as e:
             all_ok = False
             print(f"  Config invalid  ❌")

@@ -43,23 +43,14 @@ def _make_addon(tmp_path, yaml_content, upstream_override=""):
     return TelemetryAddon(logger, config, rotator, upstream_override=upstream_override)
 
 
-def test_addon_routes_by_prefix(tmp_path):
+def test_addon_routes_openai_path(tmp_path):
     addon = _make_addon(tmp_path, """
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-openai
-        active: true
-  anthropic:
-    type: anthropic
-    prefix: /anthropic
-    base_url: https://api.anthropic.com
-    keys:
-      - key: sk-ant
-        active: true
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-openai
+      active: true
 """)
     flow = _make_flow(path="/openai/v1/chat/completions")
     addon.request(flow)
@@ -68,23 +59,14 @@ providers:
     assert flow.request.headers["Authorization"] == "Bearer sk-openai"
 
 
-def test_addon_routes_anthropic_by_prefix(tmp_path):
+def test_addon_routes_anthropic_path(tmp_path):
     addon = _make_addon(tmp_path, """
 providers:
-  openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-openai
-        active: true
   anthropic:
-    type: anthropic
-    prefix: /anthropic
-    base_url: https://api.anthropic.com
-    keys:
-      - key: sk-ant
-        active: true
+    - name: deesseek
+      base_url: https://api.anthropic.com
+      api_key: sk-ant
+      active: true
 """)
     flow = _make_flow(path="/anthropic/v1/messages")
     addon.request(flow)
@@ -93,69 +75,72 @@ providers:
     assert flow.request.headers["x-api-key"] == "sk-ant"
 
 
-def test_addon_strips_prefix(tmp_path):
+def test_addon_strips_openai_prefix(tmp_path):
     addon = _make_addon(tmp_path, """
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-a
-        active: true
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-a
+      active: true
 """)
     flow = _make_flow(path="/openai/v1/chat/completions")
     addon.request(flow)
     assert flow.request.path == "/v1/chat/completions"
 
 
-def test_addon_strips_prefix_exact_match(tmp_path):
-    """Path exactly matching prefix gets stripped to /."""
+def test_addon_strips_anthropic_prefix(tmp_path):
+    addon = _make_addon(tmp_path, """
+providers:
+  anthropic:
+    - name: deesseek
+      base_url: https://api.anthropic.com
+      api_key: sk-a
+      active: true
+""")
+    flow = _make_flow(path="/anthropic/v1/messages")
+    addon.request(flow)
+    assert flow.request.path == "/v1/messages"
+
+
+def test_addon_exact_path_match(tmp_path):
     addon = _make_addon(tmp_path, """
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-a
-        active: true
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-a
+      active: true
 """)
     flow = _make_flow(path="/openai")
     addon.request(flow)
     assert flow.request.path == "/"
 
 
-def test_addon_no_prefix_match_falls_back(tmp_path):
-    """Requests without matching prefix fall back to default_provider."""
+def test_addon_unknown_path_ignored(tmp_path):
     addon = _make_addon(tmp_path, """
-default_provider: openai
-
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-a
-        active: true
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-a
+      active: true
 """)
-    flow = _make_flow(path="/v1/models")
-    flow.request.host = "127.0.0.1"
+    flow = _make_flow(path="/unknown/v1/foo")
+    flow.request.host = "api.cohere.com"
+    flow.request.headers = {"Authorization": "Bearer original"}
     addon.request(flow)
-    assert flow.request.host == "api.openai.com"
+    assert flow.request.headers["Authorization"] == "Bearer original"
 
 
 def test_addon_injects_openai_key(tmp_path):
     addon = _make_addon(tmp_path, """
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-test123
-        active: true
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-test123
+      active: true
 """)
     flow = _make_flow(path="/openai/v1/chat/completions")
     addon.request(flow)
@@ -166,107 +151,38 @@ def test_addon_injects_anthropic_key(tmp_path):
     addon = _make_addon(tmp_path, """
 providers:
   anthropic:
-    type: anthropic
-    prefix: /anthropic
-    base_url: https://api.anthropic.com
-    keys:
-      - key: sk-ant-xxx
-        active: true
+    - name: deesseek
+      base_url: https://api.anthropic.com
+      api_key: sk-ant-xxx
+      active: true
 """)
     flow = _make_flow(path="/anthropic/v1/messages")
     addon.request(flow)
     assert flow.request.headers["x-api-key"] == "sk-ant-xxx"
 
 
-def test_addon_rotates_keys_round_robin(tmp_path):
-    addon = _make_addon(tmp_path, """
+def test_addon_raises_when_no_active_provider(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-a
-        active: true
-      - key: sk-b
-        active: true
-      - key: sk-c
-        active: true
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-a
+      active: false
 """)
-    keys_seen = []
-    for _ in range(6):
-        flow = _make_flow(path="/openai/v1/chat/completions")
-        addon.request(flow)
-        keys_seen.append(flow.request.headers["Authorization"])
-    assert keys_seen == [
-        "Bearer sk-a", "Bearer sk-b", "Bearer sk-c",
-        "Bearer sk-a", "Bearer sk-b", "Bearer sk-c",
-    ]
-
-
-def test_addon_skips_inactive_keys(tmp_path):
-    addon = _make_addon(tmp_path, """
+    try:
+        _make_addon(tmp_path, """
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-a
-        active: true
-      - key: sk-b
-        active: false
-      - key: sk-c
-        active: true
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-a
+      active: false
 """)
-    keys_seen = []
-    for _ in range(4):
-        flow = _make_flow(path="/openai/v1/chat/completions")
-        addon.request(flow)
-        keys_seen.append(flow.request.headers["Authorization"])
-    assert keys_seen == ["Bearer sk-a", "Bearer sk-c", "Bearer sk-a", "Bearer sk-c"]
-
-
-def test_addon_no_matching_provider_no_injection(tmp_path):
-    addon = _make_addon(tmp_path, """
-providers:
-  openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-test
-        active: true
-  anthropic:
-    type: anthropic
-    prefix: /anthropic
-    base_url: https://api.anthropic.com
-    keys:
-      - key: sk-ant
-        active: true
-""")
-    flow = _make_flow(path="/unknown/v1/foo")
-    flow.request.host = "api.cohere.com"
-    flow.request.headers = {"Authorization": "Bearer original"}
-    addon.request(flow)
-    assert flow.request.headers["Authorization"] == "Bearer original"
-
-
-def test_addon_overrides_client_key(tmp_path):
-    addon = _make_addon(tmp_path, """
-providers:
-  openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-real
-        active: true
-""")
-    flow = _make_flow(path="/openai/v1/chat/completions")
-    flow.request.headers = {"Authorization": "Bearer sk-dummy"}
-    addon.request(flow)
-    assert flow.request.headers["Authorization"] == "Bearer sk-real"
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "no active provider" in str(e)
 
 
 def test_addon_logs_request(tmp_path):
@@ -274,12 +190,10 @@ def test_addon_logs_request(tmp_path):
     addon = _make_addon(tmp_path, """
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-a
-        active: true
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-a
+      active: true
 """)
     flow = _make_flow(path="/openai/v1/chat/completions")
     addon.response(flow)
@@ -295,12 +209,10 @@ def test_addon_calculates_latency(tmp_path):
     addon = _make_addon(tmp_path, """
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-a
-        active: true
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-a
+      active: true
 """)
     flow = _make_flow(path="/openai/v1/chat/completions")
     flow.response.timestamp_start = 1000.0
@@ -317,12 +229,10 @@ def test_addon_config_hot_reload(tmp_path):
     config_file.write_text("""
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-old
-        active: true
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-a
+      active: true
 """)
     db_path = tmp_path / "test.db"
     logger = TelemetryLogger(db_path)
@@ -332,23 +242,19 @@ providers:
 
     flow = _make_flow(path="/openai/v1/chat/completions")
     addon.request(flow)
-    assert flow.request.headers["Authorization"] == "Bearer sk-old"
+    assert flow.request.headers["Authorization"] == "Bearer sk-a"
 
     config_file.write_text("""
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-old
-        active: false
-      - key: sk-new
-        active: true
+    - name: deesseek
+      base_url: https://api.deesseek.com/v1
+      api_key: sk-b
+      active: true
 """)
     flow = _make_flow(path="/openai/v1/chat/completions")
     addon.request(flow)
-    assert flow.request.headers["Authorization"] == "Bearer sk-new"
+    assert flow.request.headers["Authorization"] == "Bearer sk-b"
 
 
 def test_strip_prefix():

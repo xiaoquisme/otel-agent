@@ -1,4 +1,4 @@
-"""otel-agent routes subcommand."""
+"otel-agent routes subcommand."
 
 from pathlib import Path
 from otel_agent.config import Config

@@ -4,24 +4,18 @@ from otel_agent.config import Config
 
 
 class KeyRotator:
-    """Round-robin key rotation, re-reads active keys from config each call."""
+    """Round-robin key rotation for provider api_key lists."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config) -> None:
         self.config = config
-        self._indices: dict[str, int] = {}  # provider_name -> current index
+        self._indexes: dict[str, int] = {}
 
-    def next(self, provider_name: str) -> str | None:
-        """Return the next active key for the named provider."""
-        self.config._reload()
-        provider = self.config._providers.get(provider_name)
+    def next_by_api_key(self, provider_type: str) -> str | None:
+        """Return the provider api_key for the given type, reloaded from config."""
+        provider = self.config.get_active_provider(provider_type)
         if not provider:
             return None
-
-        active = provider.active_keys()
-        if not active:
+        key = provider.api_key
+        if not key:
             return None
-
-        idx = self._indices.get(provider_name, 0) % len(active)
-        key = active[idx]
-        self._indices[provider_name] = idx + 1
         return key

@@ -172,19 +172,15 @@ def test_handle_routes(tmp_path, capsys):
     config_file.write_text("""
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-a
-        active: true
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-a
+      active: true
   anthropic:
-    type: anthropic
-    prefix: /anthropic
-    base_url: https://api.anthropic.com
-    keys:
-      - key: sk-b
-        active: true
+    - name: deesseek
+      base_url: https://api.anthropic.com
+      api_key: sk-b
+      active: true
 """)
     args = argparse.Namespace(config=str(config_file))
     handle_routes(args)

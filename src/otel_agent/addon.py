@@ -51,37 +51,39 @@ class TelemetryAddon:
             flow.request.port = 80
 
     def request(self, flow: http.HTTPFlow):
-        """Route request by path prefix and inject API key."""
-        # Upstream override from CLI arg takes priority
+        """Route request by provider path and inject API key."""
+        path = flow.request.path
+
+        if path.startswith("/openai"):
+            provider_type = "openai"
+            prefix = "/openai"
+        elif path.startswith("/anthropic"):
+            provider_type = "anthropic"
+            prefix = "/anthropic"
+        else:
+            provider_type = None
+
+        if provider_type:
+            provider = self.config.get_active_provider(provider_type)
+            if not provider:
+                raise ValueError(
+                    f"No active provider configured for type '{provider_type}'"
+                )
+
+            flow.request.path = self._strip_prefix(path, prefix)
+            self._rewrite_upstream(flow, provider.base_url)
+
+            key = self.rotator.next_by_api_key(provider_type)
+            if key:
+                self._inject_auth(flow, key, provider_type)
+            return
+
+        # Upstream override from CLI arg takes priority for non-standard paths
         if self.upstream_override:
             self._rewrite_upstream(flow, self.upstream_override)
-            key = self.rotator.next(flow.request.host)
+            key = self.rotator.next_by_api_key("")
             if key:
                 self._inject_auth(flow, key, "openai")
-            return
-
-        # Path-based routing: extract first path segment
-        path = flow.request.path
-        provider = self.config.get_provider_by_prefix(path)
-
-        if provider:
-            # Strip prefix and rewrite upstream
-            flow.request.path = self._strip_prefix(path, provider.prefix)
-            self._rewrite_upstream(flow, provider.base_url)
-
-            # Inject auth by API type
-            key = self.rotator.next(provider.name)
-            if key:
-                self._inject_auth(flow, key, provider.type)
-            return
-
-        # Fallback: host-based matching (existing behavior)
-        provider = self.config.get_provider(flow.request.host)
-        if provider and provider.base_url:
-            self._rewrite_upstream(flow, provider.base_url)
-            key = self.rotator.next(provider.name)
-            if key:
-                self._inject_auth(flow, key, provider.type)
 
     def response(self, flow: http.HTTPFlow):
         """Log every completed request/response."""
