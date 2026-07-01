@@ -59,6 +59,7 @@ src/otel_agent/
 ├── commands/
 │   ├── routes.py        # Update to active-provider-aware output
 │   ├── doctor.py        # Validate active-provider rules
+│   ├── proxy.py         # Update startup display for new provider-type model (BUG-001)
 │   └── config_cmd.py    # Keep
 └── cli.py               # Keep
 
@@ -70,6 +71,10 @@ tests/
 
 **Structure Decision**: Existing single-project layout. No new source files; behavior changes are replacements of old routing/validation semantics.
 
+**Bugfix**: 2026-06-30 — BUG-001 Added proxy.py to source code change list; startup display references old config model.
+
 ## Complexity Tracking
 
 No constitution violations requiring justification.
+
+**Bugfix**: 2026-06-30 — BUG-002 Connection error handling needs enhanced diagnostics: catch specific exception types (ConnectionRefusedError, TimeoutError, DNS errors) and provide actionable troubleshooting guidance. See Phase 6 tasks.

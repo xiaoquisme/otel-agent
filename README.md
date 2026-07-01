@@ -74,16 +74,15 @@ Features:
 
 ## Path-Based Routing
 
-Requests are routed by URL path prefix:
+Requests are routed by provider type path prefix to the active provider:
 
 ```
-/openai/v1/chat/completions    → https://api.openai.com/v1/chat/completions
-/anthropic/v1/messages         → https://api.anthropic.com/v1/messages
-/deepseek/v1/chat/completions  → https://api.deepseek.com/v1/chat/completions
+/openai/v1/chat/completions    → active OpenAI provider's base_url
+/anthropic/v1/messages         → active Anthropic provider's base_url
 ```
 
 ```bash
-otel-agent routes  # View routing table
+otel-agent routes  # View active provider assignments
 ```
 
 ## Config File
@@ -91,25 +90,27 @@ otel-agent routes  # View routing table
 `~/.otel-agent/config.yaml`:
 
 ```yaml
-default_provider: openai
-
 providers:
   openai:
-    type: openai
-    prefix: /openai
-    base_url: https://api.openai.com/v1
-    keys:
-      - key: sk-proj-key1
-        active: true
+    - name: primary
+      base_url: https://api.openai.com/v1
+      api_key: sk-proj-key1
+      active: true
+    - name: backup
+      base_url: https://api.deepseek.com
+      api_key: sk-backup-key
+      active: false
 
   anthropic:
-    type: anthropic
-    prefix: /anthropic
-    base_url: https://api.anthropic.com
-    keys:
-      - key: ***
-        active: true
+    - name: primary
+      base_url: https://api.anthropic.com
+      api_key: sk-ant-key1
+      active: true
 ```
+
+Exactly one provider per type must be marked `active: true`. Requests to
+`/openai` are forwarded to the active OpenAI provider; `/anthropic` to
+the active Anthropic provider.
 
 ## Proxy Management
 

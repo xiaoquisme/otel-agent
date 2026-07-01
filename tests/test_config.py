@@ -54,6 +54,8 @@ providers:
         assert False, "Should have raised ValueError"
     except ValueError as e:
         assert "no active provider" in str(e)
+        assert "Available providers: xiaomi" in str(e)
+        assert "Set 'active: true'" in str(e)
 
 
 def test_multiple_active_providers_rejected(tmp_path):
@@ -75,6 +77,7 @@ providers:
         assert False, "Should have raised ValueError"
     except ValueError as e:
         assert "multiple active providers" in str(e)
+        assert "Only one provider can be active" in str(e)
 
 
 def test_missing_config_returns_empty():
@@ -289,7 +292,8 @@ providers:
         Config(config_file)
         assert False, "Should have raised ValueError"
     except ValueError as e:
-        assert "must be one of" in str(e)
+        assert "is not valid" in str(e)
+        assert "Must be one of:" in str(e)
 
 
 def test_empty_base_url_rejected(tmp_path):
@@ -307,6 +311,7 @@ providers:
         assert False, "Should have raised ValueError"
     except ValueError as e:
         assert "must have a base_url" in str(e)
+        assert "Add a valid URL" in str(e)
 
 
 def test_empty_api_key_rejected(tmp_path):
@@ -324,3 +329,4 @@ providers:
         assert False, "Should have raised ValueError"
     except ValueError as e:
         assert "must have an api_key" in str(e)
+        assert "Add a valid API key" in str(e)

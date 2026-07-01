@@ -119,6 +119,9 @@ A user encounters a clear error message when the active provider is unreachable,
 - **SC-003**: Switching the active provider requires no code changes, only a config update that takes effect within the reload interval.
 - **SC-004**: Users can identify the active provider for each type from the tool's status output.
 - **SC-005**: Misconfigured provider files produce actionable error messages that identify missing or duplicate active flags within 1 second of startup.
+- **SC-006**: Connection failures produce diagnostic error messages that include the provider name, endpoint URL, specific failure reason, and actionable troubleshooting steps. [BUG-002]
+
+**Bugfix**: 2026-06-30 — BUG-002 Added SC-006 for actionable connection error diagnostics
 
 ## Assumptions
 

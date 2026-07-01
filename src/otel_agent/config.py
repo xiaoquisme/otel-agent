@@ -126,28 +126,35 @@ class Config:
         for type_name, provider_type in self._provider_types.items():
             if type_name not in VALID_TYPES:
                 raise ValueError(
-                    f"Provider type '{type_name}' must be one of {VALID_TYPES}"
+                    f"Provider type '{type_name}' is not valid. "
+                    f"Must be one of: {', '.join(VALID_TYPES)}"
                 )
 
             active_entries = [entry for entry in provider_type.entries if entry.active]
             if len(active_entries) == 0:
+                provider_names = [entry.name for entry in provider_type.entries]
                 raise ValueError(
-                    f"Provider type '{type_name}' has no active provider"
+                    f"Provider type '{type_name}' has no active provider. "
+                    f"Available providers: {', '.join(provider_names) or 'none'}. "
+                    f"Set 'active: true' on exactly one provider in config."
                 )
             if len(active_entries) > 1:
                 names = ", ".join(entry.name for entry in active_entries)
                 raise ValueError(
-                    f"Provider type '{type_name}' has multiple active providers: {names}"
+                    f"Provider type '{type_name}' has multiple active providers: {names}. "
+                    f"Only one provider can be active per type. Set 'active: false' on all but one."
                 )
 
             for entry in provider_type.entries:
                 if not entry.base_url:
                     raise ValueError(
-                        f"Provider '{entry.name}' must have a base_url"
+                        f"Provider '{entry.name}' (type: {type_name}) must have a base_url. "
+                        f"Add a valid URL to the provider config."
                     )
                 if not entry.api_key:
                     raise ValueError(
-                        f"Provider '{entry.name}' must have an api_key"
+                        f"Provider '{entry.name}' (type: {type_name}) must have an api_key. "
+                        f"Add a valid API key to the provider config."
                     )
 
     @property

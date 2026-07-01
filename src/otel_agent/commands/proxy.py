@@ -145,10 +145,11 @@ async def _run_proxy(args) -> None:
     print(f"logging to {args.db}")
     print(f"config: {config_path}")
 
-    for name, provider in config._providers.items():
-        active = len(provider.active_keys())
-        total = len(provider.keys)
-        print(f"  provider: {name} ({active}/{total} keys active)")
+    for type_name, provider_type in config.provider_types.items():
+        active = provider_type.active_entry()
+        total = len(provider_type.entries)
+        active_name = active.name if active else "none"
+        print(f"  {type_name}: {active_name} (active) [{total} provider(s)]")
 
     print("Ctrl+C to stop\n")
 

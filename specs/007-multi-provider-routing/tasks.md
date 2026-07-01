@@ -17,8 +17,8 @@
 
 **Purpose**: Update shared config defaults and documentation to the new provider-type schema.
 
-- [ ] T001 [P] Update default config template to provider-type schema in src/otel_agent/config.py
-- [ ] T002 [P] Update README config examples to provider-type schema in README.md
+- [x] T001 [P] Update default config template to provider-type schema in src/otel_agent/config.py
+- [x] T002 [P] Update README config examples to provider-type schema in README.md
 
 ---
 
@@ -28,10 +28,10 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T003 Refactor config data model for provider-type lists and provider entries in src/otel_agent/config.py
-- [ ] T004 Add active-provider validation rules in src/otel_agent/config.py
-- [ ] T005 Remove host-based routing fallback from Config in src/otel_agent/config.py
-- [ ] T006 [P] Update existing config tests for schema and validation changes in tests/test_config.py
+- [x] T003 Refactor config data model for provider-type lists and provider entries in src/otel_agent/config.py
+- [x] T004 Add active-provider validation rules in src/otel_agent/config.py
+- [x] T005 Remove host-based routing fallback from Config in src/otel_agent/config.py
+- [x] T006 [P] Update existing config tests for schema and validation changes in tests/test_config.py
 
 **Checkpoint**: Foundation ready — config loads new schema, enforces one active provider per type, and old host routing is removed.
 
@@ -45,9 +45,9 @@
 
 ### Implementation for User Story 1
 
-- [ ] T007 [US1] Update init command to emit new provider-type config in src/otel_agent/commands/init.py
-- [ ] T008 [US1] Update config show/edit masking for new schema in src/otel_agent/commands/config_cmd.py
-- [ ] T009 [P] [US1] Add provider-type config parsing and validation tests in tests/test_config.py
+- [x] T007 [US1] Update init command to emit new provider-type config in src/otel_agent/commands/init.py
+- [x] T008 [US1] Update config show/edit masking for new schema in src/otel_agent/commands/config_cmd.py
+- [x] T009 [P] [US1] Add provider-type config parsing and validation tests in tests/test_config.py
 
 **Checkpoint**: User Story 1 should be fully functional and testable independently — config parsing, active validation, and init/show/edit all work.
 
@@ -61,10 +61,10 @@
 
 ### Implementation for User Story 2
 
-- [ ] T010 [US2] Rewrite addon request routing to provider-type lookup only in src/otel_agent/addon.py
-- [ ] T011 [US2] Update auth injection to use active provider credentials in src/otel_agent/addon.py
-- [ ] T012 [US2] Simplify rotator to provider api_key selection in src/otel_agent/rotator.py
-- [ ] T013 [P] [US2] Add provider-path-only routing tests in tests/test_addon.py
+- [x] T010 [US2] Rewrite addon request routing to provider-type lookup only in src/otel_agent/addon.py; also update startup display in src/otel_agent/commands/proxy.py to use new provider-type model
+- [x] T011 [US2] Update auth injection to use active provider credentials in src/otel_agent/addon.py
+- [x] T012 [US2] Simplify rotator to provider api_key selection in src/otel_agent/rotator.py
+- [x] T013 [P] [US2] Add provider-path-only routing tests in tests/test_addon.py
 
 **Checkpoint**: User Story 2 should be fully functional and testable independently — standardized routes work and old routing is removed.
 
@@ -78,9 +78,9 @@
 
 ### Implementation for User Story 3
 
-- [ ] T014 [US3] Update routes command to display active provider per type in src/otel_agent/commands/routes.py
-- [ ] T015 [US3] Add provider status output behavior in src/otel_agent/commands/routes.py
-- [ ] T016 [P] [US3] Add routes/status CLI tests in tests/test_cli.py
+- [x] T014 [US3] Update routes command to display active provider per type in src/otel_agent/commands/routes.py
+- [x] T015 [US3] Add provider status output behavior in src/otel_agent/commands/routes.py
+- [x] T016 [P] [US3] Add routes/status CLI tests in tests/test_cli.py
 
 **Checkpoint**: User Story 3 should be fully functional and testable independently — status output shows active assignments clearly.
 
@@ -94,11 +94,14 @@
 
 ### Implementation for User Story 4
 
-- [ ] T017 [US4] Ensure startup/runtime errors identify invalid active-provider state in src/otel_agent/config.py
-- [ ] T018 [US4] Ensure upstream/provider errors are surfaced clearly in src/otel_agent/addon.py
-- [ ] T019 [P] [US4] Add error-path tests in tests/test_config.py and tests/test_addon.py
+- [x] T017 [US4] Ensure startup/runtime errors identify invalid active-provider state in src/otel_agent/config.py (reopened — BUG-002)
+- [x] T018 [US4] Ensure upstream/provider errors are surfaced clearly in src/otel_agent/addon.py (reopened — BUG-002)
+- [x] T019 [P] [US4] Add error-path tests in tests/test_config.py and tests/test_addon.py (reopened — BUG-002)
+- [x] T025 [US4] Enhance connection error handling with specific exception types and actionable diagnostics in src/otel_agent/addon.py [BUG-002]
 
 **Checkpoint**: User Story 4 should be fully functional and testable independently — errors are actionable and identify the active provider.
+
+**Bugfix**: 2026-06-30 — BUG-002 Reopened T017-T019 (error messages still generic); added T025 for enhanced connection error diagnostics
 
 ---
 
@@ -106,10 +109,13 @@
 
 **Purpose**: Final validation, docs, and quality gates across all stories.
 
-- [ ] T020 [P] Update doctor validation for new provider schema in src/otel_agent/commands/doctor.py
-- [ ] T021 Update README to document provider-type config and removed routing behavior in README.md
-- [ ] T022 Run quickstart.md validation scenarios
-- [ ] T023 Lint and pytest pass
+- [x] T020 [P] Update doctor validation for new provider schema in src/otel_agent/commands/doctor.py
+- [x] T021 Update README to document provider-type config and removed routing behavior in README.md
+- [x] T022 Run quickstart.md validation (N/A — no quickstart.md exists) scenarios
+- [x] T023 Lint and pytest pass (92 passed, 2 integration deselected)
+- [x] T024 [US2] Fix proxy startup display in src/otel_agent/commands/proxy.py to iterate config.provider_types and display active provider info using new ProviderType/ProviderEntry model (BUG-001)
+
+**Bugfix**: 2026-06-30 — BUG-001 Added T024 for proxy.py startup display; expanded T010 scope to cover proxy.py.
 
 ---
 

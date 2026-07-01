@@ -262,3 +262,75 @@ def test_strip_prefix():
     assert TelemetryAddon._strip_prefix("/anthropic/v1/messages", "/anthropic") == "/v1/messages"
     assert TelemetryAddon._strip_prefix("/openai", "/openai") == "/"
     assert TelemetryAddon._strip_prefix("/other/path", "/openai") == "/other/path"
+
+
+# --- Error path tests for BUG-002 ---
+
+
+def test_addon_raises_when_no_active_provider_with_details(tmp_path):
+    """Test that error message includes available types and config path."""
+    try:
+        _make_addon(tmp_path, """
+providers:
+  openai:
+    - name: xiaomi
+      base_url: https://api.openai.com/v1
+      api_key: sk-a
+      active: false
+""")
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        error_msg = str(e)
+        assert "no active provider" in error_msg
+        assert "Available providers: xiaomi" in error_msg
+        assert "Set 'active: true'" in error_msg
+
+
+def test_addon_connection_refused_error(tmp_path, monkeypatch):
+    """Test connection refused error formatting."""
+    from otel_agent.addon import _format_connection_error
+
+    error = ConnectionRefusedError("Connection refused")
+    result = _format_connection_error("test-provider", "http://localhost:8080/v1", error)
+
+    assert "Connection failed to provider 'test-provider'" in result
+    assert "http://localhost:8080/v1" in result
+    assert "Connection refused" in result
+    assert "Is the server running" in result
+    assert "Troubleshooting:" in result
+
+
+def test_addon_dns_error(tmp_path):
+    """Test DNS resolution error formatting."""
+    from otel_agent.addon import _format_connection_error
+
+    error = OSError("Name or service not known")
+    result = _format_connection_error("test-provider", "http://invalid.host.com/v1", error)
+
+    assert "DNS resolution failed" in result
+    assert "hostname could not be resolved" in result
+    assert "Check if the hostname" in result
+
+
+def test_addon_timeout_error(tmp_path):
+    """Test timeout error formatting."""
+    from otel_agent.addon import _format_connection_error
+
+    error = TimeoutError("Connection timed out")
+    result = _format_connection_error("test-provider", "http://slow.server.com/v1", error)
+
+    assert "Connection timed out" in result
+    assert "server did not respond in time" in result
+    assert "Check network connectivity" in result
+
+
+def test_addon_generic_error(tmp_path):
+    """Test generic error formatting."""
+    from otel_agent.addon import _format_connection_error
+
+    error = Exception("Something went wrong")
+    result = _format_connection_error("test-provider", "http://example.com/v1", error)
+
+    assert "Connection failed to provider 'test-provider'" in result
+    assert "Exception: Something went wrong" in result
+    assert "Verify the server is running" in result
