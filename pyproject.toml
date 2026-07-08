@@ -1,7 +1,7 @@
 [project]
 name = "otel-agent"
 version = "0.1.0"
-description = "LLM API telemetry proxy — intercept, log, redirect with config-driven multi-key rotation"
+description = "LLM API gateway — OpenAI/Anthropic compatible endpoints with model-name-based provider routing and telemetry"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "xiaoquisme" }]
@@ -17,7 +17,9 @@ classifiers = [
     "Topic :: System :: Networking :: Monitoring",
 ]
 dependencies = [
-    "mitmproxy>=10.0",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+    "httpx>=0.28.0",
     "pyyaml>=6.0.3",
 ]
 

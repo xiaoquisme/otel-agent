@@ -9,7 +9,6 @@ def test_parser_defaults():
     parser = build_parser()
     args = parser.parse_args(["proxy"])
     assert args.port == 8080
-    assert args.upstream == ""
     assert args.db == "~/.otel-agent/telemetry.db"
     assert args.config == "~/.otel-agent/config.yaml"
 
@@ -18,12 +17,10 @@ def test_parser_custom_values():
     parser = build_parser()
     args = parser.parse_args([
         "proxy", "--port", "9090",
-        "--upstream", "https://api.anthropic.com",
         "--db", "/tmp/logs.db",
         "--config", "/tmp/my-config.yaml",
     ])
     assert args.port == 9090
-    assert args.upstream == "https://api.anthropic.com"
     assert args.db == "/tmp/logs.db"
     assert args.config == "/tmp/my-config.yaml"
 
@@ -138,30 +135,23 @@ def test_handle_config_path(tmp_path, capsys):
     assert str(config_file) in captured.out
 
 
-def test_handle_config_show_masks_keys(tmp_path, capsys):
-    from otel_agent.commands.config_cmd import handle_config
-    import argparse
-
-    config_file = tmp_path / "config.yaml"
-    config_file.write_text("providers:\n  openai:\n    keys:\n      - key: sk-pro...3456\n        active: true\n")
-    args = argparse.Namespace(config=str(config_file), config_action="show")
-    handle_config(args)
-    captured = capsys.readouterr()
-    assert "sk-pro***" in captured.out
-    assert "sk-pro...3456" not in captured.out
-
-
 def test_handle_doctor_checks(tmp_path, capsys):
     from otel_agent.commands.doctor import handle_doctor
     import argparse
 
     config_file = tmp_path / "config.yaml"
-    config_file.write_text("providers: {}")
+    config_file.write_text("""
+providers:
+  - name: openai
+    base_url: https://api.openai.com/v1
+    api_key: sk-a
+    api_format: openai
+""")
     args = argparse.Namespace(config=str(config_file), port=18765)
     handle_doctor(args)
     captured = capsys.readouterr()
     assert "Python" in captured.out
-    assert "mitmproxy" in captured.out
+    assert "fastapi" in captured.out
 
 
 def test_handle_routes(tmp_path, capsys):
@@ -171,22 +161,18 @@ def test_handle_routes(tmp_path, capsys):
     config_file = tmp_path / "config.yaml"
     config_file.write_text("""
 providers:
-  openai:
-    - name: xiaomi
-      base_url: https://api.openai.com/v1
-      api_key: sk-a
-      active: true
-  anthropic:
-    - name: deesseek
-      base_url: https://api.anthropic.com
-      api_key: sk-b
-      active: true
+  - name: openai
+    base_url: https://api.openai.com/v1
+    api_key: sk-a
+    api_format: openai
+  - name: anthropic
+    base_url: https://api.anthropic.com
+    api_key: sk-b
+    api_format: anthropic
 """)
     args = argparse.Namespace(config=str(config_file))
     handle_routes(args)
     captured = capsys.readouterr()
-    assert "/openai" in captured.out
-    assert "/anthropic" in captured.out
     assert "openai" in captured.out
     assert "anthropic" in captured.out
     assert "https://api.openai.com/v1" in captured.out
@@ -198,7 +184,7 @@ def test_handle_routes_no_config(tmp_path, capsys):
     import argparse
 
     config_file = tmp_path / "config.yaml"
-    config_file.write_text("providers: {}")
+    config_file.write_text("providers: []")
     args = argparse.Namespace(config=str(config_file))
     handle_routes(args)
     captured = capsys.readouterr()
@@ -206,7 +192,6 @@ def test_handle_routes_no_config(tmp_path, capsys):
 
 
 def test_default_db_path_is_absolute():
-    """Default DB path must be absolute (starts with / or ~)."""
     from otel_agent.cli import build_parser
     parser = build_parser()
     args = parser.parse_args(["dashboard"])
@@ -215,7 +200,6 @@ def test_default_db_path_is_absolute():
 
 
 def test_default_db_path_consistent_across_commands():
-    """All commands use the same default DB path."""
     from otel_agent.cli import build_parser
     parser = build_parser()
 

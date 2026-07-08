@@ -1,4 +1,4 @@
-"otel-agent doctor subcommand."
+"""otel-agent doctor subcommand."""
 
 import socket
 import sys
@@ -8,7 +8,7 @@ from otel_agent.config import Config
 
 
 def handle_doctor(args) -> None:
-    "Check installation health."
+    """Check installation health."""
     print("otel-agent doctor\n")
     all_ok = True
 
@@ -21,14 +21,34 @@ def handle_doctor(args) -> None:
         all_ok = False
         print("    → Need Python >= 3.10")
 
-    # mitmproxy
+    # FastAPI
     try:
-        import mitmproxy
-        ver = getattr(mitmproxy, '__version__', 'unknown')
-        print(f"  mitmproxy {ver}  ✅")
+        import fastapi
+        ver = getattr(fastapi, '__version__', 'unknown')
+        print(f"  fastapi {ver}  ✅")
     except ImportError:
         all_ok = False
-        print("  mitmproxy  ❌")
+        print("  fastapi  ❌")
+        print("    → Install: uv sync")
+
+    # uvicorn
+    try:
+        import uvicorn
+        ver = getattr(uvicorn, '__version__', 'unknown')
+        print(f"  uvicorn {ver}  ✅")
+    except ImportError:
+        all_ok = False
+        print("  uvicorn  ❌")
+        print("    → Install: uv sync")
+
+    # httpx
+    try:
+        import httpx
+        ver = getattr(httpx, '__version__', 'unknown')
+        print(f"  httpx {ver}  ✅")
+    except ImportError:
+        all_ok = False
+        print("  httpx  ❌")
         print("    → Install: uv sync")
 
     # Config
@@ -36,21 +56,17 @@ def handle_doctor(args) -> None:
     if config_path.exists():
         try:
             config = Config(config_path)
-            print("  Config valid  ✅")
-            routes = config.routes
-            if routes:
-                print("  Active routes:")
-                for route in routes:
-                    print(f"    {route['prefix']:<12} {route['provider']:<16} {route['base_url']}")
-            else:
-                print("  No active routes configured")
+            providers = config.providers
+            print(f"  Config valid  ✅ ({len(providers)} provider(s))")
+            for name, provider in providers.items():
+                print(f"    {name:<16} {provider.api_format:<10} {provider.base_url}")
         except Exception as e:
             all_ok = False
-            print(f"  Config invalid  ❌")
+            print("  Config invalid  ❌")
             print(f"    → {e}")
     else:
-        print(f"  Config missing  ⚠️")
-        print(f"    → Run: otel-agent init")
+        print("  Config missing  ⚠️")
+        print("    → Run: otel-agent init")
 
     # Port
     port = getattr(args, 'port', 8080)

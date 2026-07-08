@@ -1,11 +1,11 @@
-"otel-agent routes subcommand."
+"""otel-agent routes subcommand."""
 
 from pathlib import Path
 from otel_agent.config import Config
 
 
 def handle_routes(args) -> None:
-    """Display the routing table."""
+    """Display the provider routing table."""
     config_path = Path(args.config).expanduser()
     config = Config(config_path)
 
@@ -14,9 +14,12 @@ def handle_routes(args) -> None:
         print("No providers configured. Run: otel-agent init")
         return
 
-    # Header
-    print(f"{'Path Prefix':<16} {'Provider':<16} {'Type':<12} {'Upstream'}")
-    print(f"{'-'*14:<16} {'-'*8:<16} {'-'*4:<12} {'-'*30}")
+    print(f"{'Provider':<16} {'API Format':<12} {'Upstream'}")
+    print(f"{'-'*14:<16} {'-'*10:<12} {'-'*40}")
 
     for r in routes:
-        print(f"{r['prefix']:<16} {r['provider']:<16} {r['type']:<12} {r['base_url']}")
+        print(f"{r['provider']:<16} {r['api_format']:<12} {r['base_url']}")
+
+    print(f"\nUsage: set model='<provider>/<model>' in your request.")
+    print(f"  e.g., model='openai/gpt-5.4' routes to the 'openai' provider")
+    print(f"  e.g., model='openrouter/openai/gpt-5.4' routes to 'openrouter'")

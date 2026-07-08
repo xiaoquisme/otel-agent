@@ -11,7 +11,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the main argument parser with all subcommands."""
     parser = argparse.ArgumentParser(
         prog="otel-agent",
-        description="LLM API telemetry proxy — intercept, log, redirect.",
+        description="LLM API gateway — OpenAI/Anthropic compatible endpoints with model-name routing.",
     )
     parser.add_argument(
         "--version", action="version",
@@ -29,13 +29,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # --- proxy (command group) ---
-    proxy_p = sub.add_parser("proxy", help="Manage the MITM proxy")
+    proxy_p = sub.add_parser("proxy", help="Manage the LLM API gateway")
     proxy_sub = proxy_p.add_subparsers(dest="proxy_action", help="Proxy actions")
 
     # proxy start (default)
     start_p = proxy_sub.add_parser("start", help="Start proxy (default)")
     start_p.add_argument("-p", "--port", type=int, default=8080, help="Listen port (default: 8080)")
-    start_p.add_argument("-u", "--upstream", type=str, default="", help="Override upstream target")
     start_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.db", help="SQLite database path")
     start_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
     start_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
@@ -47,7 +46,6 @@ def build_parser() -> argparse.ArgumentParser:
     # proxy restart
     restart_p = proxy_sub.add_parser("restart", help="Restart the proxy")
     restart_p.add_argument("-p", "--port", type=int, default=8080, help="Listen port (default: 8080)")
-    restart_p.add_argument("-u", "--upstream", type=str, default="", help="Override upstream target")
     restart_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.db", help="SQLite database path")
     restart_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
     restart_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
@@ -65,7 +63,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Also support `otel-agent proxy` with no subcommand (default to start)
     proxy_p.add_argument("-p", "--port", type=int, default=8080, help="Listen port (default: 8080)")
-    proxy_p.add_argument("-u", "--upstream", type=str, default="", help="Override upstream target")
     proxy_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.db", help="SQLite database path")
     proxy_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
     proxy_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")

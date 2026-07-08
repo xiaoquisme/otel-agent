@@ -1,0 +1,294 @@
+"""FastAPI-based LLM API gateway with model-name-based routing."""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from pathlib import Path
+from typing import AsyncIterator
+
+import httpx
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+
+from otel_agent.config import Config, Provider
+from otel_agent.converter import (
+    anthropic_to_openai_request,
+    anthropic_to_openai_response,
+    convert_anthropic_chunk_to_openai,
+    convert_openai_chunk_to_anthropic,
+    openai_to_anthropic_request,
+    openai_to_anthropic_response,
+)
+from otel_agent.logger import TelemetryLogger
+from otel_agent.router import parse_model, resolve_provider
+
+logger = logging.getLogger(__name__)
+
+# Auth header patterns per provider API format
+AUTH_HEADERS = {
+    "openai": lambda key: {"Authorization": f"Bearer {key}"},
+    "anthropic": lambda key: {"x-api-key": key, "anthropic-version": "2023-06-01"},
+}
+
+
+def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
+    """Create the FastAPI application with all routes."""
+    app = FastAPI(title="otel-agent", version="0.1.0")
+    client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0))
+
+    @app.on_event("shutdown")
+    async def shutdown() -> None:
+        await client.aclose()
+        telemetry.close()
+
+    # ------------------------------------------------------------------
+    # OpenAI-compatible endpoint
+    # ------------------------------------------------------------------
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: Request) -> StreamingResponse | JSONResponse:
+        """OpenAI-compatible chat completions endpoint."""
+        body = await request.json()
+        model = body.get("model", "")
+        is_stream = body.get("stream", False)
+
+        try:
+            provider_name, upstream_model = parse_model(model)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        try:
+            provider = resolve_provider(provider_name, config)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        # Prepare the upstream request body
+        upstream_body = dict(body)
+        upstream_body["model"] = upstream_model
+
+        # If provider speaks Anthropic, convert the request
+        needs_conversion = provider.api_format == "anthropic"
+
+        if needs_conversion:
+            upstream_body = openai_to_anthropic_request(upstream_body)
+            url = f"{provider.base_url.rstrip('/')}/messages"
+        else:
+            url = f"{provider.base_url.rstrip('/')}/chat/completions"
+
+        headers = AUTH_HEADERS[provider.api_format](provider.api_key)
+        headers["Content-Type"] = "application/json"
+
+        start_time = time.monotonic()
+
+        if is_stream:
+            return await _handle_streaming(
+                client, url, headers, upstream_body,
+                provider, telemetry, request, start_time,
+                source_format="openai", target_format=provider.api_format,
+            )
+
+        return await _handle_non_streaming(
+            client, url, headers, upstream_body,
+            provider, telemetry, request, start_time,
+            source_format="openai", target_format=provider.api_format,
+        )
+
+    # ------------------------------------------------------------------
+    # Anthropic-compatible endpoint
+    # ------------------------------------------------------------------
+    @app.post("/v1/messages")
+    async def messages(request: Request) -> StreamingResponse | JSONResponse:
+        """Anthropic-compatible messages endpoint."""
+        body = await request.json()
+        model = body.get("model", "")
+        is_stream = body.get("stream", False)
+
+        try:
+            provider_name, upstream_model = parse_model(model)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        try:
+            provider = resolve_provider(provider_name, config)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        upstream_body = dict(body)
+        upstream_body["model"] = upstream_model
+
+        needs_conversion = provider.api_format == "openai"
+
+        if needs_conversion:
+            upstream_body = anthropic_to_openai_request(upstream_body)
+            url = f"{provider.base_url.rstrip('/')}/chat/completions"
+        else:
+            url = f"{provider.base_url.rstrip('/')}/messages"
+
+        headers = AUTH_HEADERS[provider.api_format](provider.api_key)
+        headers["Content-Type"] = "application/json"
+
+        start_time = time.monotonic()
+
+        if is_stream:
+            return await _handle_streaming(
+                client, url, headers, upstream_body,
+                provider, telemetry, request, start_time,
+                source_format="anthropic", target_format=provider.api_format,
+            )
+
+        return await _handle_non_streaming(
+            client, url, headers, upstream_body,
+            provider, telemetry, request, start_time,
+            source_format="anthropic", target_format=provider.api_format,
+        )
+
+    # ------------------------------------------------------------------
+    # Health check
+    # ------------------------------------------------------------------
+    @app.get("/health")
+    async def health() -> dict:
+        return {"status": "ok"}
+
+    return app
+
+
+async def _handle_non_streaming(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    body: dict,
+    provider: Provider,
+    telemetry: TelemetryLogger,
+    request: Request,
+    start_time: float,
+    source_format: str,
+    target_format: str,
+) -> JSONResponse:
+    """Handle a non-streaming request to an upstream provider."""
+    try:
+        resp = await client.post(url, headers=headers, json=body)
+    except httpx.ConnectError as e:
+        return JSONResponse(
+            {"error": {"message": f"Connection failed to provider '{provider.name}': {e}", "type": "server_error"}},
+            status_code=502,
+        )
+    except httpx.TimeoutException:
+        return JSONResponse(
+            {"error": {"message": f"Timeout connecting to provider '{provider.name}'", "type": "server_error"}},
+            status_code=504,
+        )
+
+    latency_ms = (time.monotonic() - start_time) * 1000
+
+    try:
+        resp_body = resp.json()
+    except Exception:
+        resp_body = {"raw": resp.text}
+
+    # Convert response back to the client's expected format if needed
+    if source_format != target_format:
+        if source_format == "openai" and target_format == "anthropic":
+            resp_body = anthropic_to_openai_response(resp_body)
+        elif source_format == "anthropic" and target_format == "openai":
+            resp_body = openai_to_anthropic_response(resp_body)
+
+    # Log telemetry
+    _log_telemetry(telemetry, request, resp.status_code, resp_body, latency_ms, provider)
+
+    return JSONResponse(resp_body, status_code=resp.status_code)
+
+
+async def _handle_streaming(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    body: dict,
+    provider: Provider,
+    telemetry: TelemetryLogger,
+    request: Request,
+    start_time: float,
+    source_format: str,
+    target_format: str,
+) -> StreamingResponse:
+    """Handle a streaming request to an upstream provider."""
+
+    async def stream_generator() -> AsyncIterator[bytes]:
+        collected_text = ""
+        try:
+            async with client.stream("POST", url, headers=headers, json=body) as resp:
+                async for line in resp.aiter_lines():
+                    if not line:
+                        yield b"\n"
+                        continue
+
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            if source_format == "openai":
+                                yield b"data: [DONE]\n\n"
+                            break
+
+                        try:
+                            chunk_data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        if source_format == target_format:
+                            # No conversion needed
+                            yield f"data: {json.dumps(chunk_data)}\n\n".encode()
+                        elif source_format == "openai" and target_format == "anthropic":
+                            # Upstream is anthropic, client expects openai
+                            converted = convert_anthropic_chunk_to_openai(chunk_data)
+                            if converted:
+                                yield f"data: {json.dumps(converted)}\n\n".encode()
+                        elif source_format == "anthropic" and target_format == "openai":
+                            # Upstream is openai, client expects anthropic
+                            converted = convert_openai_chunk_to_anthropic(chunk_data)
+                            if converted:
+                                yield f"data: {json.dumps(converted)}\n\n".encode()
+
+                        # Collect for telemetry
+                        collected_text += json.dumps(chunk_data)
+                    else:
+                        # Pass through non-data lines (event:, id:, etc.)
+                        yield f"{line}\n".encode()
+
+        except httpx.ConnectError as e:
+            error_msg = json.dumps({"error": {"message": f"Connection failed: {e}", "type": "server_error"}})
+            yield f"data: {error_msg}\n\n".encode()
+        except httpx.TimeoutException:
+            error_msg = json.dumps({"error": {"message": "Timeout", "type": "server_error"}})
+            yield f"data: {error_msg}\n\n".encode()
+
+        latency_ms = (time.monotonic() - start_time) * 1000
+        _log_telemetry(telemetry, request, 200, {"streamed": True, "preview": collected_text[:500]}, latency_ms, provider)
+
+    media_type = "text/event-stream"
+    return StreamingResponse(stream_generator(), media_type=media_type)
+
+
+def _log_telemetry(
+    telemetry: TelemetryLogger,
+    request: Request,
+    status_code: int,
+    resp_body: dict | str,
+    latency_ms: float,
+    provider: Provider,
+) -> None:
+    """Log request/response to telemetry database."""
+    try:
+        body_str = json.dumps(resp_body) if isinstance(resp_body, dict) else str(resp_body)
+        telemetry.log_request(
+            method=request.method,
+            url=str(request.url),
+            request_headers=dict(request.headers),
+            request_body="",
+            response_status=status_code,
+            response_headers={},
+            response_body=body_str[:100_000],
+            latency_ms=latency_ms,
+            upstream=provider.base_url,
+        )
+    except Exception:
+        logger.exception("Failed to log telemetry")

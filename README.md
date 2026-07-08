@@ -1,6 +1,6 @@
-# otel-agent — LLM Telemetry Proxy
+# otel-agent — LLM API Gateway
 
-Intercept, log, and redirect LLM API calls. Config-driven key rotation with path-based routing and a web dashboard.
+OpenAI/Anthropic compatible API gateway with model-name-based provider routing and telemetry logging.
 
 ## Install
 
@@ -24,30 +24,41 @@ otel-agent init
 # 2. Edit config to add your API keys
 otel-agent config edit
 
-# 3. Start proxy (runs in background)
+# 3. Start gateway (runs in background)
 otel-agent proxy
 
-# 4. Open web dashboard
-otel-agent dashboard
-
-# 5. Send requests
-curl http://localhost:8080/openai/v1/chat/completions \
+# 4. Send requests with model-name routing
+curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}'
+  -d '{"model":"openai/gpt-4o","messages":[{"role":"user","content":"hi"}]}'
 ```
+
+## How It Works
+
+The gateway routes requests based on the **model name prefix**:
+
+| Model String | Routes To |
+|---|---|
+| `openai/gpt-5.4` | OpenAI provider |
+| `openrouter/openai/gpt-5.4` | OpenRouter provider (model: `openai/gpt-5.4`) |
+| `xiaomi/mimo-v-2.5` | Xiaomi provider |
+| `anthropic/claude-sonnet-4` | Anthropic provider |
+
+The first segment before `/` is always the **provider name** (looked up in config).
+Everything after the first `/` is the **upstream model name** forwarded to that provider.
 
 ## Commands
 
 ```
 otel-agent --version          Print version
 otel-agent init               Create default config file
-otel-agent proxy              Start proxy in background
-otel-agent proxy stop         Stop the running proxy
-otel-agent proxy restart      Restart the proxy
-otel-agent proxy status       Check if proxy is running
-otel-agent proxy logs         View proxy log output
+otel-agent proxy              Start gateway in background
+otel-agent proxy stop         Stop the running gateway
+otel-agent proxy restart      Restart the gateway
+otel-agent proxy status       Check if gateway is running
+otel-agent proxy logs         View gateway log output
 otel-agent proxy --foreground Run in foreground (blocking)
-otel-agent routes             Display routing table
+otel-agent routes             Display provider routing table
 otel-agent dashboard          Start web dashboard
 otel-agent view               View logged requests (CLI)
 otel-agent config path|show|edit  Manage configuration
@@ -72,18 +83,17 @@ Features:
 - Latency chart over time
 - CSV/JSON export
 
-## Path-Based Routing
+## API Endpoints
 
-Requests are routed by provider type path prefix to the active provider:
+The gateway exposes both OpenAI-compatible and Anthropic-compatible endpoints:
 
-```
-/openai/v1/chat/completions    → active OpenAI provider's base_url
-/anthropic/v1/messages         → active Anthropic provider's base_url
-```
+| Endpoint | Format | Description |
+|---|---|---|
+| `POST /v1/chat/completions` | OpenAI | Chat completions (streaming supported) |
+| `POST /v1/messages` | Anthropic | Messages (streaming supported) |
+| `GET /health` | — | Health check |
 
-```bash
-otel-agent routes  # View active provider assignments
-```
+**Cross-format conversion**: If you send an Anthropic-format request to `/v1/messages` but the target provider uses OpenAI format (or vice versa), the gateway automatically converts the request and response formats.
 
 ## Config File
 
@@ -91,38 +101,32 @@ otel-agent routes  # View active provider assignments
 
 ```yaml
 providers:
-  openai:
-    - name: primary
-      base_url: https://api.openai.com/v1
-      api_key: sk-proj-key1
-      active: true
-    - name: backup
-      base_url: https://api.deepseek.com
-      api_key: sk-backup-key
-      active: false
+  - name: openai
+    base_url: https://api.openai.com/v1
+    api_key: sk-proj-key1
+    api_format: openai
 
-  anthropic:
-    - name: primary
-      base_url: https://api.anthropic.com
-      api_key: sk-ant-key1
-      active: true
+  - name: openrouter
+    base_url: https://openrouter.ai/api/v1
+    api_key: sk-or-key1
+    api_format: openai
+
+  - name: xiaomi
+    base_url: https://api.xiaomi.com/v1
+    api_key: sk-xiaomi-key1
+    api_format: openai
+
+  - name: anthropic
+    base_url: https://api.anthropic.com
+    api_key: sk-ant-key1
+    api_format: anthropic
 ```
 
-Exactly one provider per type must be marked `active: true`. Requests to
-`/openai` are forwarded to the active OpenAI provider; `/anthropic` to
-the active Anthropic provider.
-
-## Proxy Management
-
-```bash
-otel-agent proxy              # Start in background
-otel-agent proxy --foreground # Run in terminal (blocking)
-otel-agent proxy stop         # Stop
-otel-agent proxy restart      # Restart
-otel-agent proxy status       # Check status
-otel-agent proxy logs         # View logs
-otel-agent proxy logs -F      # Stream logs (tail -f)
-```
+Each provider needs:
+- `name`: routing key (used as model name prefix)
+- `base_url`: upstream API base URL
+- `api_key`: authentication key
+- `api_format`: `openai` or `anthropic` (default: `openai`)
 
 ## Client Usage
 
@@ -130,14 +134,45 @@ otel-agent proxy logs -F      # Stream logs (tail -f)
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8080/openai/v1", api_key="dummy")
+client = OpenAI(base_url="http://localhost:8080/v1", api_key="dummy")
+response = client.chat.completions.create(
+    model="openai/gpt-4o",  # or "xiaomi/mimo-v-2.5"
+    messages=[{"role": "user", "content": "Hello!"}],
+)
 ```
 
 ### Anthropic SDK
 
 ```python
 import anthropic
-client = anthropic.Anthropic(base_url="http://localhost:8080/anthropic", api_key="dummy")
+client = anthropic.Anthropic(base_url="http://localhost:8080", api_key="dummy")
+response = client.messages.create(
+    model="anthropic/claude-sonnet-4",  # or "xiaomi/mimo-v-2.5"
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+```
+
+### curl
+
+```bash
+# OpenAI format
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "messages": [{"role": "user", "content": "hi"}],
+    "stream": true
+  }'
+
+# Anthropic format
+curl http://localhost:8080/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "anthropic/claude-sonnet-4",
+    "max_tokens": 100,
+    "messages": [{"role": "user", "content": "hi"}]
+  }'
 ```
 
 ## Testing

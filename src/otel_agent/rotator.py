@@ -1,21 +1,19 @@
+"""Key rotation for provider API keys."""
+
 from __future__ import annotations
 
 from otel_agent.config import Config
 
 
 class KeyRotator:
-    """Round-robin key rotation for provider api_key lists."""
+    """Returns the API key for a given provider name."""
 
     def __init__(self, config: Config) -> None:
         self.config = config
-        self._indexes: dict[str, int] = {}
 
-    def next_by_api_key(self, provider_type: str) -> str | None:
-        """Return the provider api_key for the given type, reloaded from config."""
-        provider = self.config.get_active_provider(provider_type)
+    def get_key(self, provider_name: str) -> str | None:
+        """Return the api_key for the named provider, or None."""
+        provider = self.config.get_provider(provider_name)
         if not provider:
             return None
-        key = provider.api_key
-        if not key:
-            return None
-        return key
+        return provider.api_key or None
