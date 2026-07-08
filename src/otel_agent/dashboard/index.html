@@ -40,6 +40,26 @@ tr:hover { background: #161b22; cursor: pointer; }
 .detail-body { padding: 16px 24px; }
 .detail-section { margin-bottom: 20px; }
 .detail-section h3 { font-size: 13px; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; }
+
+/* Request/Response Section Styling (012-dashboard-request-styling) */
+.detail-section-request {
+  border-left: 3px solid #58a6ff;
+  background: rgba(88, 166, 255, 0.05);
+  padding-left: 12px;
+}
+.detail-section-request h3::before {
+  content: "\1F4E4  ";
+  margin-right: 4px;
+}
+.detail-section-response {
+  border-left: 3px solid #3fb950;
+  background: rgba(63, 185, 80, 0.05);
+  padding-left: 12px;
+}
+.detail-section-response h3::before {
+  content: "\1F4E5  ";
+  margin-right: 4px;
+}
 .detail-section pre { background: #0d1117; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 .detail-section .copy-btn { background: #21262d; border: 1px solid #30363d; color: #8b949e; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; margin-top: 8px; }
 .detail-section .copy-btn:hover { background: #30363d; color: #e1e4e8; }
@@ -256,19 +276,19 @@ async function showDetail(id) {
       <pre>${r.method} ${r.url}\nStatus: ${r.response_status} | Latency: ${r.latency_ms?.toFixed(0)}ms</pre>
       <button class="copy-btn" onclick="copyCurl(${JSON.stringify(JSON.stringify(r)).replace(/"/g, '&quot;')})">Copy as curl</button>
     </div>
-    <div class="detail-section">
+    <div class="detail-section detail-section-request">
       <h3>Request Headers</h3>
       <pre>${formatHeaders(r.request_headers)}</pre>
     </div>
-    <div class="detail-section">
+    <div class="detail-section detail-section-request">
       <h3>Request Body</h3>
       ${formatBody(r.request_body, 'request')}
     </div>
-    <div class="detail-section">
+    <div class="detail-section detail-section-response">
       <h3>Response Headers</h3>
       <pre>${formatHeaders(r.response_headers)}</pre>
     </div>
-    <div class="detail-section">
+    <div class="detail-section detail-section-response">
       <h3>Response Body</h3>
       ${usageBar}${formatBody(r.response_body, 'response')}
     </div>
