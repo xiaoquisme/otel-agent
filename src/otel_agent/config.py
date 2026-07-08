@@ -64,6 +64,7 @@ class Config:
         self.path = path
         self._mtime: float = 0
         self._providers: dict[str, Provider] = {}
+        self._log_request_body: bool = True
         self._reload()
 
     def _reload(self) -> None:
@@ -98,6 +99,7 @@ class Config:
             )
 
         self._providers = providers
+        self._log_request_body = bool(data.get("log_request_body", True))
         self._validate()
 
     def _validate(self) -> None:
@@ -138,3 +140,8 @@ class Config:
                 "api_format": provider.api_format,
             })
         return result
+
+    @property
+    def log_request_body(self) -> bool:
+        self._reload()
+        return self._log_request_body

@@ -59,3 +59,29 @@ def test_log_preserves_full_payload():
         conn.close()
         parsed = json.loads(row[0])
         assert parsed["model"] == "gpt-4"
+
+
+def test_redact_sensitive_headers():
+    from otel_agent.logger import redact_sensitive_headers
+
+    headers = {
+        "content-type": "application/json",
+        "Authorization": "Bearer sk-test",
+        "X-Api-Key": "key-123",
+        "x-request-id": "abc",
+        "Set-Cookie": "session=xyz",
+    }
+    result = redact_sensitive_headers(headers)
+    assert result["content-type"] == "application/json"
+    assert result["Authorization"] == "[REDACTED]"
+    assert result["X-Api-Key"] == "[REDACTED]"
+    assert result["x-request-id"] == "abc"
+    assert result["Set-Cookie"] == "[REDACTED]"
+
+
+def test_redact_preserves_non_sensitive():
+    from otel_agent.logger import redact_sensitive_headers
+
+    headers = {"content-type": "text/plain", "x-custom": "value"}
+    result = redact_sensitive_headers(headers)
+    assert result == headers

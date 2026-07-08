@@ -4,6 +4,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+SENSITIVE_HEADERS = frozenset({"authorization", "x-api-key", "set-cookie"})
+
+
+def redact_sensitive_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Redact sensitive header values, replacing them with ``[REDACTED]``."""
+    return {
+        k: "[REDACTED]" if k.lower() in SENSITIVE_HEADERS else v
+        for k, v in headers.items()
+    }
+
+
 class TelemetryLogger:
     def __init__(self, db_path: Path):
         self.db_path = db_path

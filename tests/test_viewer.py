@@ -46,3 +46,30 @@ def test_format_request():
     assert "POST" in text
     assert "200" in text
     assert "gpt-4" in text
+
+
+def test_format_request_shows_response_headers():
+    row = {
+        "id": 1, "timestamp": "2026-06-26T10:00:00",
+        "method": "POST", "url": "https://api.openai.com/v1/chat/completions",
+        "upstream": "https://api.openai.com",
+        "request_body": '{"model":"gpt-4"}',
+        "response_status": 200, "latency_ms": 100.0,
+        "response_headers": '{"content-type":"application/json","x-request-id":"abc-123"}',
+    }
+    text = format_request(row)
+    assert "headers:" in text
+    assert "x-request-id" in text
+    assert "abc-123" in text
+
+
+def test_format_request_handles_dict_response_headers():
+    row = {
+        "id": 2, "timestamp": "2026-06-26T10:00:01",
+        "method": "POST", "url": "https://api.openai.com/v1/chat/completions",
+        "upstream": "https://api.openai.com",
+        "request_body": "", "response_status": 200, "latency_ms": 50.0,
+        "response_headers": {"content-type": "application/json"},
+    }
+    text = format_request(row)
+    assert "headers:" in text

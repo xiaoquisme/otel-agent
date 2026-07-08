@@ -21,9 +21,13 @@ def query_requests(db_path: Path, upstream_filter: str = "", limit: int = 50) ->
 
 
 def format_request(row: dict) -> str:
+    resp_hdrs = row.get("response_headers", "")
+    if isinstance(resp_hdrs, dict):
+        resp_hdrs = str(resp_hdrs)
     return (
         f"[{row['id']}] {row['timestamp']} | {row['method']} {row['url']}\n"
         f"  upstream: {row.get('upstream', 'N/A')}\n"
         f"  status: {row.get('response_status', '?')} | latency: {row.get('latency_ms', 0):.0f}ms\n"
         f"  request: {row.get('request_body', '')[:200]}\n"
+        f"  headers: {resp_hdrs[:200]}"
     )

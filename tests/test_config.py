@@ -165,3 +165,53 @@ providers:
 """)
     cfg = Config(config_file)
     assert cfg.get_provider("nonexistent") is None
+
+
+def test_log_request_body_default_true(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  - name: openai
+    base_url: https://api.openai.com/v1
+    api_key: sk-a
+    api_format: openai
+""")
+    cfg = Config(config_file)
+    assert cfg.log_request_body is True
+
+
+def test_log_request_body_explicit_false(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  - name: openai
+    base_url: https://api.openai.com/v1
+    api_key: sk-a
+    api_format: openai
+log_request_body: false
+""")
+    cfg = Config(config_file)
+    assert cfg.log_request_body is False
+
+
+def test_log_request_body_hot_reload(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  - name: openai
+    base_url: https://api.openai.com/v1
+    api_key: sk-a
+    api_format: openai
+""")
+    cfg = Config(config_file)
+    assert cfg.log_request_body is True
+
+    config_file.write_text("""
+providers:
+  - name: openai
+    base_url: https://api.openai.com/v1
+    api_key: sk-a
+    api_format: openai
+log_request_body: false
+""")
+    assert cfg.log_request_body is False

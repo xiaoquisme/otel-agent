@@ -21,7 +21,7 @@ from otel_agent.converter import (
     openai_to_anthropic_request,
     openai_to_anthropic_response,
 )
-from otel_agent.logger import TelemetryLogger
+from otel_agent.logger import TelemetryLogger, redact_sensitive_headers
 from otel_agent.models import ModelCache, aggregate_models, fetch_provider_models
 from otel_agent.router import parse_model, resolve_provider
 
@@ -82,18 +82,22 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         headers["Content-Type"] = "application/json"
 
         start_time = time.monotonic()
+        original_body = json.dumps(body)
+        log_body = config.log_request_body
 
         if is_stream:
             return await _handle_streaming(
                 client, url, headers, upstream_body,
                 provider, telemetry, request, start_time,
                 source_format="openai", target_format=provider.api_format,
+                request_body=original_body, log_body=log_body,
             )
 
         return await _handle_non_streaming(
             client, url, headers, upstream_body,
             provider, telemetry, request, start_time,
             source_format="openai", target_format=provider.api_format,
+            request_body=original_body, log_body=log_body,
         )
 
     # ------------------------------------------------------------------
@@ -131,18 +135,22 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         headers["Content-Type"] = "application/json"
 
         start_time = time.monotonic()
+        original_body = json.dumps(body)
+        log_body = config.log_request_body
 
         if is_stream:
             return await _handle_streaming(
                 client, url, headers, upstream_body,
                 provider, telemetry, request, start_time,
                 source_format="anthropic", target_format=provider.api_format,
+                request_body=original_body, log_body=log_body,
             )
 
         return await _handle_non_streaming(
             client, url, headers, upstream_body,
             provider, telemetry, request, start_time,
             source_format="anthropic", target_format=provider.api_format,
+            request_body=original_body, log_body=log_body,
         )
 
     # ------------------------------------------------------------------
@@ -195,20 +203,28 @@ async def _handle_non_streaming(
     start_time: float,
     source_format: str,
     target_format: str,
+    request_body: str = "",
+    log_body: bool = True,
 ) -> JSONResponse:
     """Handle a non-streaming request to an upstream provider."""
     try:
         resp = await client.post(url, headers=headers, json=body)
     except httpx.ConnectError as e:
-        return JSONResponse(
-            {"error": {"message": f"Connection failed to provider '{provider.name}': {e}", "type": "server_error"}},
-            status_code=502,
+        latency_ms = (time.monotonic() - start_time) * 1000
+        error_body = {"error": {"message": f"Connection failed to provider '{provider.name}': {e}", "type": "server_error"}}
+        _log_telemetry(
+            telemetry, request, 502, error_body, latency_ms, provider,
+            request_body=request_body, log_body=log_body,
         )
+        return JSONResponse(error_body, status_code=502)
     except httpx.TimeoutException:
-        return JSONResponse(
-            {"error": {"message": f"Timeout connecting to provider '{provider.name}'", "type": "server_error"}},
-            status_code=504,
+        latency_ms = (time.monotonic() - start_time) * 1000
+        error_body = {"error": {"message": f"Timeout connecting to provider '{provider.name}'", "type": "server_error"}}
+        _log_telemetry(
+            telemetry, request, 504, error_body, latency_ms, provider,
+            request_body=request_body, log_body=log_body,
         )
+        return JSONResponse(error_body, status_code=504)
 
     latency_ms = (time.monotonic() - start_time) * 1000
 
@@ -225,7 +241,10 @@ async def _handle_non_streaming(
             resp_body = openai_to_anthropic_response(resp_body)
 
     # Log telemetry
-    _log_telemetry(telemetry, request, resp.status_code, resp_body, latency_ms, provider)
+    _log_telemetry(
+        telemetry, request, resp.status_code, resp_body, latency_ms, provider,
+        request_body=request_body, resp_headers=dict(resp.headers), log_body=log_body,
+    )
 
     return JSONResponse(resp_body, status_code=resp.status_code)
 
@@ -241,13 +260,18 @@ async def _handle_streaming(
     start_time: float,
     source_format: str,
     target_format: str,
+    request_body: str = "",
+    log_body: bool = True,
 ) -> StreamingResponse:
     """Handle a streaming request to an upstream provider."""
 
     async def stream_generator() -> AsyncIterator[bytes]:
         collected_text = ""
+        resp_headers: dict[str, str] = {}
+        stream_status = 200
         try:
             async with client.stream("POST", url, headers=headers, json=body) as resp:
+                resp_headers = dict(resp.headers)
                 async for line in resp.aiter_lines():
                     if not line:
                         yield b"\n"
@@ -286,14 +310,19 @@ async def _handle_streaming(
                         yield f"{line}\n".encode()
 
         except httpx.ConnectError as e:
+            stream_status = 502
             error_msg = json.dumps({"error": {"message": f"Connection failed: {e}", "type": "server_error"}})
             yield f"data: {error_msg}\n\n".encode()
         except httpx.TimeoutException:
+            stream_status = 504
             error_msg = json.dumps({"error": {"message": "Timeout", "type": "server_error"}})
             yield f"data: {error_msg}\n\n".encode()
 
         latency_ms = (time.monotonic() - start_time) * 1000
-        _log_telemetry(telemetry, request, 200, {"streamed": True, "preview": collected_text[:500]}, latency_ms, provider)
+        _log_telemetry(
+            telemetry, request, stream_status, {"streamed": True, "preview": collected_text[:500]}, latency_ms, provider,
+            request_body=request_body, resp_headers=resp_headers, log_body=log_body,
+        )
 
     media_type = "text/event-stream"
     return StreamingResponse(stream_generator(), media_type=media_type)
@@ -306,17 +335,22 @@ def _log_telemetry(
     resp_body: dict | str,
     latency_ms: float,
     provider: Provider,
+    request_body: str = "",
+    resp_headers: dict[str, str] | None = None,
+    log_body: bool = True,
 ) -> None:
     """Log request/response to telemetry database."""
     try:
         body_str = json.dumps(resp_body) if isinstance(resp_body, dict) else str(resp_body)
+        stored_body = request_body[:100_000] if log_body else ""
+        stored_headers = redact_sensitive_headers(resp_headers) if resp_headers else {}
         telemetry.log_request(
             method=request.method,
             url=str(request.url),
             request_headers=dict(request.headers),
-            request_body="",
+            request_body=stored_body,
             response_status=status_code,
-            response_headers={},
+            response_headers=stored_headers,
             response_body=body_str[:100_000],
             latency_ms=latency_ms,
             upstream=provider.base_url,
