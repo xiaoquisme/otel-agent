@@ -77,8 +77,8 @@ def handle_proxy_start(args) -> None:
         sys.executable, "-m", "otel_agent",
         "proxy", "--foreground",
         "-p", str(args.port),
-        "-d", args.db,
-        "-c", args.config,
+        "-d", str(Path(args.db).expanduser()),
+        "-c", str(Path(args.config).expanduser()),
     ]
 
     proc = subprocess.Popen(
@@ -116,7 +116,7 @@ def _run_server(args) -> None:
     from otel_agent.server import create_app
 
     config_path = Path(args.config).expanduser()
-    logger = TelemetryLogger(Path(args.db))
+    logger = TelemetryLogger(Path(args.db).expanduser())
     config = Config(config_path)
     app = create_app(config, logger)
 

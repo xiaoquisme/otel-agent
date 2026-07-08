@@ -9,7 +9,7 @@ def handle_dashboard(args) -> None:
     """Start the web dashboard server."""
     from otel_agent.dashboard.server import DashboardServer
 
-    db_path = Path(args.db)
+    db_path = Path(args.db).expanduser()
     port = args.port
 
     if not db_path.exists():
