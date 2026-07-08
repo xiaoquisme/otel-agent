@@ -22,6 +22,7 @@ from otel_agent.converter import (
     openai_to_anthropic_response,
 )
 from otel_agent.logger import TelemetryLogger
+from otel_agent.models import ModelCache, aggregate_models, fetch_provider_models
 from otel_agent.router import parse_model, resolve_provider
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     """Create the FastAPI application with all routes."""
     app = FastAPI(title="otel-agent", version="0.1.0")
     client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0))
+    model_cache = ModelCache(config)
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
@@ -142,6 +144,35 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             provider, telemetry, request, start_time,
             source_format="anthropic", target_format=provider.api_format,
         )
+
+    # ------------------------------------------------------------------
+    # Models endpoint
+    # ------------------------------------------------------------------
+    @app.get("/v1/models", response_model=None)
+    async def list_models(request: Request, provider: str | None = None):
+        """List available models from all providers (OpenAI-compatible)."""
+        providers = config.providers
+
+        if provider is not None:
+            if provider not in providers:
+                available = list(providers.keys())
+                return JSONResponse(
+                    {"error": {"message": f"Unknown provider '{provider}'. Configured: {', '.join(available) or 'none'}.", "type": "invalid_request_error"}},
+                    status_code=400,
+                )
+            providers = {provider: providers[provider]}
+
+        raw_models: dict[str, list] = {}
+        for name, prov in providers.items():
+            cached = model_cache.get(name)
+            if cached is not None:
+                raw_models[name] = cached
+            else:
+                fetched = await fetch_provider_models(client, prov)
+                model_cache.put(name, fetched)
+                raw_models[name] = fetched
+
+        return JSONResponse(aggregate_models(raw_models))
 
     # ------------------------------------------------------------------
     # Health check

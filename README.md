@@ -91,6 +91,7 @@ The gateway exposes both OpenAI-compatible and Anthropic-compatible endpoints:
 |---|---|---|
 | `POST /v1/chat/completions` | OpenAI | Chat completions (streaming supported) |
 | `POST /v1/messages` | Anthropic | Messages (streaming supported) |
+| `GET /v1/models` | OpenAI | List all available models |
 | `GET /health` | — | Health check |
 
 **Cross-format conversion**: If you send an Anthropic-format request to `/v1/messages` but the target provider uses OpenAI format (or vice versa), the gateway automatically converts the request and response formats.
@@ -156,6 +157,12 @@ response = client.messages.create(
 ### curl
 
 ```bash
+# List available models
+curl http://localhost:8080/v1/models
+
+# Filter by provider
+curl "http://localhost:8080/v1/models?provider=openai"
+
 # OpenAI format
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \

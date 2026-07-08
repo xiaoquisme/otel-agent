@@ -130,6 +130,7 @@ def _run_server(args) -> None:
     print(f"\nEndpoints:")
     print(f"  POST /v1/chat/completions  (OpenAI format)")
     print(f"  POST /v1/messages          (Anthropic format)")
+    print(f"  GET  /v1/models            (list available models)")
     print(f"  GET  /health")
     print(f"\nCtrl+C to stop\n")
 
