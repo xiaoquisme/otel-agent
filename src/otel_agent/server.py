@@ -46,8 +46,8 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     # ------------------------------------------------------------------
     # OpenAI-compatible endpoint
     # ------------------------------------------------------------------
-    @app.post("/v1/chat/completions")
-    async def chat_completions(request: Request) -> StreamingResponse | JSONResponse:
+    @app.post("/v1/chat/completions", response_model=None)
+    async def chat_completions(request: Request):
         """OpenAI-compatible chat completions endpoint."""
         body = await request.json()
         model = body.get("model", "")
@@ -97,8 +97,8 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     # ------------------------------------------------------------------
     # Anthropic-compatible endpoint
     # ------------------------------------------------------------------
-    @app.post("/v1/messages")
-    async def messages(request: Request) -> StreamingResponse | JSONResponse:
+    @app.post("/v1/messages", response_model=None)
+    async def messages(request: Request):
         """Anthropic-compatible messages endpoint."""
         body = await request.json()
         model = body.get("model", "")
