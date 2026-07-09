@@ -70,7 +70,7 @@
 ### Implementation for User Story 2
 
 - [x] T011 [P] [US2] Modify `src/otel_agent/dashboard/api.py` — replace `import sqlite3` with `from otel_agent.db_compat import get_connection, rows_to_dicts`, update `DashboardAPI.__init__()` to use `get_connection()`, remove `PRAGMA journal_mode=WAL`, remove `conn.row_factory = sqlite3.Row`
-- [x] T012 [US2] Update `_get_conn()` in `src/otel_agent/dashboard/api.py` — use `get_connection(db_path, read_only=True)` for dashboard reads
+- [ ] T012 [US2] ⚠️ Reopened (BUG-001) Update `_get_conn()` in `src/otel_agent/dashboard/api.py` — use `get_connection(db_path, read_only=True)` for dashboard reads. **BLOCKED**: DuckDB does not support multi-process concurrent access. `read_only=True` does not bypass the exclusive file lock. Requires architectural fix (see T021).
 - [x] T013 [US2] Update all query methods in `src/otel_agent/dashboard/api.py` — replace `dict(r)` with `rows_to_dicts(conn.description, [r])` pattern for converting DuckDB tuples to dicts, update `CountCache.get()` to work with DuckDB cursor
 - [x] T014 [US2] Update `tests/test_dashboard_api.py` — change sqlite3-specific setup to DuckDB, verify all query methods return correct results
 
@@ -104,7 +104,17 @@
 
 ---
 
+## Phase 7: Concurrency Fix (BUG-001)
+
+**Purpose**: Solve multi-process concurrent access — DuckDB exclusive file lock prevents proxy (writer) + dashboard (reader) from sharing a `.duckdb` file.
+
+- [ ] T021 [US2] Design and implement architectural fix for concurrent access: route dashboard reads through the proxy process via internal HTTP API (proxy exposes `/internal/dashboard/requests` etc.), dashboard server calls proxy's internal API instead of opening its own DuckDB connection. Update `src/otel_agent/dashboard/server.py` to proxy API calls to the running proxy instance.
+- [ ] T022 [US2] Update `src/otel_agent/dashboard/api.py` — modify `DashboardAPI` to use HTTP calls to the proxy's internal API when proxy is running, fall back to direct DuckDB connection for offline/CLI use. Handle proxy-not-running gracefully.
+- [ ] T023 [US2] Add concurrency integration test in `tests/test_integration.py` — start proxy, start dashboard, send requests, verify dashboard receives them via SSE without lock errors. Verify no `IOException` on concurrent access.
+
 ## Dependencies & Execution Order
+
+**Bugfix**: 2026-07-09 — BUG-001 Updated from bugfix patch. T012 reopened; new tasks T021-T023 added.
 
 ### Phase Dependencies
 

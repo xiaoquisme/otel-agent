@@ -58,6 +58,7 @@ As a developer using the `otel-agent view` command, I want the CLI viewer to rea
 ---
 
 ### Edge Cases
+- **Concurrent process access**: DuckDB uses exclusive file locks — the proxy and dashboard cannot both open the same `.duckdb` file simultaneously. Architectural solution required (see FR-010 note).
 
 - What happens if both a `.db` (SQLite) and `.duckdb` file exist in the same directory? The system should use DuckDB and not attempt re-migration.
 - What happens if the DuckDB file is corrupted? The system should report a clear error and not crash the proxy.
@@ -77,7 +78,7 @@ As a developer using the `otel-agent view` command, I want the CLI viewer to rea
 - **FR-007**: System MUST preserve the `--db` CLI flag behavior, accepting both `.db` and `.duckdb` file paths.
 - **FR-008**: System MUST fall back to SQLite if DuckDB is unavailable, with a visible deprecation warning.
 - **FR-009**: System MUST NOT increase proxy logging latency by more than 2ms per request compared to SQLite baseline.
-- **FR-010**: System MUST handle concurrent reads (dashboard) and writes (proxy logging) without deadlocks or data corruption.
+- **FR-010**: System MUST handle concurrent reads (dashboard) and writes (proxy logging) without deadlocks or data corruption. ~~Note: DuckDB does not support multi-process concurrent access to a single file. This requirement must be solved architecturally (e.g., routing dashboard reads through the proxy process) rather than relying on the database engine's concurrency model.~~ (BUG-001)
 
 ### Key Entities
 
@@ -98,9 +99,11 @@ As a developer using the `otel-agent view` command, I want the CLI viewer to rea
 
 ## Assumptions
 
+**Bugfix**: 2026-07-09 — BUG-001 Updated FR-010, corrected concurrent access assumption, added edge case.
+
 - DuckDB Python package (`duckdb`) is available via pip and installs native binaries for macOS/Linux/Windows.
 - DuckDB supports the same SQL syntax used by the current queries (SELECT, INSERT, WHERE, LIKE, ORDER BY, LIMIT, COUNT, MAX).
-- DuckDB supports WAL-like concurrent read/write access for the proxy+dashboard use case.
+- ~~DuckDB supports WAL-like concurrent read/write access for the proxy+dashboard use case.~~ **CORRECTED**: DuckDB does NOT support multi-process concurrent access. Only one process can hold a connection to a `.duckdb` file at a time (exclusive file lock). In-process (multi-threaded) MVCC works, but multi-process access requires architectural solutions. (BUG-001)
 - The default file extension changes from `.db` to `.duckdb`, but the `--db` flag accepts either.
 - Existing users with `.db` files will have them migrated automatically on first run.
 - The `sqlite3` standard library module will be replaced by `duckdb` in all source files.

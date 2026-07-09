@@ -63,9 +63,11 @@
 | Row as dict | `conn.row_factory = sqlite3.Row` | Manual: `dict(zip([d[0] for d in cursor.description], row))` |
 | Parameter style | `?` | `?` (also supports `$1, :name`) |
 | WAL mode | `PRAGMA journal_mode=WAL` | Automatic (MVCC) |
-| Concurrent reads | WAL mode | Automatic |
+| Concurrent reads | WAL mode | In-process only (MVCC); multi-process NOT supported (exclusive file lock) (BUG-001) |
 | Autoincrement | `INTEGER PRIMARY KEY AUTOINCREMENT` | `INTEGER PRIMARY KEY DEFAULT nextval('seq')` or `INTEGER` (DuckDB auto-increments INTEGER PK) |
 
 ## Summary
 
 All NEEDS CLARIFICATION items resolved. The migration is straightforward due to DuckDB's sqlite-like API. The main implementation effort is in the row factory helper and migration module.
+
+**Bugfix**: 2026-07-09 — BUG-001 Corrected "Concurrent reads: Automatic" to note multi-process is NOT supported.

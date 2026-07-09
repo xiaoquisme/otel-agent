@@ -1,10 +1,19 @@
-"""Dashboard JSON API — reads from DuckDB telemetry database."""
+"""Dashboard JSON API — reads from DuckDB telemetry database.
+
+When the proxy is running, queries are routed through the proxy's internal
+API to avoid DuckDB multi-process lock conflicts (BUG-001). Falls back to
+direct DuckDB connection when the proxy is not running (offline/CLI use).
+"""
 
 from __future__ import annotations
 
 import json
 import time
+import urllib.request
+import urllib.parse
+import urllib.error
 from pathlib import Path
+from typing import Any
 
 from otel_agent.db_compat import get_connection, rows_to_dicts
 
@@ -31,15 +40,37 @@ class CountCache:
 
 
 class DashboardAPI:
-    """Query the requests table for the dashboard."""
+    """Query the requests table for the dashboard.
 
-    def __init__(self, db_path: Path):
+    Supports two modes:
+    - Proxy mode: routes queries through the proxy's internal HTTP API
+      (avoids DuckDB multi-process lock conflict).
+    - Direct mode: opens a read-only DuckDB connection directly
+      (used when proxy is not running, e.g. offline CLI use).
+    """
+
+    def __init__(self, db_path: Path, proxy_port: int | None = None):
         self.db_path = db_path
         self._conn = None
         self._count_cache = CountCache(ttl=5.0)
+        self._proxy_port = proxy_port
+
+    def _proxy_url(self) -> str | None:
+        """Return the proxy base URL if the proxy is reachable, else None."""
+        if self._proxy_port is None:
+            return None
+        url = f"http://127.0.0.1:{self._proxy_port}"
+        try:
+            req = urllib.request.Request(f"{url}/health", method="GET")
+            with urllib.request.urlopen(req, timeout=2) as resp:
+                if resp.status == 200:
+                    return url
+        except (urllib.error.URLError, OSError, TimeoutError):
+            pass
+        return None
 
     def _get_conn(self):
-        """Get or create a persistent connection."""
+        """Get or create a persistent direct DuckDB connection."""
         if self._conn is None:
             self._conn = get_connection(self.db_path, read_only=True)
         return self._conn
@@ -47,7 +78,6 @@ class DashboardAPI:
     def _build_where(self, search: str = "", method: str = "", status: int = 0) -> tuple[str, list]:
         conditions = []
         params: list = []
-        # Apply indexed filters first for query optimization
         if method:
             conditions.append("method = ?")
             params.append(method)
@@ -60,21 +90,44 @@ class DashboardAPI:
         where = " AND ".join(conditions) if conditions else "1=1"
         return where, params
 
+    def _http_get(self, path: str, params: dict | None = None) -> Any:
+        """Make a GET request to the proxy's internal API. Returns parsed JSON or None."""
+        base = self._proxy_url()
+        if base is None:
+            return None
+        url = f"{base}{path}"
+        if params:
+            qs = urllib.parse.urlencode({k: v for k, v in params.items() if v})
+            url = f"{url}?{qs}"
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return json.loads(resp.read().decode())
+        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+            return None
+
     def get_requests(self, search: str = "", method: str = "", status: int = 0,
                      cursor: int = 0, limit: int = 50) -> dict:
         """Get paginated requests using cursor-based pagination."""
         if not self.db_path.exists():
             return {"data": [], "total": 0, "cursor": cursor, "next_cursor": 0, "has_more": False}
 
+        # Try proxy first (BUG-001 fix)
+        proxy_result = self._http_get("/internal/dashboard/requests", {
+            "search": search, "method": method, "status": status,
+            "cursor": cursor, "limit": limit,
+        })
+        if proxy_result is not None:
+            return proxy_result
+
+        # Fallback: direct DuckDB connection
         conn = self._get_conn()
         where, params = self._build_where(search, method, status)
 
-        # Cached COUNT
         count_query = f"SELECT COUNT(*) FROM requests WHERE {where}"
         count_key = f"{where}|{params}"
         total = self._count_cache.get(count_key, conn, count_query, params)
 
-        # Cursor-based pagination
         if cursor > 0:
             cursor_where = f"({where}) AND id < ?"
             cursor_params = params + [cursor]
@@ -107,6 +160,12 @@ class DashboardAPI:
         if not self.db_path.exists():
             return None
 
+        # Try proxy first (BUG-001 fix)
+        proxy_result = self._http_get(f"/internal/dashboard/requests/{request_id}")
+        if proxy_result is not None:
+            return proxy_result
+
+        # Fallback: direct DuckDB connection
         conn = self._get_conn()
         result = conn.execute(
             "SELECT * FROM requests WHERE id = ?", (request_id,)
@@ -129,6 +188,12 @@ class DashboardAPI:
         if not self.db_path.exists():
             return []
 
+        # Try proxy first (BUG-001 fix)
+        proxy_result = self._http_get(f"/internal/dashboard/requests-since/{last_id}")
+        if proxy_result is not None:
+            return proxy_result
+
+        # Fallback: direct DuckDB connection
         conn = self._get_conn()
         result = conn.execute(
             "SELECT id, timestamp, method, url, upstream, response_status, latency_ms "
@@ -144,6 +209,12 @@ class DashboardAPI:
         if not self.db_path.exists():
             return 0
 
+        # Try proxy first (BUG-001 fix)
+        proxy_result = self._http_get("/internal/dashboard/max-id")
+        if proxy_result is not None:
+            return proxy_result
+
+        # Fallback: direct DuckDB connection
         conn = self._get_conn()
         row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM requests").fetchone()
         return row[0]
@@ -153,6 +224,14 @@ class DashboardAPI:
         if not self.db_path.exists():
             return []
 
+        # Try proxy first (BUG-001 fix)
+        proxy_result = self._http_get("/internal/dashboard/export", {
+            "search": search, "method": method, "status": status,
+        })
+        if proxy_result is not None:
+            return proxy_result
+
+        # Fallback: direct DuckDB connection
         where, params = self._build_where(search, method, status)
         conn = self._get_conn()
         result = conn.execute(

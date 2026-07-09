@@ -37,9 +37,11 @@ Migrate telemetry storage from SQLite to DuckDB across 3 source files (logger.py
 | I. Code Quality | ✅ PASS | DuckDB API is clean and Pythonic; migration module has single responsibility; all public functions will have docstrings |
 | II. Testing Standards | ✅ PASS | Existing pytest suite covers logger/dashboard/viewer; new migration tests will be added; no network dependency |
 | III. User Experience Consistency | ✅ PASS | CLI flags unchanged; dashboard behavior identical; migration is transparent to users |
-| IV. Performance Requirements | ✅ PASS | DuckDB is faster than SQLite for analytical queries; WAL-mode equivalent via DuckDB's MVCC; no unbounded buffers |
+| IV. Performance Requirements | ⚠️ BLOCKED | DuckDB is faster than SQLite for analytical queries; ~~WAL-mode equivalent via DuckDB's MVCC~~ **BUG-001**: DuckDB MVCC is in-process only — multi-process concurrent access (proxy writes + dashboard reads) not supported by DuckDB's file locking model. Requires architectural fix before this gate passes. No unbounded buffers. |
 
-**Gate Result**: PASS — no violations. Proceeding to Phase 0.
+**Gate Result**: CONDITIONAL PASS — violates Principle IV (concurrency). Proceeding with known BUG-001 constraint. Fix required before production use.
+
+**Bugfix**: 2026-07-09 — BUG-001 Updated constitution check (Principle IV blocked), updated gate result to CONDITIONAL PASS.
 
 ## Project Structure
 

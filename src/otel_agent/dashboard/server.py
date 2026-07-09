@@ -168,10 +168,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
 class DashboardServer:
     """Lightweight HTTP server for the dashboard."""
 
-    def __init__(self, db_path: Path, port: int = 9090):
+    def __init__(self, db_path: Path, port: int = 9090, proxy_port: int | None = None):
         self.db_path = db_path
         self.port = port
-        self.api = DashboardAPI(db_path)
+        self.api = DashboardAPI(db_path, proxy_port=proxy_port)
         self.html_content = self._load_html()
 
     def _load_html(self) -> str:
