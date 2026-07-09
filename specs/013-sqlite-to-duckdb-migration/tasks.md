@@ -108,12 +108,14 @@
 
 **Purpose**: Solve multi-process concurrent access — DuckDB exclusive file lock prevents proxy (writer) + dashboard (reader) from sharing a `.duckdb` file.
 
-- [ ] T021 [US2] Design and implement architectural fix for concurrent access: route dashboard reads through the proxy process via internal HTTP API (proxy exposes `/internal/dashboard/requests` etc.), dashboard server calls proxy's internal API instead of opening its own DuckDB connection. Update `src/otel_agent/dashboard/server.py` to proxy API calls to the running proxy instance.
-- [ ] T022 [US2] Update `src/otel_agent/dashboard/api.py` — modify `DashboardAPI` to use HTTP calls to the proxy's internal API when proxy is running, fall back to direct DuckDB connection for offline/CLI use. Handle proxy-not-running gracefully.
-- [ ] T023 [US2] Add concurrency integration test in `tests/test_integration.py` — start proxy, start dashboard, send requests, verify dashboard receives them via SSE without lock errors. Verify no `IOException` on concurrent access.
+- [x] T021 [US2] Design and implement architectural fix for concurrent access: route dashboard reads through the proxy process via internal HTTP API (proxy exposes `/internal/dashboard/requests` etc.), dashboard server calls proxy's internal API instead of opening its own DuckDB connection. Update `src/otel_agent/dashboard/server.py` to proxy API calls to the running proxy instance.
+- [x] T022 [US2] ✅ Resolved (BUG-002) Update `src/otel_agent/dashboard/api.py` — modify `DashboardAPI` to use HTTP calls to the proxy's internal API when proxy is running, fall back to direct DuckDB connection for offline/CLI use. Handle proxy-not-running gracefully.
+- [x] T023 [US2] Add concurrency integration test in `tests/test_integration.py` — start proxy, start dashboard, send requests, verify dashboard receives them via SSE without lock errors. Verify no `IOException` on concurrent access.
+- [x] T024 [US2] Fix proxy URL caching in `src/otel_agent/dashboard/api.py` — cache `_proxy_url()` result with TTL (30s), never fall back to direct DuckDB if proxy was previously reachable, only retry direct access if proxy unreachable for >60s. Add test for health check timeout scenario.
 
 ## Dependencies & Execution Order
 
+**Bugfix**: 2026-07-09 — BUG-002 T022 reopened; T024 added for proxy URL caching fix.
 **Bugfix**: 2026-07-09 — BUG-001 Updated from bugfix patch. T012 reopened; new tasks T021-T023 added.
 
 ### Phase Dependencies

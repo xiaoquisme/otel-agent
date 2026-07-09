@@ -258,3 +258,95 @@ def test_empty_database_no_crash(tmp_path):
     assert api.get_max_id() == 0
     assert api.get_all_filtered() == []
     api.close()
+
+
+# ------------------------------------------------------------------
+# BUG-002: Proxy URL caching — health check timeout scenario
+# ------------------------------------------------------------------
+
+def test_proxy_url_caching_prevents_fallback(tmp_path):
+    """When proxy was reachable then goes down, DashboardAPI keeps using cached URL.
+
+    BUG-002: A slow health check should NOT cause fallback to direct DuckDB.
+    The cached proxy URL should be reused for up to 60s after the proxy
+    becomes unreachable.
+    """
+    import time as _time
+    from unittest.mock import patch, MagicMock
+
+    db_path = tmp_path / "test.duckdb"
+    _create_test_db(db_path, n=3)
+
+    api = DashboardAPI(db_path, proxy_port=19999)
+
+    # Simulate: proxy was reachable, cache is warm
+    api._proxy_url_cache = "http://127.0.0.1:19999"
+    api._proxy_url_cache_time = _time.monotonic()
+    api._proxy_last_fail_time = 0.0
+
+    # Now simulate health check failure (proxy busy)
+    with patch("otel_agent.dashboard.api.urllib.request.urlopen", side_effect=TimeoutError("busy")):
+        # Should still return cached URL (within 60s window)
+        result = api._proxy_url()
+        assert result == "http://127.0.0.1:19999", "Should return cached URL even when health check fails"
+
+    api.close()
+
+
+def test_proxy_url_cache_expires_after_60s(tmp_path):
+    """After 60s of proxy being unreachable, fall back to direct DuckDB.
+
+    BUG-002: If the proxy has been unreachable for > 60s, the cache should
+    expire and allow fallback to direct DuckDB connection.
+    """
+    import time as _time
+    from unittest.mock import patch
+
+    db_path = tmp_path / "test.duckdb"
+    _create_test_db(db_path, n=3)
+
+    api = DashboardAPI(db_path, proxy_port=19999)
+
+    # Simulate: proxy was reachable, then failed 61 seconds ago
+    api._proxy_url_cache = "http://127.0.0.1:19999"
+    api._proxy_url_cache_time = _time.monotonic() - 100
+    api._proxy_last_fail_time = _time.monotonic() - 61
+
+    # Health check still fails
+    with patch("otel_agent.dashboard.api.urllib.request.urlopen", side_effect=TimeoutError("busy")):
+        result = api._proxy_url()
+        assert result is None, "Should return None after 60s of proxy being unreachable"
+
+    api.close()
+
+
+def test_proxy_url_fresh_check_resets_cache(tmp_path):
+    """Successful health check resets the failure timer.
+
+    BUG-002: If the proxy comes back after a brief outage, the cache should
+    be refreshed and the failure timer reset.
+    """
+    import time as _time
+    from unittest.mock import patch, MagicMock
+
+    db_path = tmp_path / "test.duckdb"
+    _create_test_db(db_path, n=3)
+
+    api = DashboardAPI(db_path, proxy_port=19999)
+
+    # Simulate: proxy was reachable, then failed for 30s
+    api._proxy_url_cache = "http://127.0.0.1:19999"
+    api._proxy_url_cache_time = _time.monotonic() - 100
+    api._proxy_last_fail_time = _time.monotonic() - 30
+
+    # Health check succeeds (proxy came back)
+    mock_resp = MagicMock()
+    mock_resp.status = 200
+    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+    mock_resp.__exit__ = MagicMock(return_value=False)
+    with patch("otel_agent.dashboard.api.urllib.request.urlopen", return_value=mock_resp):
+        result = api._proxy_url()
+        assert result == "http://127.0.0.1:19999"
+        assert api._proxy_last_fail_time == 0.0, "Failure timer should be reset"
+
+    api.close()

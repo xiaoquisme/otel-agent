@@ -54,19 +54,54 @@ class DashboardAPI:
         self._conn = None
         self._count_cache = CountCache(ttl=5.0)
         self._proxy_port = proxy_port
+        # BUG-002: Cache proxy URL to avoid health-check race condition
+        self._proxy_url_cache: str | None = None
+        self._proxy_url_cache_time: float = 0.0
+        self._proxy_last_fail_time: float = 0.0
 
     def _proxy_url(self) -> str | None:
-        """Return the proxy base URL if the proxy is reachable, else None."""
+        """Return the proxy base URL if the proxy is reachable, else None.
+
+        BUG-002 fix: Caches the proxy URL with a 30s TTL. If the proxy was
+        previously reachable, keeps using it even if a single health check
+        fails (avoids race condition where busy proxy causes timeout → fallback
+        to direct DuckDB → lock conflict). Only falls back to direct DuckDB
+        if the proxy has been unreachable for > 60s.
+        """
         if self._proxy_port is None:
             return None
+
+        now = time.monotonic()
         url = f"http://127.0.0.1:{self._proxy_port}"
+
+        # Return cached result if within TTL (30s)
+        if self._proxy_url_cache is not None and now - self._proxy_url_cache_time < 30:
+            return self._proxy_url_cache
+
+        # Do a live health check
         try:
             req = urllib.request.Request(f"{url}/health", method="GET")
             with urllib.request.urlopen(req, timeout=2) as resp:
                 if resp.status == 200:
+                    self._proxy_url_cache = url
+                    self._proxy_url_cache_time = now
+                    self._proxy_last_fail_time = 0.0
                     return url
         except (urllib.error.URLError, OSError, TimeoutError):
             pass
+
+        # Health check failed. If proxy was previously reachable, keep using it
+        # for up to 60s to avoid lock conflict from fallback to direct DuckDB.
+        if self._proxy_url_cache is not None:
+            if self._proxy_last_fail_time == 0.0:
+                self._proxy_last_fail_time = now
+            if now - self._proxy_last_fail_time < 60:
+                return self._proxy_url_cache
+            # Been unreachable for > 60s — clear cache, fall back to direct
+            self._proxy_url_cache = None
+            self._proxy_url_cache_time = 0.0
+            self._proxy_last_fail_time = 0.0
+
         return None
 
     def _get_conn(self):

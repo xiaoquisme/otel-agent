@@ -79,6 +79,7 @@ As a developer using the `otel-agent view` command, I want the CLI viewer to rea
 - **FR-008**: System MUST fall back to SQLite if DuckDB is unavailable, with a visible deprecation warning.
 - **FR-009**: System MUST NOT increase proxy logging latency by more than 2ms per request compared to SQLite baseline.
 - **FR-010**: System MUST handle concurrent reads (dashboard) and writes (proxy logging) without deadlocks or data corruption. ~~Note: DuckDB does not support multi-process concurrent access to a single file. This requirement must be solved architecturally (e.g., routing dashboard reads through the proxy process) rather than relying on the database engine's concurrency model.~~ (BUG-001)
+- **FR-011**: Dashboard MUST NOT open a direct DuckDB connection when the proxy is reachable. The proxy connection check must be cached (TTL >= 30s) to avoid race conditions where a slow health check triggers fallback to direct access. (BUG-002)
 
 ### Key Entities
 
@@ -99,6 +100,7 @@ As a developer using the `otel-agent view` command, I want the CLI viewer to rea
 
 ## Assumptions
 
+**Bugfix**: 2026-07-09 — BUG-002 Added FR-011 (proxy connection caching requirement).
 **Bugfix**: 2026-07-09 — BUG-001 Updated FR-010, corrected concurrent access assumption, added edge case.
 
 - DuckDB Python package (`duckdb`) is available via pip and installs native binaries for macOS/Linux/Windows.

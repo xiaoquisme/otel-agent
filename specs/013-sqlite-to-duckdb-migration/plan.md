@@ -41,6 +41,7 @@ Migrate telemetry storage from SQLite to DuckDB across 3 source files (logger.py
 
 **Gate Result**: CONDITIONAL PASS — violates Principle IV (concurrency). Proceeding with known BUG-001 constraint. Fix required before production use.
 
+**Bugfix**: 2026-07-09 — BUG-002 Implementation drift: BUG-001 fix has race condition in health check fallback.
 **Bugfix**: 2026-07-09 — BUG-001 Updated constitution check (Principle IV blocked), updated gate result to CONDITIONAL PASS.
 
 ## Project Structure
