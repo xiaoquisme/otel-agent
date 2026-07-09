@@ -1,5 +1,4 @@
 import json
-import sqlite3
 import tempfile
 import subprocess
 import time
@@ -7,12 +6,14 @@ from pathlib import Path
 import pytest
 import requests
 
+import duckdb
+
 
 @pytest.mark.integration
 def test_proxy_logs_request():
     """Start proxy, send a request through it, check it was logged."""
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.db"
+        db_path = Path(td) / "test.duckdb"
         proc = subprocess.Popen(
             ["uv", "run", "otel-proxy", "proxy", "-p", "18765", "-d", str(db_path)],
             stdout=subprocess.PIPE,
@@ -40,7 +41,7 @@ def test_proxy_logs_request():
 def test_proxy_startup_logs_local_request():
     """Start proxy, send a local request through it, check it was logged."""
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.db"
+        db_path = Path(td) / "test.duckdb"
         proc = subprocess.Popen(
             ["uv", "run", "otel-proxy", "proxy", "-p", "18765", "-d", str(db_path)],
             stdout=subprocess.PIPE,
@@ -63,7 +64,7 @@ def test_proxy_startup_logs_local_request():
             proc.wait()
 
         time.sleep(1)
-        conn = sqlite3.connect(str(db_path))
+        conn = duckdb.connect(str(db_path), read_only=True)
         rows = conn.execute("SELECT * FROM requests").fetchall()
         conn.close()
         assert len(rows) >= 1
@@ -79,7 +80,7 @@ async def test_request_body_and_response_headers_logged():
     from otel_agent.server import create_app
 
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.db"
+        db_path = Path(td) / "test.duckdb"
         config_path = Path(td) / "config.yaml"
         config_path.write_text(
             "providers:\n"
@@ -99,7 +100,7 @@ async def test_request_body_and_response_headers_logged():
             )
         # Response may be 502 if upstream unreachable, but telemetry is still logged
         telemetry.close()
-        conn = sqlite3.connect(str(db_path))
+        conn = duckdb.connect(str(db_path), read_only=True)
         rows = conn.execute("SELECT request_body, response_headers, response_status FROM requests").fetchall()
         conn.close()
 
@@ -123,7 +124,7 @@ async def test_sensitive_headers_redacted_in_db():
     from otel_agent.server import create_app
 
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.db"
+        db_path = Path(td) / "test.duckdb"
         config_path = Path(td) / "config.yaml"
         config_path.write_text(
             "providers:\n"
@@ -143,7 +144,7 @@ async def test_sensitive_headers_redacted_in_db():
             )
 
         telemetry.close()
-        conn = sqlite3.connect(str(db_path))
+        conn = duckdb.connect(str(db_path), read_only=True)
         rows = conn.execute("SELECT response_headers FROM requests").fetchall()
         conn.close()
 
@@ -163,7 +164,7 @@ async def test_log_request_body_false_suppresses_body():
     from otel_agent.server import create_app
 
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.db"
+        db_path = Path(td) / "test.duckdb"
         config_path = Path(td) / "config.yaml"
         config_path.write_text(
             "providers:\n"
@@ -184,7 +185,7 @@ async def test_log_request_body_false_suppresses_body():
             )
 
         telemetry.close()
-        conn = sqlite3.connect(str(db_path))
+        conn = duckdb.connect(str(db_path), read_only=True)
         rows = conn.execute("SELECT request_body, response_headers FROM requests").fetchall()
         conn.close()
 

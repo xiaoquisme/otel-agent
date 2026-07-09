@@ -1,18 +1,22 @@
+"""Tests for TelemetryLogger with DuckDB backend."""
+
 import json
-import sqlite3
 import tempfile
 from pathlib import Path
-from otel_agent.logger import TelemetryLogger
+
+import duckdb
+
+from otel_agent.logger import TelemetryLogger, redact_sensitive_headers
 
 
 def test_creates_db_and_tables():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.db"
+        db_path = Path(td) / "test.duckdb"
         logger = TelemetryLogger(db_path)
         logger.close()
-        conn = sqlite3.connect(str(db_path))
+        conn = duckdb.connect(str(db_path), read_only=True)
         tables = [r[0] for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
         ).fetchall()]
         conn.close()
         assert "requests" in tables
@@ -20,7 +24,7 @@ def test_creates_db_and_tables():
 
 def test_log_request_inserts_row():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.db"
+        db_path = Path(td) / "test.duckdb"
         logger = TelemetryLogger(db_path)
         logger.log_request(
             method="POST",
@@ -33,7 +37,8 @@ def test_log_request_inserts_row():
             latency_ms=1234.5,
             upstream="https://api.openai.com",
         )
-        conn = sqlite3.connect(str(db_path))
+        logger.close()
+        conn = duckdb.connect(str(db_path), read_only=True)
         row = conn.execute("SELECT method, url, upstream, latency_ms FROM requests").fetchone()
         conn.close()
         assert row[0] == "POST"
@@ -44,7 +49,7 @@ def test_log_request_inserts_row():
 
 def test_log_preserves_full_payload():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.db"
+        db_path = Path(td) / "test.duckdb"
         logger = TelemetryLogger(db_path)
         body = json.dumps({"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]})
         logger.log_request(
@@ -54,7 +59,8 @@ def test_log_preserves_full_payload():
             response_body='{"choices":[]}', latency_ms=100.0,
             upstream="https://api.openai.com",
         )
-        conn = sqlite3.connect(str(db_path))
+        logger.close()
+        conn = duckdb.connect(str(db_path), read_only=True)
         row = conn.execute("SELECT request_body FROM requests").fetchone()
         conn.close()
         parsed = json.loads(row[0])
@@ -62,8 +68,6 @@ def test_log_preserves_full_payload():
 
 
 def test_redact_sensitive_headers():
-    from otel_agent.logger import redact_sensitive_headers
-
     headers = {
         "content-type": "application/json",
         "Authorization": "Bearer sk-test",
@@ -80,8 +84,6 @@ def test_redact_sensitive_headers():
 
 
 def test_redact_preserves_non_sensitive():
-    from otel_agent.logger import redact_sensitive_headers
-
     headers = {"content-type": "text/plain", "x-custom": "value"}
     result = redact_sensitive_headers(headers)
     assert result == headers

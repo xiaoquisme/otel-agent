@@ -9,7 +9,7 @@ def test_parser_defaults():
     parser = build_parser()
     args = parser.parse_args(["proxy"])
     assert args.port == 8080
-    assert args.db == "~/.otel-agent/telemetry.db"
+    assert args.db == "~/.otel-agent/telemetry.duckdb"
     assert args.config == "~/.otel-agent/config.yaml"
 
 
@@ -114,7 +114,7 @@ def test_handle_view_no_requests(tmp_path, capsys):
     from otel_agent.logger import TelemetryLogger
     import argparse
 
-    db_path = tmp_path / "test.db"
+    db_path = tmp_path / "test.duckdb"
     logger = TelemetryLogger(db_path)
     logger.close()
 

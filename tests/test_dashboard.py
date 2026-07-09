@@ -1,19 +1,21 @@
-"""Tests for dashboard API and server."""
+"""Tests for dashboard API with DuckDB backend."""
 
 import json
-import sqlite3
 import tempfile
 from pathlib import Path
+
+import duckdb
 
 from otel_agent.dashboard.api import DashboardAPI, CountCache
 
 
 def _create_test_db(db_path: Path, n: int = 5) -> None:
     """Create a test database with n requests."""
-    conn = sqlite3.connect(str(db_path))
+    conn = duckdb.connect(str(db_path))
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS requests_id_seq START 1")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id INTEGER DEFAULT nextval('requests_id_seq') PRIMARY KEY,
             timestamp TEXT NOT NULL,
             method TEXT NOT NULL,
             url TEXT NOT NULL,
@@ -23,7 +25,7 @@ def _create_test_db(db_path: Path, n: int = 5) -> None:
             response_status INTEGER,
             response_headers TEXT,
             response_body TEXT,
-            latency_ms REAL
+            latency_ms DOUBLE
         )
     """)
     for i in range(1, n + 1):
@@ -44,19 +46,19 @@ def _create_test_db(db_path: Path, n: int = 5) -> None:
                 100.0 * i,
             ),
         )
-    conn.commit()
     conn.close()
 
 
 def test_get_requests_empty(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     api = DashboardAPI(db)
     result = api.get_requests()
     assert result == {"data": [], "total": 0, "cursor": 0, "next_cursor": 0, "has_more": False}
+    api.close()
 
 
 def test_get_requests_with_data(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_requests()
@@ -64,10 +66,11 @@ def test_get_requests_with_data(tmp_path):
     assert len(result["data"]) == 5
     assert result["cursor"] == 0
     assert result["has_more"] is False
+    api.close()
 
 
 def test_get_requests_cursor_pagination(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 10)
     api = DashboardAPI(db)
     result = api.get_requests(limit=3)
@@ -78,41 +81,44 @@ def test_get_requests_cursor_pagination(tmp_path):
 
     result2 = api.get_requests(cursor=next_cursor, limit=3)
     assert len(result2["data"]) == 3
-    # Different page = different rows
     assert result["data"][0]["id"] != result2["data"][0]["id"]
+    api.close()
 
 
 def test_get_requests_search(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_requests(search="completions/3")
     assert result["total"] == 1
     assert result["data"][0]["url"] == "/openai/v1/chat/completions/3"
+    api.close()
 
 
 def test_get_requests_filter_method(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_requests(method="POST")
     assert result["total"] == 3
     for r in result["data"]:
         assert r["method"] == "POST"
+    api.close()
 
 
 def test_get_requests_filter_status(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_requests(status=500)
     assert result["total"] == 2
     for r in result["data"]:
         assert r["response_status"] == 500
+    api.close()
 
 
 def test_get_request_detail(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 3)
     api = DashboardAPI(db)
     result = api.get_request(2)
@@ -120,53 +126,58 @@ def test_get_request_detail(tmp_path):
     assert result["id"] == 2
     assert result["method"] == "GET"
     assert isinstance(result["request_headers"], dict)
+    api.close()
 
 
 def test_get_request_not_found(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 3)
     api = DashboardAPI(db)
     assert api.get_request(999) is None
+    api.close()
 
 
 def test_get_requests_since(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_requests_since(3)
     assert len(result) == 2
     assert all(r["id"] > 3 for r in result)
+    api.close()
 
 
 def test_get_max_id(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     assert api.get_max_id() == 5
+    api.close()
 
 
 def test_get_max_id_empty(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     api = DashboardAPI(db)
     assert api.get_max_id() == 0
+    api.close()
 
 
 def test_get_all_filtered(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_all_filtered(method="POST")
     assert len(result) == 3
     assert all(r["method"] == "POST" for r in result)
+    api.close()
 
 
 def test_count_cache():
     cache = CountCache(ttl=5.0)
-    conn = sqlite3.connect(":memory:")
+    conn = duckdb.connect(":memory:")
     conn.execute("CREATE TABLE t (id INTEGER)")
     for i in range(10):
         conn.execute("INSERT INTO t VALUES (?)", (i,))
-    conn.commit()
 
     # First call queries DB
     result1 = cache.get("test", conn, "SELECT COUNT(*) FROM t", [])
@@ -174,7 +185,6 @@ def test_count_cache():
 
     # Second call returns cached
     conn.execute("INSERT INTO t VALUES (99)")
-    conn.commit()
     result2 = cache.get("test", conn, "SELECT COUNT(*) FROM t", [])
     assert result2 == 10  # Still cached
 
@@ -182,13 +192,13 @@ def test_count_cache():
     cache.clear()
     result3 = cache.get("test", conn, "SELECT COUNT(*) FROM t", [])
     assert result3 == 11
+    conn.close()
 
 
 def test_persistent_connection(tmp_path):
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 3)
     api = DashboardAPI(db)
-    # Multiple calls should reuse connection
     r1 = api.get_requests()
     r2 = api.get_requests()
     r3 = api.get_request(1)
@@ -200,7 +210,7 @@ def test_persistent_connection(tmp_path):
 
 def test_historical_requests_visible(tmp_path):
     """All requests in DB are returned on first call, not just new ones."""
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 10)
     api = DashboardAPI(db)
     result = api.get_requests(limit=50)
@@ -211,24 +221,23 @@ def test_historical_requests_visible(tmp_path):
 
 def test_historical_requests_after_new_data(tmp_path):
     """Historical + new requests are all visible."""
-    db = tmp_path / "test.db"
+    db = tmp_path / "test.duckdb"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     r1 = api.get_requests(limit=50)
     assert r1["total"] == 5
+    api.close()
 
     # Add more requests directly to DB
-    import sqlite3
-    conn = sqlite3.connect(str(db))
+    conn = duckdb.connect(str(db))
     for i in range(6, 9):
         conn.execute(
             "INSERT INTO requests (timestamp, method, url, upstream, request_headers, "
             "request_body, response_status, response_headers, response_body, latency_ms) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (f"2026-06-27T10:00:{i:02d}Z", "GET", f"/test/{i}", f"https://test.com/{i}",
-             '{}', '{}', 200, '{}', '{}', 50.0),
+             "{}", "{}", 200, "{}", "{}", 50.0),
         )
-    conn.commit()
     conn.close()
 
     api.clear_cache()
@@ -240,7 +249,7 @@ def test_historical_requests_after_new_data(tmp_path):
 
 def test_empty_database_no_crash(tmp_path):
     """Non-existent database returns empty result without error."""
-    db = tmp_path / "nonexistent" / "test.db"
+    db = tmp_path / "nonexistent" / "test.duckdb"
     api = DashboardAPI(db)
     result = api.get_requests()
     assert result == {"data": [], "total": 0, "cursor": 0, "next_cursor": 0, "has_more": False}

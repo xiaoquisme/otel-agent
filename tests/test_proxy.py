@@ -7,7 +7,7 @@ def test_parser_defaults():
     parser = build_parser()
     args = parser.parse_args(["proxy"])
     assert args.port == 8080
-    assert args.db == "~/.otel-agent/telemetry.db"
+    assert args.db == "~/.otel-agent/telemetry.duckdb"
 
 
 def test_parser_custom_values():
