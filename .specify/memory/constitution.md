@@ -1,14 +1,9 @@
 <!--
   Sync Impact Report
-  Version change: 0.0.0 → 1.0.0 (initial ratification)
-  Modified principles: N/A (first version)
-  Added sections:
-    - Principle I: Code Quality
-    - Principle II: Testing Standards
-    - Principle III: User Experience Consistency
-    - Principle IV: Performance Requirements
-    - Quality Gates
-    - Development Workflow
+  Version change: 1.0.0 → 1.1.0 (MINOR — principle material expansion)
+  Modified principles:
+    - Principle IV: Performance Requirements — replaced SQLite WAL rule with DuckDB concurrency rule
+  Added sections: N/A
   Removed sections: N/A
   Templates requiring updates:
     - .specify/templates/plan-template.md ✅ compatible (Constitution Check section exists)
@@ -67,7 +62,7 @@ CLI behavior MUST be predictable, documented, and consistent.
 The proxy MUST NOT become a bottleneck in the request path.
 
 - Proxy overhead per request MUST NOT exceed 5ms (excluding upstream latency).
-- SQLite writes MUST use WAL mode to avoid blocking concurrent reads.
+- DuckDB is the storage engine. Multi-process concurrent access is NOT supported — dashboard reads MUST route through the proxy's internal API (BUG-001/BUG-002, FR-010/FR-011).
 - Config reload MUST check file mtime before re-parsing — no full YAML parse on every request.
 - Memory usage MUST remain constant regardless of request volume (no unbounded buffers).
 - Response body logging MUST handle payloads up to 10MB without crashing or excessive memory use.
@@ -101,4 +96,4 @@ This constitution is the authoritative reference for otel-agent development prac
 - Clarifications and wording fixes are PATCH version changes.
 - Compliance is verified during code review. Violations MUST be justified in the PR description or fixed before merge.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-26 | **Last Amended**: 2026-06-26
+**Version**: 1.1.0 | **Ratified**: 2026-06-26 | **Last Amended**: 2026-07-09
