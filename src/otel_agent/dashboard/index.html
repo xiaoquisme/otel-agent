@@ -78,29 +78,11 @@ tr:hover { background: #161b22; cursor: pointer; }
 .json-number { color: #d2a8ff; }
 .json-boolean { color: #58a6ff; }
 .json-null { color: #8b949e; font-style: italic; }
-.json-toggle { color: #8b949e; cursor: pointer; user-select: none; display: inline-block; width: 1.2em; text-align: center; }
-.json-toggle:hover { color: #e1e4e8; }
-.json-badge { background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 1px 6px; font-size: 11px; color: #8b949e; margin-left: 6px; white-space: nowrap; }
-.json-children { padding-left: 20px; border-left: 1px solid #21262d; }
-.json-summary { color: #8b949e; font-size: 12px; }
-.json-node { line-height: 1.6; white-space: nowrap; }
-
-/* Body Viewer Toolbar (T001) */
-.body-viewer-toolbar { display: flex; gap: 4px; margin-bottom: 8px; }
-.body-toggle { background: #21262d; border: 1px solid #30363d; color: #8b949e; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.body-toggle.active { background: #30363d; color: #e1e4e8; }
 
 /* Body Viewer States (T001) */
 .body-empty { color: #8b949e; font-style: italic; }
 .body-raw pre { background: #0d1117; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
 
-/* JSON Badge Variants (T002) */
-.json-badge-model { border-color: #58a6ff; }
-.json-badge-messages { border-color: #a371f7; }
-.json-badge-stream { border-color: #3fb950; }
-.json-badge-usage { border-color: #d29922; }
-.json-badge-tool { border-color: #f0883e; }
-.json-badge-system { border-color: #8b949e; }
 
 /* Usage Summary Bar */
 .usage-summary { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; font-size: 12px; color: #8b949e; display: flex; gap: 16px; align-items: center; }
@@ -294,8 +276,6 @@ async function showDetail(id) {
     </div>
   `;
   document.getElementById('detail-overlay').classList.add('active');
-  // Initialize collapsible tree views after DOM insertion
-  initBodyViewers();
 }
 
 function closeDetail() {
@@ -340,192 +320,6 @@ function highlightJsonString(value, indent) {
   return pad + String(value);
 }
 
-/** Count lines in pretty-printed JSON for auto-collapse threshold (T005) */
-function countJsonLines(value) {
-  return highlightJsonString(value, 0).split('\n').length;
-}
-
-/* ========== Collapsible Tree (Phase 4: T009-T010) ========== */
-
-const AUTO_COLLAPSE_THRESHOLD = 50;
-
-/** Build a collapsible DOM tree node for a JSON value (T009) */
-function renderJsonNode(value, key, depth, autoCollapse, context) {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'json-node';
-
-  const isObject = value !== null && typeof value === 'object';
-  const isArray = Array.isArray(value);
-
-  if (isObject || isArray) {
-    const entries = isArray ? value : Object.entries(value);
-    const childCount = isArray ? value.length : Object.keys(value).length;
-    const openBrace = isArray ? '[' : '{';
-    const closeBrace = isArray ? ']' : '}';
-
-    // Header line: [toggle] key: openBrace
-    const header = document.createElement('span');
-
-    const toggle = document.createElement('span');
-    toggle.className = 'json-toggle';
-    header.appendChild(toggle);
-
-    if (key !== null) {
-      const keySpan = document.createElement('span');
-      keySpan.className = 'json-key';
-      keySpan.textContent = `"${key}": `;
-      header.appendChild(keySpan);
-
-      // Semantic annotation badge (T017)
-      const ann = getAnnotation(key, context, value);
-      if (ann) {
-        const badge = document.createElement('span');
-        badge.className = `json-badge ${ann.cssClass}`;
-        badge.textContent = ann.text;
-        header.appendChild(badge);
-      }
-    }
-
-    const braceSpan = document.createElement('span');
-    braceSpan.textContent = openBrace;
-    header.appendChild(braceSpan);
-
-    wrapper.appendChild(header);
-
-    // Children container
-    const children = document.createElement('div');
-    children.className = 'json-children';
-
-    const childEntries = isArray
-      ? value.map((v, i) => [null, v])
-      : Object.entries(value);
-
-    childEntries.forEach(([k, v]) => {
-      children.appendChild(renderJsonNode(v, k, depth + 1, autoCollapse, context));
-    });
-
-    wrapper.appendChild(children);
-
-    // Close brace with summary
-    const closeLine = document.createElement('span');
-    const closeSpan = document.createElement('span');
-    closeSpan.textContent = closeBrace;
-    closeLine.appendChild(closeSpan);
-
-    const summary = document.createElement('span');
-    summary.className = 'json-summary';
-    summary.textContent = ` ${childCount} ${isArray ? 'items' : 'keys'}`;
-    closeLine.appendChild(summary);
-
-    wrapper.appendChild(closeLine);
-
-    // Auto-collapse logic
-    const shouldCollapse = autoCollapse && depth >= 1;
-    if (shouldCollapse) {
-      children.style.display = 'none';
-      toggle.textContent = '\u25B6'; // ▶
-      closeLine.style.display = 'none';
-    } else {
-      toggle.textContent = '\u25BC'; // ▼
-      closeLine.style.display = '';
-    }
-
-    // Store state for toggle
-    wrapper._children = children;
-    wrapper._toggle = toggle;
-    wrapper._closeLine = closeLine;
-    wrapper._summary = summary;
-    wrapper._openBrace = openBrace;
-    wrapper._closeBrace = closeBrace;
-    wrapper._childCount = childCount;
-  } else {
-    // Leaf node
-    if (key !== null) {
-      const keySpan = document.createElement('span');
-      keySpan.className = 'json-key';
-      keySpan.textContent = `"${key}": `;
-      wrapper.appendChild(keySpan);
-
-      // Semantic annotation badge (T017)
-      const ann = getAnnotation(key, context, value);
-      if (ann) {
-        const badge = document.createElement('span');
-        badge.className = `json-badge ${ann.cssClass}`;
-        badge.textContent = ann.text;
-        wrapper.appendChild(badge);
-      }
-    }
-
-    const valSpan = document.createElement('span');
-    if (value === null) {
-      valSpan.className = 'json-null';
-      valSpan.textContent = 'null';
-    } else if (typeof value === 'string') {
-      valSpan.className = 'json-string';
-      valSpan.textContent = `"${escapeHtml(value)}"`;
-    } else if (typeof value === 'boolean') {
-      valSpan.className = 'json-boolean';
-      valSpan.textContent = String(value);
-    } else {
-      valSpan.className = 'json-number';
-      valSpan.textContent = String(value);
-    }
-    wrapper.appendChild(valSpan);
-  }
-
-  return wrapper;
-}
-
-/** Toggle collapse/expand on a JSON node (T010) */
-function toggleJsonNode(nodeEl) {
-  if (!nodeEl._children) return;
-  const isHidden = nodeEl._children.style.display === 'none';
-  nodeEl._children.style.display = isHidden ? 'block' : 'none';
-  nodeEl._toggle.textContent = isHidden ? '\u25BC' : '\u25B6';
-  nodeEl._closeLine.style.display = isHidden ? '' : 'none';
-}
-
-/* ========== LLM Semantic Annotations (Phase 5: T014-T016) ========== */
-
-/** Request-side annotation map (T014) */
-const LLM_REQUEST_ANNOTATIONS = {
-  model:                { badge: '\uD83C\uDFAF Target model', cssClass: 'json-badge-model' },
-  messages:             { badge: '\uD83D\uDCAC Messages', cssClass: 'json-badge-messages', countField: true },
-  stream:               { badge: '', cssClass: 'json-badge-stream', valueMap: { true: '\u26A1 Streaming', false: '\u23F9 Sync' } },
-  temperature:          { badge: '\uD83C\uDF21\uFE0F Temperature', cssClass: 'json-badge-model' },
-  max_tokens:           { badge: '\uD83D\uDCCF Max tokens', cssClass: 'json-badge-model' },
-  max_completion_tokens:{ badge: '\uD83D\uDCCF Max completion tokens', cssClass: 'json-badge-model' },
-  tools:                { badge: '\uD83D\uDD27 Tools', cssClass: 'json-badge-tool', countField: true },
-  tool_choice:          { badge: '\uD83D\uDD27 Tool choice', cssClass: 'json-badge-tool' },
-  system:               { badge: '\uD83D\uDCCB System prompt', cssClass: 'json-badge-system' },
-};
-
-/** Response-side annotation map (T015) */
-const LLM_RESPONSE_ANNOTATIONS = {
-  id:            { badge: '\uD83C\uDFF7\uFE0F ID' },
-  model:         { badge: '\uD83C\uDFF7\uFE0F Model used' },
-  choices:       { badge: '\uD83D\uDCDD Choices', cssClass: 'json-badge-messages', countField: true },
-  usage:         { badge: '\uD83D\uDCCA Usage', cssClass: 'json-badge-usage' },
-  stop_reason:   { badge: '\u23F9 Stop reason' },
-  finish_reason: { badge: '\u23F9 Stop reason' },
-};
-
-/** Look up annotation for a field name in the given context (T016) */
-function getAnnotation(fieldName, context, value) {
-  const map = context === 'response' ? LLM_RESPONSE_ANNOTATIONS : LLM_REQUEST_ANNOTATIONS;
-  const ann = map[fieldName];
-  if (!ann) return null;
-
-  let text = ann.badge;
-  if (ann.countField && Array.isArray(value)) {
-    text = `${ann.badge} (${value.length})`;
-  } else if (ann.valueMap && ann.valueMap[value] !== undefined) {
-    text = ann.valueMap[value];
-  }
-  if (!text) return null;
-  return { text, cssClass: ann.cssClass || '' };
-}
-
 /** Render compact usage summary bar (T018) */
 function renderUsageSummary(usage) {
   if (!usage) return '';
@@ -542,9 +336,9 @@ function renderUsageSummary(usage) {
   return 'Tokens: ' + parts.join(' / ');
 }
 
-/* ========== Body Viewer (T006, T012) ========== */
+/* ========== Body Viewer ========== */
 
-/** Render a body with syntax-highlighted tree view and raw toggle (T006, T012) */
+/** Render a body with syntax-highlighted raw view */
 function formatBody(b, context) {
   if (!b) return '<div class="body-empty">(empty)</div>';
 
@@ -561,81 +355,18 @@ function formatBody(b, context) {
     return `<div class="body-raw"><pre>${escapeHtml(b)}</pre><div style="color:#8b949e;font-size:12px;margin-top:4px;">Content is not valid JSON</div></div>`;
   }
 
-  // Valid JSON — build tree view + raw view with toggle
-  const bodyId = 'body-' + Math.random().toString(36).slice(2, 8);
-
-  // Determine auto-collapse: count lines in pretty-printed JSON
-  const lineCount = countJsonLines(parsed);
-  const autoCollapse = lineCount > AUTO_COLLAPSE_THRESHOLD;
-
-  // Build raw view
-  const rawHtml = `<pre>${highlightJsonString(parsed, 0)}</pre>`;
-
-  // We build the tree container as a placeholder; actual DOM tree will be inserted via JS
-  return `
-    <div class="body-viewer" id="${bodyId}">
-      <div class="body-viewer-toolbar">
-        <button class="body-toggle active" data-view="tree" data-body-id="${bodyId}">Tree</button>
-        <button class="body-toggle" data-view="raw" data-body-id="${bodyId}">Raw</button>
-      </div>
-      <div class="body-view-tree" data-body-id="${bodyId}" data-parsed='${escapeHtml(b)}' data-context="${context || ''}" data-auto-collapse="${autoCollapse}"></div>
-      <div class="body-view-raw" data-body-id="${bodyId}" style="display:none">${rawHtml}</div>
-    </div>
-  `;
+  // Valid JSON — render syntax-highlighted raw view
+  return `<div class="body-raw"><pre>${highlightJsonString(parsed, 0)}</pre></div>`;
 }
 
-/** Initialize tree views after DOM insertion (called after showDetail) */
-function initBodyViewers() {
-  document.querySelectorAll('.body-view-tree').forEach(container => {
-    const rawJson = container.getAttribute('data-parsed');
-    const context = container.getAttribute('data-context') || '';
-    const autoCollapse = container.getAttribute('data-auto-collapse') === 'true';
-    try {
-      const parsed = JSON.parse(rawJson);
-      const tree = renderJsonNode(parsed, null, 0, autoCollapse, context);
-      container.appendChild(tree);
-    } catch(e) {
-      container.innerHTML = '<pre>' + escapeHtml(rawJson) + '</pre>';
-    }
-  });
-}
-
-/* ========== Event Delegation (T011) ========== */
+/* ========== Event Delegation ========== */
 
 document.getElementById('detail-body').addEventListener('click', function(e) {
-  // Handle json-toggle clicks
-  const toggle = e.target.closest('.json-toggle');
-  if (toggle) {
-    const nodeEl = toggle.closest('.json-node');
-    if (nodeEl) toggleJsonNode(nodeEl);
-    return;
-  }
-
-  // Handle body-toggle (Tree/Raw) clicks
-  const viewToggle = e.target.closest('.body-toggle');
-  if (viewToggle) {
-    const bodyId = viewToggle.getAttribute('data-body-id');
-    const viewer = document.getElementById(bodyId);
-    if (!viewer) return;
-    const view = viewToggle.getAttribute('data-view');
-    // Update active state
-    viewer.querySelectorAll('.body-toggle').forEach(btn => btn.classList.remove('active'));
-    viewToggle.classList.add('active');
-    // Switch views
-    const treeContainer = viewer.querySelector('.body-view-tree');
-    const rawContainer = viewer.querySelector('.body-view-raw');
-    if (view === 'tree') {
-      treeContainer.style.display = '';
-      rawContainer.style.display = 'none';
-    } else {
-      treeContainer.style.display = 'none';
-      rawContainer.style.display = '';
-    }
-  }
+  // Event delegation for future interactive elements
 });
 
-/* ========== showDetail Update (T007, T019) ========== */
-// showDetail already updated above to use formatBody(b, context) and initBodyViewers.
+/* ========== showDetail Update ========== */
+// showDetail already uses formatBody(b, context) above.
 
 /* ========== Existing Functions ========== */
 
