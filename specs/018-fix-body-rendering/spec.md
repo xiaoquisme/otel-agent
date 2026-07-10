@@ -75,6 +75,8 @@ As a developer, I want the dashboard to handle very large request/response bodie
 - **FR-006**: System MUST render streaming preview content as reassembled markdown when enough chunks are captured (content deltas present).
 - **FR-007**: System MUST show an "Incomplete streaming preview" indicator when the preview is too short to contain meaningful content.
 - **FR-008**: System MUST NOT increase the dashboard HTML file size by more than 2KB for this feature.
+- **FR-009**: System MUST render tool message (role=tool) content as formatted JSON in a `<pre>` code block, not through the markdown renderer, since tool responses contain structured data not prose.
+- **FR-010**: System MUST handle tool messages where content is not valid JSON by rendering as monospace preformatted text. System SHOULD truncate long tool content (>$maxToolContentLen) with a collapsible 'show more' toggle to prevent overwhelming the chat view.
 
 ### Key Entities
 
@@ -101,3 +103,7 @@ As a developer, I want the dashboard to handle very large request/response bodie
 - The `marked.js` and `DOMPurify` CDN libraries are already loaded and handle large markdown inputs.
 
 **Bugfix**: 2026-07-10 — BUG-002 FR-004 (partial LLM rendering from truncated JSON) identified as unimplemented spec gap. Patch adds task T017.
+
+**Bugfix**: 2026-07-10 — BUG-003 Added FR-009 for tool message JSON rendering. Tool content was routed through renderMarkdown() which mangles JSON.
+
+**Bugfix**: 2026-07-10 — BUG-004 Added FR-010 for non-JSON tool content handling and truncation.

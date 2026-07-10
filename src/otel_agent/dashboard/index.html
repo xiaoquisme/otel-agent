@@ -132,6 +132,9 @@ tr:hover { background: #161b22; cursor: pointer; }
 .streaming-incomplete { background: #0d1a2e; border: 1px solid #388bfd; border-radius: 6px; padding: 6px 10px; margin-top: 8px; font-size: 12px; color: #58a6ff; font-style: italic; }
 .chat-tool { background: #2d2a1e; border-left: 3px solid #d29922; }
 .chat-tool .chat-role { background: #3d3520; color: #d29922; }
+.tool-content-raw { background: #0d1117; padding: 10px; border-radius: 6px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow-y: auto; color: #e1e4e8; }
+.tool-content-toggle { color: #58a6ff; cursor: pointer; font-size: 12px; margin-top: 4px; display: inline-block; }
+.tool-content-toggle:hover { text-decoration: underline; }
 .tool-call { background: #1c2128; border: 1px solid #30363d; border-radius: 4px; padding: 6px 10px; margin: 4px 0; font-size: 12px; }
 .tool-call-name { color: #d2a8ff; font-weight: 600; font-family: 'SF Mono', 'Fira Code', monospace; }
 .tool-call-args { color: #8b949e; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; margin-top: 4px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; }
@@ -203,6 +206,7 @@ tr:hover { background: #161b22; cursor: pointer; }
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
 <script>
 const MAX_BODY_LENGTH = 500000;
+const MAX_TOOL_CONTENT_LENGTH = 2000;
 let currentCursor = 0;
 let cursorStack = [];
 let chart = null;
@@ -566,17 +570,62 @@ function extractAnthropicResponseContent(parsed) {
 
 function renderChatMessage(role, content) {
   const roleClass = 'chat-' + (role || 'unknown');
-  // Tool messages: render content as-is (already formatted JSON from extractOpenAiRequestContent)
+  // Tool messages: render as formatted JSON or monospace preformatted text
+  if (role === 'tool') {
+    const uid = 'tc-' + Math.random().toString(36).slice(2, 8);
+    const isLong = content.length > MAX_TOOL_CONTENT_LENGTH;
+    const truncated = isLong ? content.slice(0, MAX_TOOL_CONTENT_LENGTH) : content;
+    let parsed = null;
+    try { parsed = JSON.parse(truncated); } catch(e) {}
+    if (parsed) {
+      const jsonHtml = highlightJsonString(parsed, 0);
+      const fullHtml = isLong ? jsonHtml + '<div class="tool-content-toggle" onclick="toggleToolContent(this)">Show more</div>' : jsonHtml;
+      return `<div class="chat-message ${roleClass}"><span class="chat-role">tool</span><div class="chat-content"><pre id="${uid}">${fullHtml}</pre>${isLong ? '<template data-full="' + uid + '">' + escapeHtml(content) + '</template>' : ''}</div></div>`;
+    }
+    // Non-JSON: render as monospace preformatted text
+    const textHtml = escapeHtml(truncated);
+    const fullText = isLong ? textHtml + '<div class="tool-content-toggle" onclick="toggleToolContent(this)">Show more</div>' : textHtml;
+    return `<div class="chat-message ${roleClass}"><span class="chat-role">tool</span><div class="chat-content"><div class="tool-content-raw" id="${uid}">${fullText}</div>${isLong ? '<template data-full="' + uid + '">' + escapeHtml(content) + '</template>' : ''}</div></div>`;
+  }
   // Assistant messages with tool_calls: content may contain HTML from extractOpenAiRequestContent
-  const isToolRole = role === 'tool';
   const isHtmlContent = content && (content.startsWith('<div class="tool-call">') || content.includes('tool-call'));
   let renderedContent;
   if (isHtmlContent) {
-    renderedContent = content; // Already HTML from extractOpenAiRequestContent
+    renderedContent = content;
   } else {
     renderedContent = renderMarkdown(content);
   }
   return `<div class="chat-message ${roleClass}"><span class="chat-role">${escapeHtml(role)}</span><div class="chat-content">${renderedContent}</div></div>`;
+}
+
+function toggleToolContent(el) {
+  const pre = el.parentElement.querySelector('pre, .tool-content-raw');
+  const tpl = el.parentElement.querySelector('template');
+  if (!pre || !tpl) return;
+  const fullContent = tpl.getAttribute('data-full');
+  const uid = pre.id;
+  const isExpanded = el.textContent === 'Show less';
+  if (isExpanded) {
+    // Collapse: re-render truncated
+    let parsed = null;
+    try { parsed = JSON.parse(fullContent); } catch(e) {}
+    if (parsed) {
+      pre.innerHTML = highlightJsonString(parsed, 0);
+    } else {
+      pre.innerHTML = escapeHtml(fullContent.slice(0, MAX_TOOL_CONTENT_LENGTH));
+    }
+    el.textContent = 'Show more';
+  } else {
+    // Expand: show full content
+    let parsed = null;
+    try { parsed = JSON.parse(fullContent); } catch(e) {}
+    if (parsed) {
+      pre.innerHTML = highlightJsonString(parsed, 0) + '<div class="tool-content-toggle" onclick="toggleToolContent(this)">Show less</div>';
+    } else {
+      pre.innerHTML = escapeHtml(fullContent) + '<div class="tool-content-toggle" onclick="toggleToolContent(this)">Show less</div>';
+    }
+    el.textContent = '';
+  }
 }
 
 function renderLlmRequestBody(parsed) {

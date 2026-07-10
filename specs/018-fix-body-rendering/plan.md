@@ -72,3 +72,5 @@ tests/
 - [ ] Phase 2: Tasks — not created by `/speckit-plan` (use `/speckit-tasks`)
 
 **Bugfix**: 2026-07-10 — BUG-002 Updated from bugfix patch. FR-004 (partial LLM rendering from truncated JSON) was not scoped into Phase 3 tasks. Added T017 to cover this gap.
+
+**Bugfix**: 2026-07-10 — BUG-003 Updated from bugfix patch. Tool message rendering needs <pre> path, not markdown.

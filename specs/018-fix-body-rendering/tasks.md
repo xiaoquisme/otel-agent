@@ -99,6 +99,24 @@
 
 - [X] T017 [US1] Implement partial LLM rendering from truncated request bodies in `src/otel_agent/dashboard/index.html` — in `formatBody()`, after detecting truncation but before returning raw view, attempt to extract complete `{"role": "...", "content": "..."}` message objects from the truncated string using a regex or brace-depth parser. If any complete messages are found, render them as formatted LLM chat (using `renderChatMessage()`) above the raw view with truncation indicator. If no complete messages are found, fall back to current raw view with indicator. This implements FR-004 which was defined in spec.md but never scoped into tasks.
 
+
+---
+
+## Bugfix: Tool Message JSON Rendering (BUG-003)
+
+**Bugfix**: 2026-07-10 — BUG-003 Updated from bugfix patch
+
+- [X] T018 [US1] Fix tool message rendering in `src/otel_agent/dashboard/index.html` — in `renderChatMessage()`, detect `role === 'tool'` and render content as `<pre>` with JSON syntax highlighting (using `highlightJsonString()`) instead of passing through `renderMarkdown()`. Tool responses contain structured JSON, not prose. This fixes the garbled output caused by marked.parse interpreting JSON braces/brackets as markdown.
+
+
+---
+
+## Bugfix: Tool Content Rendering Improvements (BUG-004)
+
+**Bugfix**: 2026-07-10 — BUG-004 Updated from bugfix patch
+
+- [X] T019 [US1] Improve tool message rendering in `src/otel_agent/dashboard/index.html` — (a) In `renderChatMessage()`, when `role === 'tool'` and JSON.parse fails, render content as <pre> with monospace font and dark background instead of bare escapeHtml. (b) Add a MAX_TOOL_CONTENT_LENGTH constant (e.g. 2000 chars). When tool content exceeds this, show first N lines with a 'Show more' toggle button that expands/collapses the full content. (c) Ensure the existing T018 highlightJsonString path works correctly for valid JSON tool content.
+
 ---
 
 ## Dependencies & Execution Order
