@@ -358,7 +358,7 @@ async def _handle_streaming(
 
         latency_ms = (time.monotonic() - start_time) * 1000
         _log_telemetry(
-            telemetry, request, stream_status, {"streamed": True, "preview": collected_text[:500]}, latency_ms, provider,
+            telemetry, request, stream_status, {"streamed": True, "preview": collected_text[:5_000]}, latency_ms, provider,
             request_body=request_body, resp_headers=resp_headers, log_body=log_body,
         )
 
@@ -380,7 +380,7 @@ def _log_telemetry(
     """Log request/response to telemetry database."""
     try:
         body_str = json.dumps(resp_body) if isinstance(resp_body, dict) else str(resp_body)
-        stored_body = request_body[:100_000] if log_body else ""
+        stored_body = request_body[:500_000] if log_body else ""
         stored_headers = redact_sensitive_headers(resp_headers) if resp_headers else {}
         telemetry.log_request(
             method=request.method,
@@ -389,7 +389,7 @@ def _log_telemetry(
             request_body=stored_body,
             response_status=status_code,
             response_headers=stored_headers,
-            response_body=body_str[:100_000],
+            response_body=body_str[:500_000],
             latency_ms=latency_ms,
             upstream=provider.base_url,
         )

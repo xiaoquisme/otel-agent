@@ -96,7 +96,7 @@ def test_log_telemetry_truncates_long_body():
     with tempfile.TemporaryDirectory() as td:
         db = Path(td) / "test.duckdb"
         telemetry = TelemetryLogger(db)
-        long_body = "x" * 150_000
+        long_body = "x" * 550_000
         _log_telemetry(
             telemetry, _make_request(), 200, {}, 100.0,
             _make_provider(), request_body=long_body,
@@ -105,4 +105,4 @@ def test_log_telemetry_truncates_long_body():
         conn = duckdb.connect(str(db), read_only=True)
         row = conn.execute("SELECT request_body FROM requests").fetchone()
         conn.close()
-        assert len(row[0]) == 100_000
+        assert len(row[0]) == 500_000

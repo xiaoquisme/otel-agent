@@ -81,7 +81,7 @@ tr:hover { background: #161b22; cursor: pointer; }
 
 /* Body Viewer States */
 .body-empty { color: #8b949e; font-style: italic; }
-.body-raw pre { background: #0d1117; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+.body-raw pre { background: #0d1117; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; max-height: 600px; overflow-y: auto; }
 
 /* Usage Summary Bar */
 .usage-summary { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; font-size: 12px; color: #8b949e; display: flex; gap: 16px; align-items: center; }
@@ -125,6 +125,16 @@ tr:hover { background: #161b22; cursor: pointer; }
 
 /* Anthropic Content Block Placeholders */
 .content-placeholder { color: #8b949e; font-style: italic; font-size: 12px; padding: 4px 8px; background: #1c2128; border-radius: 4px; display: inline-block; }
+
+/* Truncation & Incomplete Indicators */
+.body-truncated { background: #2d1f0e; border: 1px solid #d29922; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; font-size: 13px; color: #d29922; }
+.body-truncated::before { content: "\26A0  "; }
+.streaming-incomplete { background: #0d1a2e; border: 1px solid #388bfd; border-radius: 6px; padding: 6px 10px; margin-top: 8px; font-size: 12px; color: #58a6ff; font-style: italic; }
+.chat-tool { background: #2d2a1e; border-left: 3px solid #d29922; }
+.chat-tool .chat-role { background: #3d3520; color: #d29922; }
+.tool-call { background: #1c2128; border: 1px solid #30363d; border-radius: 4px; padding: 6px 10px; margin: 4px 0; font-size: 12px; }
+.tool-call-name { color: #d2a8ff; font-weight: 600; font-family: 'SF Mono', 'Fira Code', monospace; }
+.tool-call-args { color: #8b949e; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; margin-top: 4px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; }
 </style>
 </head>
 <body>
@@ -192,6 +202,7 @@ tr:hover { background: #161b22; cursor: pointer; }
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
 <script>
+const MAX_BODY_LENGTH = 500000;
 let currentCursor = 0;
 let cursorStack = [];
 let chart = null;
@@ -338,6 +349,44 @@ function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+function isTruncated(body, maxLen) {
+  if (!body) return { truncated: false };
+  if (body.length < maxLen) return { truncated: false };
+  try { JSON.parse(body); return { truncated: false }; } catch(e) {}
+  return { truncated: true, reason: 'Body truncated (original exceeded ' + Math.round(maxLen/1000) + 'KB)' };
+}
+
+function extractPartialMessages(body) {
+  const messages = [];
+  let depth = 0, start = -1;
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === '{') { if (depth === 0) start = i; depth++; }
+    else if (body[i] === '}') {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        try {
+          const obj = JSON.parse(body.slice(start, i + 1));
+          if (obj && typeof obj === 'object' && obj.role) {
+            const role = obj.role;
+            let content = obj.content || '';
+            // Handle assistant messages with tool_calls
+            if (role === 'assistant' && obj.tool_calls && obj.tool_calls.length > 0) {
+              const tcText = obj.tool_calls.map(tc => {
+                const fn = tc.function || {};
+                return '[' + (fn.name || 'tool') + '] ' + (fn.arguments || '');
+              }).join(', ');
+              content = content ? content + ' | ' + tcText : tcText;
+            }
+            messages.push({ role, content: String(content) });
+          }
+        } catch(e) {}
+        start = -1;
+      }
+    }
+  }
+  return messages;
+}
+
 function highlightJsonString(value, indent) {
   const pad = '  '.repeat(indent);
   if (value === null) return `${pad}<span class="json-null">null</span>`;
@@ -398,6 +447,17 @@ function parseStreamingChunks(previewStr) {
     if (previewStr[i] === '{') { if (depth === 0) start = i; depth++; }
     else if (previewStr[i] === '}') { depth--; if (depth === 0 && start >= 0) { try { chunks.push(JSON.parse(previewStr.slice(start, i + 1))); } catch(e) {} start = -1; } }
   }
+  // Handle incomplete trailing chunk (depth > 0 at end of string)
+  if (depth > 0 && start >= 0) {
+    const tail = previewStr.slice(start);
+    // Try to parse as-is first (might be valid despite missing braces)
+    try { chunks.push(JSON.parse(tail)); } catch(e) {
+      // Try closing missing braces progressively
+      for (let close = 1; close <= depth; close++) {
+        try { chunks.push(JSON.parse(tail + '}'.repeat(close))); break; } catch(e2) {}
+      }
+    }
+  }
   return chunks;
 }
 
@@ -419,10 +479,11 @@ function extractStreamingContent(parsed) {
     if (delta.content) content += delta.content;
     if (delta.reasoning_content) reasoningContent += delta.reasoning_content;
   }
+  const incomplete = !content && !reasoningContent;
   // Show reasoning content as a note if present
   let fullContent = content;
   if (reasoningContent) fullContent = content + '\n\n---\n**Reasoning:** ' + reasoningContent;
-  return { content: fullContent, model, finishReason: finishReason || 'streaming' };
+  return { content: fullContent, model, finishReason: finishReason || 'streaming', incomplete };
 }
 
 /* ========== Markdown Rendering ========== */
@@ -442,7 +503,29 @@ function renderMarkdown(text) {
 
 function extractOpenAiRequestContent(parsed) {
   if (!parsed || !parsed.messages) return null;
-  return parsed.messages.map(m => ({ role: m.role || 'unknown', content: m.content || '' }));
+  return parsed.messages.map(m => {
+    const role = m.role || 'unknown';
+    // Assistant messages with tool_calls: render tool calls as content
+    if (role === 'assistant' && m.tool_calls && m.tool_calls.length > 0) {
+      let content = m.content || '';
+      const tcHtml = m.tool_calls.map(tc => {
+        const fn = tc.function || {};
+        const name = fn.name || 'unknown';
+        let args = fn.arguments || '';
+        try { args = JSON.stringify(JSON.parse(args), null, 2); } catch(e) {}
+        return '<div class="tool-call"><span class="tool-call-name">' + escapeHtml(name) + '</span><div class="tool-call-args">' + escapeHtml(args) + '</div></div>';
+      }).join('');
+      if (content) content = renderMarkdown(content);
+      return { role, content: content ? '<div>' + content + '</div>' + tcHtml : tcHtml };
+    }
+    // Tool messages: render content
+    if (role === 'tool') {
+      let content = m.content || '';
+      try { content = JSON.stringify(JSON.parse(content), null, 2); } catch(e) {}
+      return { role, content: content };
+    }
+    return { role, content: m.content || '' };
+  });
 }
 
 function extractOpenAiResponseContent(parsed) {
@@ -483,7 +566,16 @@ function extractAnthropicResponseContent(parsed) {
 
 function renderChatMessage(role, content) {
   const roleClass = 'chat-' + (role || 'unknown');
-  const renderedContent = renderMarkdown(content);
+  // Tool messages: render content as-is (already formatted JSON from extractOpenAiRequestContent)
+  // Assistant messages with tool_calls: content may contain HTML from extractOpenAiRequestContent
+  const isToolRole = role === 'tool';
+  const isHtmlContent = content && (content.startsWith('<div class="tool-call">') || content.includes('tool-call'));
+  let renderedContent;
+  if (isHtmlContent) {
+    renderedContent = content; // Already HTML from extractOpenAiRequestContent
+  } else {
+    renderedContent = renderMarkdown(content);
+  }
   return `<div class="chat-message ${roleClass}"><span class="chat-role">${escapeHtml(role)}</span><div class="chat-content">${renderedContent}</div></div>`;
 }
 
@@ -511,7 +603,10 @@ function renderLlmResponseBody(parsed, rawBody) {
   metaHtml += '</div>';
 
   const contentHtml = renderMarkdown(data.content);
-  return `${metaHtml}<div class="chat-message chat-assistant"><div class="chat-content">${contentHtml}</div></div>`;
+  const incompleteNote = data.incomplete
+    ? '<div class="streaming-incomplete">Streaming preview may be incomplete \u2014 limited chunks captured</div>'
+    : '';
+  return `${metaHtml}<div class="chat-message chat-assistant"><div class="chat-content">${contentHtml}</div></div>${incompleteNote}`;
 }
 
 /* ========== Body Viewer with Toggle ========== */
@@ -527,7 +622,19 @@ function formatBody(b, context) {
   } catch(e) {}
 
   if (!isValidJson) {
-    return `<div class="body-raw"><pre>${escapeHtml(b)}</pre><div style="color:#8b949e;font-size:12px;margin-top:4px;">Content is not valid JSON</div></div>`;
+    const t = isTruncated(b, MAX_BODY_LENGTH);
+    const notice = t.truncated
+      ? `<div class="body-truncated">${escapeHtml(t.reason)}</div>`
+      : '<div style="color:#8b949e;font-size:12px;margin-top:4px;">Content is not valid JSON</div>';
+    // FR-004: Attempt to render partial LLM messages from truncated JSON
+    if (t.truncated && context === 'request') {
+      const partialMessages = extractPartialMessages(b);
+      if (partialMessages.length > 0) {
+        const chatHtml = partialMessages.map(m => renderChatMessage(m.role, m.content)).join('');
+        return `<div class="body-truncated">${escapeHtml(t.reason)}</div><div class="body-llm-view">${chatHtml}</div><div class="body-raw" style="margin-top:8px;"><pre>${escapeHtml(b)}</pre></div>`;
+      }
+    }
+    return `<div class="body-raw">${notice}<pre>${escapeHtml(b)}</pre></div>`;
   }
 
   const format = detectFormat(parsed);
