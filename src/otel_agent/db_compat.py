@@ -1,4 +1,11 @@
-"""Database compatibility layer — DuckDB with sqlite3 fallback."""
+"""Database compatibility layer — DuckDB with sqlite3 fallback.
+
+.. note::
+   This module is retained for backward compatibility and is used by the
+   SQLite→DuckDB migration path (``migration.py`` uses raw sqlite3/duckdb
+   directly).  New code should use the storage abstraction layer
+   (``otel_agent.storage``) instead of calling ``get_connection()`` directly.
+"""
 
 from __future__ import annotations
 

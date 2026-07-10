@@ -398,117 +398,31 @@ def _log_telemetry(
 
 
 # ------------------------------------------------------------------
-# Internal dashboard query helpers (use TelemetryLogger's DuckDB conn)
+# Internal dashboard query helpers (use TelemetryLogger's storage backend)
 # ------------------------------------------------------------------
-
-def _build_where(search: str = "", method: str = "", status: int = 0) -> tuple[str, list]:
-    """Build WHERE clause for request queries."""
-    conditions: list[str] = []
-    params: list = []
-    if method:
-        conditions.append("method = ?")
-        params.append(method)
-    if status:
-        conditions.append("response_status = ?")
-        params.append(status)
-    if search:
-        conditions.append("(url LIKE ? OR upstream LIKE ?)")
-        params.extend([f"%{search}%", f"%{search}%"])
-    where = " AND ".join(conditions) if conditions else "1=1"
-    return where, params
-
-
-def _rows_to_dicts(cursor, rows: list) -> list[dict]:
-    """Convert DuckDB result rows to dicts using cursor.description."""
-    if not rows:
-        return []
-    if cursor is not None and hasattr(cursor, "description") and cursor.description:
-        columns = [desc[0] for desc in cursor.description]
-        return [dict(zip(columns, row)) for row in rows]
-    return [dict(r) if hasattr(r, "keys") else r for r in rows]
 
 
 def _query_requests(telemetry, search: str, method: str, status: int,
                     cursor: int, limit: int) -> dict:
-    """Paginated request list — mirrors DashboardAPI.get_requests()."""
-    conn = telemetry.conn
-    where, params = _build_where(search, method, status)
-
-    count_query = f"SELECT COUNT(*) FROM requests WHERE {where}"
-    total = conn.execute(count_query, params).fetchone()[0]
-
-    if cursor > 0:
-        cursor_where = f"({where}) AND id < ?"
-        cursor_params = params + [cursor]
-    else:
-        cursor_where = where
-        cursor_params = params
-
-    result = conn.execute(
-        f"SELECT id, timestamp, method, url, upstream, response_status, latency_ms "
-        f"FROM requests WHERE {cursor_where} ORDER BY id DESC LIMIT ?",
-        cursor_params + [limit + 1],
-    )
-    rows = result.fetchall()
-    columns = [desc[0] for desc in result.description] if result.description else []
-    data = [dict(zip(columns, r)) for r in rows[:limit]]
-    has_more = len(rows) > limit
-    next_cursor = data[-1]["id"] if data and has_more else 0
-
-    return {
-        "data": data,
-        "total": total,
-        "cursor": cursor,
-        "next_cursor": next_cursor,
-        "has_more": has_more,
-    }
+    """Paginated request list — delegates to storage backend."""
+    return telemetry.storage.get_requests(search, method, status, cursor, limit)
 
 
 def _query_request_detail(telemetry, request_id: int) -> dict | None:
-    """Single request detail — mirrors DashboardAPI.get_request()."""
-    conn = telemetry.conn
-    result = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,))
-    row = result.fetchone()
-    if row is None:
-        return None
-    columns = [desc[0] for desc in result.description] if result.description else []
-    result_dict = dict(zip(columns, row))
-    for field in ("request_headers", "response_headers"):
-        if result_dict.get(field):
-            try:
-                result_dict[field] = json.loads(result_dict[field])
-            except json.JSONDecodeError:
-                pass
-    return result_dict
+    """Single request detail — delegates to storage backend."""
+    return telemetry.storage.get_request(request_id)
 
 
 def _query_max_id(telemetry) -> int:
-    """Current max request ID — mirrors DashboardAPI.get_max_id()."""
-    conn = telemetry.conn
-    row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM requests").fetchone()
-    return row[0]
+    """Current max request ID — delegates to storage backend."""
+    return telemetry.storage.get_max_id()
 
 
 def _query_requests_since(telemetry, last_id: int) -> list[dict]:
-    """New requests since last_id — mirrors DashboardAPI.get_requests_since()."""
-    conn = telemetry.conn
-    result = conn.execute(
-        "SELECT id, timestamp, method, url, upstream, response_status, latency_ms "
-        "FROM requests WHERE id > ? ORDER BY id ASC",
-        (last_id,),
-    )
-    rows = result.fetchall()
-    columns = [desc[0] for desc in result.description] if result.description else []
-    return [dict(zip(columns, r)) for r in rows]
+    """New requests since last_id — delegates to storage backend."""
+    return telemetry.storage.get_requests_since(last_id)
 
 
 def _query_all_filtered(telemetry, search: str, method: str, status: int) -> list[dict]:
-    """All filtered requests — mirrors DashboardAPI.get_all_filtered()."""
-    conn = telemetry.conn
-    where, params = _build_where(search, method, status)
-    result = conn.execute(
-        f"SELECT * FROM requests WHERE {where} ORDER BY id DESC", params
-    )
-    rows = result.fetchall()
-    columns = [desc[0] for desc in result.description] if result.description else []
-    return [dict(zip(columns, r)) for r in rows]
+    """All filtered requests — delegates to storage backend."""
+    return telemetry.storage.get_all_filtered(search, method, status)

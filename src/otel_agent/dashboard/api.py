@@ -1,10 +1,9 @@
-"""Dashboard JSON API — reads from DuckDB telemetry database.
+"""Dashboard JSON API — reads from the storage backend.
 
 When the proxy is running, queries are routed through the proxy's internal
 API to avoid DuckDB multi-process lock conflicts (BUG-001). Falls back to
-direct DuckDB connection when the proxy is not running (offline/CLI use).
+direct storage connection when the proxy is not running (offline/CLI use).
 """
-
 from __future__ import annotations
 
 import json
@@ -15,7 +14,7 @@ import urllib.error
 from pathlib import Path
 from typing import Any
 
-from otel_agent.db_compat import get_connection, rows_to_dicts
+from otel_agent.storage import create_storage
 
 
 class CountCache:
@@ -45,13 +44,13 @@ class DashboardAPI:
     Supports two modes:
     - Proxy mode: routes queries through the proxy's internal HTTP API
       (avoids DuckDB multi-process lock conflict).
-    - Direct mode: opens a read-only DuckDB connection directly
+    - Direct mode: opens a read-only storage connection directly
       (used when proxy is not running, e.g. offline CLI use).
     """
 
     def __init__(self, db_path: Path, proxy_port: int | None = None):
         self.db_path = db_path
-        self._conn = None
+        self._storage = create_storage("duckdb", db_path, read_only=True)
         self._count_cache = CountCache(ttl=5.0)
         self._proxy_port = proxy_port
         # BUG-002: Cache proxy URL to avoid health-check race condition
@@ -104,27 +103,6 @@ class DashboardAPI:
 
         return None
 
-    def _get_conn(self):
-        """Get or create a persistent direct DuckDB connection."""
-        if self._conn is None:
-            self._conn = get_connection(self.db_path, read_only=True)
-        return self._conn
-
-    def _build_where(self, search: str = "", method: str = "", status: int = 0) -> tuple[str, list]:
-        conditions = []
-        params: list = []
-        if method:
-            conditions.append("method = ?")
-            params.append(method)
-        if status:
-            conditions.append("response_status = ?")
-            params.append(status)
-        if search:
-            conditions.append("(url LIKE ? OR upstream LIKE ?)")
-            params.extend([f"%{search}%", f"%{search}%"])
-        where = " AND ".join(conditions) if conditions else "1=1"
-        return where, params
-
     def _http_get(self, path: str, params: dict | None = None) -> Any:
         """Make a GET request to the proxy's internal API. Returns parsed JSON or None."""
         base = self._proxy_url()
@@ -155,40 +133,8 @@ class DashboardAPI:
         if proxy_result is not None:
             return proxy_result
 
-        # Fallback: direct DuckDB connection
-        conn = self._get_conn()
-        where, params = self._build_where(search, method, status)
-
-        count_query = f"SELECT COUNT(*) FROM requests WHERE {where}"
-        count_key = f"{where}|{params}"
-        total = self._count_cache.get(count_key, conn, count_query, params)
-
-        if cursor > 0:
-            cursor_where = f"({where}) AND id < ?"
-            cursor_params = params + [cursor]
-        else:
-            cursor_where = where
-            cursor_params = params
-
-        result = conn.execute(
-            f"SELECT id, timestamp, method, url, upstream, response_status, latency_ms "
-            f"FROM requests WHERE {cursor_where} ORDER BY id DESC LIMIT ?",
-            cursor_params + [limit + 1],
-        )
-        rows = result.fetchall()
-        columns = [desc[0] for desc in result.description] if result.description else []
-        data = [dict(zip(columns, r)) for r in rows[:limit]]
-
-        has_more = len(rows) > limit
-        next_cursor = data[-1]["id"] if data and has_more else 0
-
-        return {
-            "data": data,
-            "total": total,
-            "cursor": cursor,
-            "next_cursor": next_cursor,
-            "has_more": has_more,
-        }
+        # Fallback: direct storage connection
+        return self._storage.get_requests(search, method, status, cursor, limit)
 
     def get_request(self, request_id: int) -> dict | None:
         """Get full details for a single request."""
@@ -200,23 +146,8 @@ class DashboardAPI:
         if proxy_result is not None:
             return proxy_result
 
-        # Fallback: direct DuckDB connection
-        conn = self._get_conn()
-        result = conn.execute(
-            "SELECT * FROM requests WHERE id = ?", (request_id,)
-        )
-        row = result.fetchone()
-        if row is None:
-            return None
-        columns = [desc[0] for desc in result.description] if result.description else []
-        result_dict = dict(zip(columns, row))
-        for field in ("request_headers", "response_headers"):
-            if result_dict.get(field):
-                try:
-                    result_dict[field] = json.loads(result_dict[field])
-                except json.JSONDecodeError:
-                    pass
-        return result_dict
+        # Fallback: direct storage connection
+        return self._storage.get_request(request_id)
 
     def get_requests_since(self, last_id: int) -> list[dict]:
         """Get requests with id > last_id (for SSE)."""
@@ -228,16 +159,8 @@ class DashboardAPI:
         if proxy_result is not None:
             return proxy_result
 
-        # Fallback: direct DuckDB connection
-        conn = self._get_conn()
-        result = conn.execute(
-            "SELECT id, timestamp, method, url, upstream, response_status, latency_ms "
-            "FROM requests WHERE id > ? ORDER BY id ASC",
-            (last_id,),
-        )
-        rows = result.fetchall()
-        columns = [desc[0] for desc in result.description] if result.description else []
-        return [dict(zip(columns, r)) for r in rows]
+        # Fallback: direct storage connection
+        return self._storage.get_requests_since(last_id)
 
     def get_max_id(self) -> int:
         """Get the current max request id."""
@@ -249,10 +172,8 @@ class DashboardAPI:
         if proxy_result is not None:
             return proxy_result
 
-        # Fallback: direct DuckDB connection
-        conn = self._get_conn()
-        row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM requests").fetchone()
-        return row[0]
+        # Fallback: direct storage connection
+        return self._storage.get_max_id()
 
     def get_all_filtered(self, search: str = "", method: str = "", status: int = 0) -> list[dict]:
         """Get all filtered requests (for export, no pagination)."""
@@ -266,15 +187,8 @@ class DashboardAPI:
         if proxy_result is not None:
             return proxy_result
 
-        # Fallback: direct DuckDB connection
-        where, params = self._build_where(search, method, status)
-        conn = self._get_conn()
-        result = conn.execute(
-            f"SELECT * FROM requests WHERE {where} ORDER BY id DESC", params
-        )
-        rows = result.fetchall()
-        columns = [desc[0] for desc in result.description] if result.description else []
-        return [dict(zip(columns, r)) for r in rows]
+        # Fallback: direct storage connection
+        return self._storage.get_all_filtered(search, method, status)
 
     def clear_cache(self) -> None:
         """Clear the COUNT cache."""
@@ -282,6 +196,5 @@ class DashboardAPI:
 
     def close(self) -> None:
         """Close the persistent connection."""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        if self._storage is not None:
+            self._storage.close()

@@ -1,29 +1,22 @@
-"""CLI viewer — reads request logs from DuckDB."""
+"""CLI viewer — reads request logs from the storage backend."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from otel_agent.db_compat import get_connection
+from otel_agent.storage import create_storage
 
 
 def query_requests(db_path: Path, upstream_filter: str = "", limit: int = 50) -> list:
-    conn = get_connection(db_path, read_only=True)
-
-    if upstream_filter:
-        result = conn.execute(
-            "SELECT * FROM requests WHERE upstream LIKE ? ORDER BY id DESC LIMIT ?",
-            (f"%{upstream_filter}%", limit),
-        )
-    else:
-        result = conn.execute(
-            "SELECT * FROM requests ORDER BY id DESC LIMIT ?", (limit,)
-        )
-
-    rows = result.fetchall()
-    columns = [desc[0] for desc in result.description] if result.description else []
-    conn.close()
-    return [dict(zip(columns, r)) for r in rows]
+    storage = create_storage("duckdb", db_path, read_only=True)
+    try:
+        if upstream_filter:
+            results = storage.get_all_filtered(search=upstream_filter)
+        else:
+            results = storage.get_all_filtered()
+        return results[:limit]
+    finally:
+        storage.close()
 
 
 def format_request(row: dict) -> str:

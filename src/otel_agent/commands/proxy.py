@@ -116,8 +116,8 @@ def _run_server(args) -> None:
     from otel_agent.server import create_app
 
     config_path = Path(args.config).expanduser()
-    logger = TelemetryLogger(Path(args.db).expanduser())
     config = Config(config_path)
+    logger = TelemetryLogger(Path(args.db).expanduser(), backend=config.storage)
     app = create_app(config, logger)
 
     print(f"otel-agent gateway listening on :{args.port}")

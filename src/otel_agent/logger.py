@@ -1,13 +1,11 @@
-"""Telemetry logger — writes request records to DuckDB (or SQLite fallback)."""
+"""Telemetry logger — writes request records to the storage backend."""
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from pathlib import Path
 
-from otel_agent.db_compat import get_connection
 from otel_agent.migration import migrate_sqlite_to_duckdb, needs_migration
+from otel_agent.storage import create_storage
 
 SENSITIVE_HEADERS = frozenset({"authorization", "x-api-key", "set-cookie"})
 
@@ -21,7 +19,7 @@ def redact_sensitive_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 class TelemetryLogger:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, backend: str = "duckdb"):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -31,38 +29,8 @@ class TelemetryLogger:
             if migrate_sqlite_to_duckdb(db_path, duckdb_path):
                 self.db_path = duckdb_path
 
-        self.conn = get_connection(self.db_path)
-        self._create_tables()
-
-    def _create_tables(self):
-        self.conn.execute(
-            "CREATE SEQUENCE IF NOT EXISTS requests_id_seq START 1"
-        )
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS requests (
-                id INTEGER DEFAULT nextval('requests_id_seq') PRIMARY KEY,
-                timestamp TEXT NOT NULL,
-                method TEXT NOT NULL,
-                url TEXT NOT NULL,
-                upstream TEXT,
-                request_headers TEXT,
-                request_body TEXT,
-                response_status INTEGER,
-                response_headers TEXT,
-                response_body TEXT,
-                latency_ms DOUBLE
-            )
-        """)
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)"
-        )
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_requests_method ON requests(method)"
-        )
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(response_status)"
-        )
-        self.conn.commit()
+        self.storage = create_storage(backend, self.db_path)
+        self.storage.initialize()
 
     def log_request(
         self,
@@ -76,23 +44,17 @@ class TelemetryLogger:
         latency_ms: float,
         upstream: str = "",
     ):
-        self.conn.execute(
-            """INSERT INTO requests
-               (timestamp, method, url, upstream, request_headers, request_body,
-                response_status, response_headers, response_body, latency_ms)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                datetime.now(timezone.utc).isoformat(),
-                method, url, upstream,
-                json.dumps(request_headers),
-                request_body,
-                response_status,
-                json.dumps(response_headers),
-                response_body,
-                latency_ms,
-            ),
+        self.storage.log_request(
+            method=method,
+            url=url,
+            request_headers=request_headers,
+            request_body=request_body,
+            response_status=response_status,
+            response_headers=response_headers,
+            response_body=response_body,
+            latency_ms=latency_ms,
+            upstream=upstream,
         )
-        self.conn.commit()
 
     def close(self):
-        self.conn.close()
+        self.storage.close()
