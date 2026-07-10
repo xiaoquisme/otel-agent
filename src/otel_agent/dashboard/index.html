@@ -41,7 +41,7 @@ tr:hover { background: #161b22; cursor: pointer; }
 .detail-section { margin-bottom: 20px; }
 .detail-section h3 { font-size: 13px; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; }
 
-/* Request/Response Section Styling (012-dashboard-request-styling) */
+/* Request/Response Section Styling */
 .detail-section-request {
   border-left: 3px solid #58a6ff;
   background: rgba(88, 166, 255, 0.05);
@@ -72,22 +72,59 @@ tr:hover { background: #161b22; cursor: pointer; }
 .chart-wrap { padding: 16px 24px; }
 .chart-wrap canvas { max-height: 200px; }
 
-/* JSON Viewer — Syntax Highlighting (T001) */
+/* JSON Viewer — Syntax Highlighting */
 .json-key { color: #79c0ff; }
 .json-string { color: #a5d6ff; }
 .json-number { color: #d2a8ff; }
 .json-boolean { color: #58a6ff; }
 .json-null { color: #8b949e; font-style: italic; }
 
-/* Body Viewer States (T001) */
+/* Body Viewer States */
 .body-empty { color: #8b949e; font-style: italic; }
 .body-raw pre { background: #0d1117; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
-
 
 /* Usage Summary Bar */
 .usage-summary { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; font-size: 12px; color: #8b949e; display: flex; gap: 16px; align-items: center; }
 .usage-summary .usage-item { display: flex; gap: 4px; }
 .usage-summary .usage-value { color: #e1e4e8; font-weight: 600; }
+
+/* LLM Body Viewer — Chat Messages */
+.chat-message { margin-bottom: 12px; border-radius: 8px; padding: 10px 14px; }
+.chat-system { background: #1c2128; border: 1px solid #30363d; }
+.chat-user { background: #1a2332; border-left: 3px solid #58a6ff; }
+.chat-assistant { background: #1a2a1f; border-left: 3px solid #3fb950; }
+.chat-role { display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase; margin-bottom: 6px; padding: 1px 6px; border-radius: 3px; }
+.chat-system .chat-role { background: #30363d; color: #8b949e; }
+.chat-user .chat-role { background: #1f3a5c; color: #58a6ff; }
+.chat-assistant .chat-role { background: #1f3a2e; color: #3fb950; }
+.chat-content { font-size: 13px; line-height: 1.6; max-height: 500px; overflow-y: auto; }
+.chat-content p { margin-bottom: 8px; }
+.chat-content p:last-child { margin-bottom: 0; }
+.chat-content pre { background: #0d1117; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; margin: 8px 0; }
+.chat-content code { background: #21262d; padding: 1px 4px; border-radius: 3px; font-size: 12px; font-family: 'SF Mono', 'Fira Code', monospace; }
+.chat-content pre code { background: none; padding: 0; }
+.chat-content ul, .chat-content ol { padding-left: 20px; margin: 8px 0; }
+.chat-content li { margin-bottom: 4px; }
+.chat-content blockquote { border-left: 3px solid #30363d; padding-left: 12px; color: #8b949e; margin: 8px 0; }
+.chat-content h1, .chat-content h2, .chat-content h3 { margin: 12px 0 6px; }
+.chat-content h1 { font-size: 16px; }
+.chat-content h2 { font-size: 14px; }
+.chat-content h3 { font-size: 13px; }
+
+/* Response Metadata */
+.response-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.response-meta-badge { background: #21262d; border: 1px solid #30363d; border-radius: 4px; padding: 3px 8px; font-size: 12px; color: #e1e4e8; }
+.response-meta-badge.model { border-color: #58a6ff; color: #58a6ff; }
+.response-meta-badge.finish { border-color: #3fb950; color: #3fb950; }
+
+/* Body Viewer Toggle */
+.body-viewer { position: relative; }
+.body-toggle-bar { display: flex; gap: 4px; margin-bottom: 8px; }
+.body-toggle-btn { background: #21262d; border: 1px solid #30363d; color: #8b949e; padding: 2px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.body-toggle-btn.active { background: #30363d; color: #e1e4e8; }
+
+/* Anthropic Content Block Placeholders */
+.content-placeholder { color: #8b949e; font-style: italic; font-size: 12px; padding: 4px 8px; background: #1c2128; border-radius: 4px; display: inline-block; }
 </style>
 </head>
 <body>
@@ -152,9 +189,11 @@ tr:hover { background: #161b22; cursor: pointer; }
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.9/dist/purify.min.js"></script>
 <script>
 let currentCursor = 0;
-let cursorStack = [];  // Stack of previous cursors for "Prev" navigation
+let cursorStack = [];
 let chart = null;
 let chartData = [];
 
@@ -241,12 +280,10 @@ async function showDetail(id) {
   const r = await resp.json();
   const body = document.getElementById('detail-body');
 
-  // Parse request and response bodies for annotation context
   let reqParsed = null, respParsed = null;
   try { reqParsed = JSON.parse(r.request_body); } catch(e) {}
   try { respParsed = JSON.parse(r.response_body); } catch(e) {}
 
-  // Build usage summary for response if usage field exists
   let usageBar = '';
   if (respParsed && respParsed.usage) {
     usageBar = '<div class="usage-summary">' + renderUsageSummary(respParsed.usage) + '</div>';
@@ -288,14 +325,12 @@ function formatHeaders(h) {
   return Object.entries(h).map(([k,v]) => `${k}: ${v}`).join('\n');
 }
 
-/* ========== JSON Viewer Utilities (Phase 2: T003-T005) ========== */
+/* ========== JSON Viewer Utilities ========== */
 
-/** Escape HTML special characters for safe insertion (T003) */
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/** Recursively render a JSON value as syntax-highlighted HTML string (T004) */
 function highlightJsonString(value, indent) {
   const pad = '  '.repeat(indent);
   if (value === null) return `${pad}<span class="json-null">null</span>`;
@@ -320,11 +355,8 @@ function highlightJsonString(value, indent) {
   return pad + String(value);
 }
 
-/** Render compact usage summary bar (T018) */
 function renderUsageSummary(usage) {
   if (!usage) return '';
-  // OpenAI format: prompt_tokens / completion_tokens / total_tokens
-  // Anthropic format: input_tokens / output_tokens
   const parts = [];
   const input = usage.input_tokens ?? usage.prompt_tokens;
   const output = usage.output_tokens ?? usage.completion_tokens;
@@ -336,9 +368,107 @@ function renderUsageSummary(usage) {
   return 'Tokens: ' + parts.join(' / ');
 }
 
-/* ========== Body Viewer ========== */
+/* ========== LLM Format Detection ========== */
 
-/** Render a body with syntax-highlighted raw view */
+function detectFormat(parsed) {
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (parsed.choices && Array.isArray(parsed.choices)) return 'openai-response';
+  if (parsed.content && Array.isArray(parsed.content) && parsed.type === 'message') return 'anthropic-response';
+  if (parsed.messages && Array.isArray(parsed.messages) && parsed.model && parsed.max_tokens === undefined) return 'openai-request';
+  if (parsed.messages && Array.isArray(parsed.messages) && parsed.max_tokens !== undefined) return 'anthropic-request';
+  return null;
+}
+
+/* ========== Markdown Rendering ========== */
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  if (typeof text !== 'string') text = String(text);
+  try {
+    const html = marked.parse(text);
+    return DOMPurify.sanitize(html);
+  } catch(e) {
+    return '<pre>' + escapeHtml(text) + '</pre>';
+  }
+}
+
+/* ========== LLM Content Extraction ========== */
+
+function extractOpenAiRequestContent(parsed) {
+  if (!parsed || !parsed.messages) return null;
+  return parsed.messages.map(m => ({ role: m.role || 'unknown', content: m.content || '' }));
+}
+
+function extractOpenAiResponseContent(parsed) {
+  if (!parsed || !parsed.choices || !parsed.choices.length) return null;
+  const choice = parsed.choices[0];
+  const msg = choice.message || choice.delta || {};
+  return { content: msg.content || '', model: parsed.model || '', finishReason: choice.finish_reason || '' };
+}
+
+function extractAnthropicRequestContent(parsed) {
+  if (!parsed || !parsed.messages) return null;
+  const messages = [];
+  if (parsed.system) {
+    const sysContent = typeof parsed.system === 'string' ? parsed.system :
+      (Array.isArray(parsed.system) ? parsed.system.filter(b => b.type === 'text').map(b => b.text).join('\n') : '');
+    if (sysContent) messages.push({ role: 'system', content: sysContent });
+  }
+  parsed.messages.forEach(m => {
+    let content = '';
+    if (typeof m.content === 'string') {
+      content = m.content;
+    } else if (Array.isArray(m.content)) {
+      content = m.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+    }
+    messages.push({ role: m.role || 'unknown', content });
+  });
+  return messages;
+}
+
+function extractAnthropicResponseContent(parsed) {
+  if (!parsed || !parsed.content) return null;
+  const textBlocks = parsed.content.filter(b => b.type === 'text');
+  const content = textBlocks.map(b => b.text).join('\n\n');
+  return { content, model: parsed.model || '', stopReason: parsed.stop_reason || '' };
+}
+
+/* ========== LLM Chat Rendering ========== */
+
+function renderChatMessage(role, content) {
+  const roleClass = 'chat-' + (role || 'unknown');
+  const renderedContent = renderMarkdown(content);
+  return `<div class="chat-message ${roleClass}"><span class="chat-role">${escapeHtml(role)}</span><div class="chat-content">${renderedContent}</div></div>`;
+}
+
+function renderLlmRequestBody(parsed) {
+  const format = detectFormat(parsed);
+  let messages = null;
+  if (format === 'openai-request') messages = extractOpenAiRequestContent(parsed);
+  else if (format === 'anthropic-request') messages = extractAnthropicRequestContent(parsed);
+  if (!messages || !messages.length) return null;
+  return messages.map(m => renderChatMessage(m.role, m.content)).join('');
+}
+
+function renderLlmResponseBody(parsed) {
+  const format = detectFormat(parsed);
+  let data = null;
+  if (format === 'openai-response') data = extractOpenAiResponseContent(parsed);
+  else if (format === 'anthropic-response') data = extractAnthropicResponseContent(parsed);
+  if (!data) return null;
+
+  let metaHtml = '<div class="response-meta">';
+  if (data.model) metaHtml += `<span class="response-meta-badge model">${escapeHtml(data.model)}</span>`;
+  const finishReason = data.finishReason || data.stopReason;
+  if (finishReason) metaHtml += `<span class="response-meta-badge finish">${escapeHtml(finishReason)}</span>`;
+  metaHtml += '</div>';
+
+  const contentHtml = renderMarkdown(data.content);
+  return `${metaHtml}<div class="chat-message chat-assistant"><div class="chat-content">${contentHtml}</div></div>`;
+}
+
+/* ========== Body Viewer with Toggle ========== */
+
 function formatBody(b, context) {
   if (!b) return '<div class="body-empty">(empty)</div>';
 
@@ -347,26 +477,56 @@ function formatBody(b, context) {
   try {
     parsed = JSON.parse(b);
     isValidJson = true;
-  } catch(e) {
-    // Not valid JSON
-  }
+  } catch(e) {}
 
   if (!isValidJson) {
     return `<div class="body-raw"><pre>${escapeHtml(b)}</pre><div style="color:#8b949e;font-size:12px;margin-top:4px;">Content is not valid JSON</div></div>`;
   }
 
-  // Valid JSON — render syntax-highlighted raw view
+  const format = detectFormat(parsed);
+  if (format) {
+    const isRequest = format.endsWith('-request');
+    const llmHtml = isRequest ? renderLlmRequestBody(parsed) : renderLlmResponseBody(parsed);
+    if (llmHtml) {
+      const bodyId = 'body-' + Math.random().toString(36).slice(2, 8);
+      const rawHtml = `<pre>${highlightJsonString(parsed, 0)}</pre>`;
+      return `
+        <div class="body-viewer" id="${bodyId}">
+          <div class="body-toggle-bar">
+            <button class="body-toggle-btn active" data-view="llm" data-body-id="${bodyId}">Formatted</button>
+            <button class="body-toggle-btn" data-view="raw" data-body-id="${bodyId}">Raw</button>
+          </div>
+          <div class="body-llm-view" data-body-id="${bodyId}">${llmHtml}</div>
+          <div class="body-raw-view" data-body-id="${bodyId}" style="display:none">${rawHtml}</div>
+        </div>`;
+    }
+  }
+
   return `<div class="body-raw"><pre>${highlightJsonString(parsed, 0)}</pre></div>`;
 }
 
 /* ========== Event Delegation ========== */
 
 document.getElementById('detail-body').addEventListener('click', function(e) {
-  // Event delegation for future interactive elements
+  const viewToggle = e.target.closest('.body-toggle-btn');
+  if (viewToggle) {
+    const bodyId = viewToggle.getAttribute('data-body-id');
+    const viewer = document.getElementById(bodyId);
+    if (!viewer) return;
+    const view = viewToggle.getAttribute('data-view');
+    viewer.querySelectorAll('.body-toggle-btn').forEach(btn => btn.classList.remove('active'));
+    viewToggle.classList.add('active');
+    const llmContainer = viewer.querySelector('.body-llm-view');
+    const rawContainer = viewer.querySelector('.body-raw-view');
+    if (view === 'llm') {
+      llmContainer.style.display = '';
+      rawContainer.style.display = 'none';
+    } else {
+      llmContainer.style.display = 'none';
+      rawContainer.style.display = '';
+    }
+  }
 });
-
-/* ========== showDetail Update ========== */
-// showDetail already uses formatBody(b, context) above.
 
 /* ========== Existing Functions ========== */
 
