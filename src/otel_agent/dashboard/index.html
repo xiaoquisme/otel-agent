@@ -288,6 +288,13 @@ async function showDetail(id) {
   if (respParsed && respParsed.usage) {
     usageBar = '<div class="usage-summary">' + renderUsageSummary(respParsed.usage) + '</div>';
   }
+  // Streaming preview may have usage in the last chunk
+  if (!usageBar && respParsed && respParsed.streamed && respParsed.preview) {
+    const chunks = parseStreamingChunks(respParsed.preview);
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      if (chunks[i].usage) { usageBar = '<div class="usage-summary">' + renderUsageSummary(chunks[i].usage) + '</div>'; break; }
+    }
+  }
 
   body.innerHTML = `
     <div class="detail-section">
@@ -372,11 +379,50 @@ function renderUsageSummary(usage) {
 
 function detectFormat(parsed) {
   if (!parsed || typeof parsed !== 'object') return null;
+  // Streaming preview: {"streamed": true, "preview": "...concatenated chunks..."}
+  if (parsed.streamed && parsed.preview) return 'streaming-preview';
   if (parsed.choices && Array.isArray(parsed.choices)) return 'openai-response';
   if (parsed.content && Array.isArray(parsed.content) && parsed.type === 'message') return 'anthropic-response';
   if (parsed.messages && Array.isArray(parsed.messages) && parsed.model && parsed.max_tokens === undefined) return 'openai-request';
   if (parsed.messages && Array.isArray(parsed.messages) && parsed.max_tokens !== undefined) return 'anthropic-request';
   return null;
+}
+
+/* ========== Streaming Preview Parsing ========== */
+
+function parseStreamingChunks(previewStr) {
+  // Split concatenated JSON objects: {"choices":[...]}{"choices":[...]}
+  const chunks = [];
+  let depth = 0, start = -1;
+  for (let i = 0; i < previewStr.length; i++) {
+    if (previewStr[i] === '{') { if (depth === 0) start = i; depth++; }
+    else if (previewStr[i] === '}') { depth--; if (depth === 0 && start >= 0) { try { chunks.push(JSON.parse(previewStr.slice(start, i + 1))); } catch(e) {} start = -1; } }
+  }
+  return chunks;
+}
+
+function extractStreamingContent(parsed) {
+  if (!parsed || !parsed.preview) return null;
+  const chunks = parseStreamingChunks(parsed.preview);
+  if (!chunks.length) return null;
+  // Reassemble content from delta chunks
+  let content = '';
+  let reasoningContent = '';
+  let model = '';
+  let finishReason = '';
+  for (const chunk of chunks) {
+    if (chunk.model) model = chunk.model;
+    const choice = chunk.choices && chunk.choices[0];
+    if (!choice) continue;
+    if (choice.finish_reason) finishReason = choice.finish_reason;
+    const delta = choice.delta || {};
+    if (delta.content) content += delta.content;
+    if (delta.reasoning_content) reasoningContent += delta.reasoning_content;
+  }
+  // Show reasoning content as a note if present
+  let fullContent = content;
+  if (reasoningContent) fullContent = content + '\n\n---\n**Reasoning:** ' + reasoningContent;
+  return { content: fullContent, model, finishReason: finishReason || 'streaming' };
 }
 
 /* ========== Markdown Rendering ========== */
@@ -450,10 +496,11 @@ function renderLlmRequestBody(parsed) {
   return messages.map(m => renderChatMessage(m.role, m.content)).join('');
 }
 
-function renderLlmResponseBody(parsed) {
+function renderLlmResponseBody(parsed, rawBody) {
   const format = detectFormat(parsed);
   let data = null;
-  if (format === 'openai-response') data = extractOpenAiResponseContent(parsed);
+  if (format === 'streaming-preview') data = extractStreamingContent(parsed);
+  else if (format === 'openai-response') data = extractOpenAiResponseContent(parsed);
   else if (format === 'anthropic-response') data = extractAnthropicResponseContent(parsed);
   if (!data) return null;
 
@@ -486,7 +533,7 @@ function formatBody(b, context) {
   const format = detectFormat(parsed);
   if (format) {
     const isRequest = format.endsWith('-request');
-    const llmHtml = isRequest ? renderLlmRequestBody(parsed) : renderLlmResponseBody(parsed);
+    const llmHtml = isRequest ? renderLlmRequestBody(parsed) : renderLlmResponseBody(parsed, b);
     if (llmHtml) {
       const bodyId = 'body-' + Math.random().toString(36).slice(2, 8);
       const rawHtml = `<pre>${highlightJsonString(parsed, 0)}</pre>`;
