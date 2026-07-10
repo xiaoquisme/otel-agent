@@ -355,12 +355,12 @@ async def _handle_streaming(
             stream_status = 504
             error_msg = json.dumps({"error": {"message": "Timeout", "type": "server_error"}})
             yield f"data: {error_msg}\n\n".encode()
-
-        latency_ms = (time.monotonic() - start_time) * 1000
-        _log_telemetry(
-            telemetry, request, stream_status, {"streamed": True, "preview": collected_text[:5_000]}, latency_ms, provider,
-            request_body=request_body, resp_headers=resp_headers, log_body=log_body,
-        )
+        finally:
+            latency_ms = (time.monotonic() - start_time) * 1000
+            _log_telemetry(
+                telemetry, request, stream_status, {"streamed": True, "preview": collected_text[:5_000]}, latency_ms, provider,
+                request_body=request_body, resp_headers=resp_headers, log_body=log_body,
+            )
 
     media_type = "text/event-stream"
     return StreamingResponse(stream_generator(), media_type=media_type)
