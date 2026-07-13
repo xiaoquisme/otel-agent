@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from otel_agent.dashboard.render import render_request_body, render_response_body
+from otel_agent.dashboard.message_parser import parse_messages
 from otel_agent.storage import create_storage
 
 
@@ -72,16 +72,17 @@ class DashboardAPI:
                     "output_tokens": 0, "eligible_request_count": 0, "excluded_request_count": 0, "models": []}
         return self._storage.get_usage_summary(start, end)
 
-    def get_rendered_request(self, request_id: int) -> dict | None:
-        """Get a request with pre-rendered HTML for LLM bodies."""
+    def get_structured_request(self, request_id: int) -> dict | None:
+        """Get a request with parsed structured messages for frontend rendering."""
         result = self.get_request(request_id)
         if result is None:
             return None
         fmt = result.get("format")
         req_body = result.get("request_body") or ""
         resp_body = result.get("response_body") or ""
-        result["rendered_request"] = render_request_body(req_body, fmt)
-        result["rendered_response"] = render_response_body(resp_body, fmt)
+        parsed = parse_messages(req_body, resp_body, fmt)
+        result["messages"] = parsed["messages"]
+        result["metadata"] = parsed["metadata"]
         return result
 
     def clear_cache(self) -> None:
