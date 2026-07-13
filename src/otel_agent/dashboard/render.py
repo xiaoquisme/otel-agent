@@ -29,9 +29,16 @@ def detect_format(body: str, format_tag: str | None = None) -> str:
     """Detect the LLM format of a body string.
 
     Returns one of: ``"openai"``, ``"anthropic"``, ``"streaming"``, ``"unknown"``.
-    Uses *format_tag* from storage when available; otherwise applies the same
-    heuristic as the JS ``detectFormat`` function.
+    Body content is checked first — streaming preview is detected regardless of
+    *format_tag* because the tag stores the client API format (e.g. "openai"),
+    not whether the response was streamed.
     """
+    parsed = _parse_body(body)
+
+    # Streaming preview — body content takes priority over format_tag
+    if parsed and isinstance(parsed, dict) and parsed.get("streamed") and parsed.get("preview"):
+        return "streaming"
+
     if format_tag:
         tag = format_tag.lower().strip()
         if "stream" in tag:
@@ -41,13 +48,8 @@ def detect_format(body: str, format_tag: str | None = None) -> str:
         if "openai" in tag or "gpt" in tag:
             return "openai"
 
-    parsed = _parse_body(body)
     if not parsed or not isinstance(parsed, dict):
         return "unknown"
-
-    # Streaming preview
-    if parsed.get("streamed") and parsed.get("preview"):
-        return "streaming"
     # OpenAI response
     if isinstance(parsed.get("choices"), list):
         return "openai"

@@ -130,6 +130,21 @@ class TestDetectFormat:
         body = json.dumps({})
         assert detect_format(body, "claude-response") == "anthropic"
 
+    def test_streaming_body_overrides_openai_format_tag(self) -> None:
+        """Streaming preview body must be detected even when format_tag='openai'.
+
+        Regression: the DB format column stores the client API format (e.g.
+        'openai'), not whether the response was streamed. detect_format must
+        check body content first so streaming previews are routed to the
+        streaming parser.
+        """
+        body = _make_streaming_preview()
+        assert detect_format(body, "openai") == "streaming"
+
+    def test_streaming_body_overrides_anthropic_format_tag(self) -> None:
+        body = _make_streaming_preview()
+        assert detect_format(body, "anthropic") == "streaming"
+
 
 # ---------------------------------------------------------------------------
 # Tests: streaming chunk parser
