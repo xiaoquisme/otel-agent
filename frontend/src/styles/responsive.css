@@ -1,0 +1,81 @@
+/* Responsive Breakpoints */
+
+/* Mobile (default) */
+@media (max-width: 640px) {
+  .usage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .request-table {
+    font-size: var(--text-xs);
+  }
+
+  .request-table th,
+  .request-table td {
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .detail-header {
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .detail-meta {
+    flex-wrap: wrap;
+  }
+
+  .metadata-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Tablet */
+@media (min-width: 641px) and (max-width: 1024px) {
+  .usage-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .metadata-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Desktop */
+@media (min-width: 1025px) {
+  .usage-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .metadata-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* Large Desktop */
+@media (min-width: 1280px) {
+  .metadata-grid {
+    grid-template-columns: repeat(6, 1fr);
+  }
+}
+
+/* Keyboard navigation styles */
+[data-focus-visible] {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 2px;
+}
+
+/* Smooth transitions for interactive elements */
+button, a, [role="button"] {
+  transition: background var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+/* Focus ring for accessibility */
+button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: 2px;
+}

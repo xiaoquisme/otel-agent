@@ -11,25 +11,59 @@ interface MessageDisplayProps {
 }
 
 function MessageBubble({ message }: { message: StructuredMessage }) {
-  const roleColors: Record<string, string> = {
-    system: 'bg-[#1c1c2e] border-[#3b3b5c] text-[#a0a0c0]',
-    user: 'bg-[#1a2332] border-[#2d4a6f] text-[#c8daf0]',
-    assistant: 'bg-[#1a2e1a] border-[#2d6f2d] text-[#c8e8c8]',
-    tool: 'bg-[#2e2a1a] border-[#6f5f2d] text-[#e8dcc8]',
+  const roleStyles: Record<string, { bg: string; border: string; text: string; label: string }> = {
+    system: { bg: 'var(--color-bg-elevated)', border: 'var(--color-border-default)', text: 'var(--color-text-secondary)', label: 'system' },
+    user: { bg: 'var(--color-accent-blue-muted)', border: 'var(--color-accent-blue)', text: 'var(--color-accent-blue)', label: 'user' },
+    assistant: { bg: 'var(--color-accent-green-muted)', border: 'var(--color-accent-green)', text: 'var(--color-accent-green)', label: 'assistant' },
+    tool: { bg: 'var(--color-accent-yellow-muted)', border: 'var(--color-accent-yellow)', text: 'var(--color-accent-yellow)', label: 'tool' },
   }
-  const roleLabels: Record<string, string> = {
-    system: 'system',
-    user: 'user',
-    assistant: 'assistant',
-    tool: 'tool',
+
+  const role = roleStyles[message.role] || roleStyles.assistant
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content || '')
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard API not available
+    }
   }
 
   return (
-    <div className={`rounded-lg border p-4 mb-3 ${roleColors[message.role] || roleColors.assistant}`}>
-      <div className="flex items-center gap-2 mb-2">
-        <span className="text-xs font-mono opacity-70 uppercase tracking-wider">
-          {roleLabels[message.role] || message.role}
+    <div style={{
+      borderRadius: 'var(--radius-lg)',
+      border: `1px solid ${role.border}`,
+      background: role.bg,
+      padding: 'var(--space-4)',
+      marginBottom: 'var(--space-3)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
+        <span style={{
+          fontSize: 'var(--text-xs)',
+          fontFamily: 'var(--font-mono)',
+          opacity: 0.7,
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+          color: role.text,
+        }}>
+          {role.label}
         </span>
+        <button
+          onClick={handleCopy}
+          style={{
+            marginLeft: 'auto',
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--color-text-secondary)',
+            cursor: 'pointer',
+            fontSize: 'var(--text-xs)',
+            padding: '2px 4px',
+          }}
+        >
+          {copied ? '✓ Copied' : 'Copy'}
+        </button>
       </div>
 
       {message.reasoning_content && (
@@ -37,7 +71,7 @@ function MessageBubble({ message }: { message: StructuredMessage }) {
       )}
 
       {message.content && (
-        <div className="prose prose-invert prose-sm max-w-none">
+        <div style={{ color: 'var(--color-text-primary)', lineHeight: 'var(--leading-relaxed)' }}>
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[rehypeHighlight]}
@@ -48,11 +82,11 @@ function MessageBubble({ message }: { message: StructuredMessage }) {
       )}
 
       {!message.content && !message.reasoning_content && (
-        <div className="text-[#8b949e] italic text-sm">(empty)</div>
+        <div style={{ color: 'var(--color-text-secondary)', fontStyle: 'italic', fontSize: 'var(--text-sm)' }}>(empty)</div>
       )}
 
       {message.tool_calls && message.tool_calls.length > 0 && (
-        <div className="mt-3 space-y-2">
+        <div style={{ marginTop: 'var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
           {message.tool_calls.map((tc, i) => (
             <ToolCallBlock key={i} name={tc.name} arguments={tc.arguments} />
           ))}
@@ -65,19 +99,19 @@ function MessageBubble({ message }: { message: StructuredMessage }) {
 function MetadataBar({ metadata }: { metadata: MessageMetadata }) {
   if (!metadata) return null
   return (
-    <div className="flex flex-wrap gap-2 mb-4 text-xs">
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', marginBottom: 'var(--space-4)', fontSize: 'var(--text-xs)' }}>
       {metadata.model && (
-        <span className="px-2 py-1 rounded bg-[#30363d] text-[#58a6ff] font-mono">
+        <span style={{ padding: 'var(--space-1) var(--space-2)', borderRadius: 'var(--radius-sm)', background: 'var(--color-bg-overlay)', color: 'var(--color-accent-blue)', fontFamily: 'var(--font-mono)' }}>
           {metadata.model}
         </span>
       )}
       {metadata.finish_reason && (
-        <span className="px-2 py-1 rounded bg-[#30363d] text-[#8b949e]">
+        <span style={{ padding: 'var(--space-1) var(--space-2)', borderRadius: 'var(--radius-sm)', background: 'var(--color-bg-overlay)', color: 'var(--color-text-secondary)' }}>
           {metadata.finish_reason}
         </span>
       )}
       {metadata.usage && (
-        <span className="px-2 py-1 rounded bg-[#30363d] text-[#8b949e]">
+        <span style={{ padding: 'var(--space-1) var(--space-2)', borderRadius: 'var(--radius-sm)', background: 'var(--color-bg-overlay)', color: 'var(--color-text-secondary)' }}>
           {metadata.usage.input_tokens ?? '?'} in / {metadata.usage.output_tokens ?? '?'} out
         </span>
       )}
@@ -85,17 +119,19 @@ function MetadataBar({ metadata }: { metadata: MessageMetadata }) {
   )
 }
 
+import { useState } from 'react'
+
 export default function MessageDisplay({ messages, metadata }: MessageDisplayProps) {
   if (!messages || messages.length === 0) {
     return (
-      <div className="text-[#8b949e] italic text-sm py-4">
+      <div style={{ color: 'var(--color-text-secondary)', fontStyle: 'italic', fontSize: 'var(--text-sm)', padding: 'var(--space-4) 0' }}>
         No parsed messages available for this request.
       </div>
     )
   }
 
   return (
-    <div className="space-y-1">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
       {metadata && <MetadataBar metadata={metadata} />}
       {messages.map((msg, i) => (
         <MessageBubble key={i} message={msg} />

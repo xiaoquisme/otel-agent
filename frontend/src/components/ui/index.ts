@@ -1,0 +1,11 @@
+// UI Primitives — barrel export
+export { default as Button, type ButtonProps, type ButtonVariant, type ButtonSize } from './Button'
+export { Card, CardSection, CardHeader, CardTitle, CardDescription } from './Card'
+export { default as Badge, type BadgeProps, type BadgeVariant, type BadgeSize } from './Badge'
+export { default as Tabs, TabList, Tab, TabPanel, type TabsProps } from './Tabs'
+export { default as CodeBlock } from './CodeBlock'
+export { Collapsible, CollapsibleTrigger, CollapsibleContent, CollapsibleRoot, type CollapsibleProps } from './Collapsible'
+export { default as SearchInput, type SearchInputProps } from './SearchInput'
+export { default as Select, SelectGroup, SelectOption, type SelectProps } from './Select'
+export { default as Skeleton, SkeletonText, SkeletonCard } from './Skeleton'
+export { default as Tooltip, type TooltipProps } from './Tooltip'

@@ -25,8 +25,8 @@ export default function LatencyChart({ requests }: LatencyChartProps) {
         datasets: [{
           label: 'Latency (ms)',
           data: [],
-          borderColor: '#58a6ff',
-          backgroundColor: 'rgba(88,166,255,0.1)',
+          borderColor: 'var(--color-accent-blue)',
+          backgroundColor: 'rgba(88, 166, 255, 0.1)',
           fill: true,
           tension: 0.3,
         }],
@@ -36,7 +36,10 @@ export default function LatencyChart({ requests }: LatencyChartProps) {
         plugins: { legend: { display: false } },
         scales: {
           x: { display: false },
-          y: { grid: { color: '#21262d' }, ticks: { color: '#8b949e' } },
+          y: {
+            grid: { color: 'var(--color-border-muted)' },
+            ticks: { color: 'var(--color-text-secondary)' },
+          },
         },
       },
     })
@@ -61,8 +64,8 @@ export default function LatencyChart({ requests }: LatencyChartProps) {
   }, [requests])
 
   return (
-    <div className="px-6 py-2">
-      <canvas ref={canvasRef} className="max-h-[200px]" />
+    <div style={{ padding: 'var(--space-2) 0' }}>
+      <canvas ref={canvasRef} style={{ maxHeight: '200px' }} />
     </div>
   )
 }

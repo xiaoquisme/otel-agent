@@ -10,9 +10,13 @@ export default function UsageOverview() {
 
   if (loading) {
     return (
-      <div className="px-6 py-4">
-        <h2 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wide mb-3">Usage Today</h2>
-        <div className="text-[#8b949e] text-sm py-4 text-center">Loading usage data...</div>
+      <div style={{ padding: 'var(--space-4) 0' }}>
+        <h2 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 'var(--space-3)' }}>
+          Usage Today
+        </h2>
+        <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)', padding: 'var(--space-4) 0', textAlign: 'center' }}>
+          Loading usage data...
+        </div>
       </div>
     )
   }
@@ -20,32 +24,36 @@ export default function UsageOverview() {
   if (!usage) return null
 
   return (
-    <div className="px-6 py-4">
-      <h2 className="text-sm font-semibold text-[#8b949e] uppercase tracking-wide mb-3">Usage Today</h2>
-      <div className="grid grid-cols-3 gap-3 mb-4">
+    <div style={{ padding: 'var(--space-4) 0' }}>
+      <h2 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 'var(--space-3)' }}>
+        Usage Today
+      </h2>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
         <UsageCard label="Total Tokens" value={formatNumber(usage.total_tokens)} />
         <UsageCard label="Input Tokens" value={formatNumber(usage.input_tokens)} />
         <UsageCard label="Output Tokens" value={formatNumber(usage.output_tokens)} />
       </div>
       {usage.excluded_request_count > 0 && (
-        <p className="text-xs text-[#8b949e] mb-2">
-          <strong className="text-[#e1e4e8]">{formatNumber(usage.excluded_request_count)}</strong> request(s) excluded — no token data.
+        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-2)' }}>
+          <strong style={{ color: 'var(--color-text-primary)' }}>{formatNumber(usage.excluded_request_count)}</strong> request(s) excluded — no token data.
         </p>
       )}
       {usage.eligible_request_count === 0 && usage.excluded_request_count === 0 && (
-        <p className="text-xs text-[#8b949e] italic">No requests with token data recorded today.</p>
+        <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', fontStyle: 'italic' }}>No requests with token data recorded today.</p>
       )}
       {usage.models && usage.models.length > 0 && (
-        <div className="mt-4">
-          <h3 className="text-xs text-[#8b949e] uppercase tracking-wide mb-2">Model Breakdown</h3>
-          <table className="w-full text-sm">
+        <div style={{ marginTop: 'var(--space-4)' }}>
+          <h3 style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 'var(--space-2)' }}>
+            Model Breakdown
+          </h3>
+          <table style={{ width: '100%', fontSize: 'var(--text-sm)' }}>
             <thead>
-              <tr className="border-b border-[#30363d]">
-                <th className="text-left py-1 px-2 text-[11px] text-[#8b949e] uppercase">#</th>
-                <th className="text-left py-1 px-2 text-[11px] text-[#8b949e] uppercase">Model</th>
-                <th className="text-right py-1 px-2 text-[11px] text-[#8b949e] uppercase">Total</th>
-                <th className="text-right py-1 px-2 text-[11px] text-[#8b949e] uppercase">Requests</th>
-                <th className="w-30 py-1 px-2"></th>
+              <tr style={{ borderBottom: '1px solid var(--color-border-default)' }}>
+                <th style={{ textAlign: 'left', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', textTransform: 'uppercase' }}>#</th>
+                <th style={{ textAlign: 'left', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', textTransform: 'uppercase' }}>Model</th>
+                <th style={{ textAlign: 'right', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', textTransform: 'uppercase' }}>Total</th>
+                <th style={{ textAlign: 'right', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', textTransform: 'uppercase' }}>Requests</th>
+                <th style={{ width: '120px', padding: 'var(--space-1) var(--space-2)' }}></th>
               </tr>
             </thead>
             <tbody>
@@ -53,14 +61,14 @@ export default function UsageOverview() {
                 const maxTokens = usage.models[0].total_tokens || 1
                 const pct = Math.round(((m.total_tokens || 0) / maxTokens) * 100)
                 return (
-                  <tr key={i} className="border-b border-[#21262d]">
-                    <td className="py-1 px-2 text-[#8b949e] font-semibold">{i + 1}</td>
-                    <td className="py-1 px-2 font-mono text-xs text-[#58a6ff]">{m.model_name || 'Unknown'}</td>
-                    <td className="py-1 px-2 text-right tabular-nums">{formatNumber(m.total_tokens)}</td>
-                    <td className="py-1 px-2 text-right text-[#8b949e]">{formatNumber(m.request_count)}</td>
-                    <td className="py-1 px-2">
-                      <div className="h-1.5 rounded bg-[#30363d] overflow-hidden">
-                        <div className="h-full rounded bg-[#58a6ff]" style={{ width: `${pct}%` }} />
+                  <tr key={i} style={{ borderBottom: '1px solid var(--color-border-muted)' }}>
+                    <td style={{ padding: 'var(--space-1) var(--space-2)', color: 'var(--color-text-secondary)', fontWeight: 'var(--font-semibold)' }}>{i + 1}</td>
+                    <td style={{ padding: 'var(--space-1) var(--space-2)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--color-accent-blue)' }}>{m.model_name || 'Unknown'}</td>
+                    <td style={{ padding: 'var(--space-1) var(--space-2)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatNumber(m.total_tokens)}</td>
+                    <td style={{ padding: 'var(--space-1) var(--space-2)', textAlign: 'right', color: 'var(--color-text-secondary)' }}>{formatNumber(m.request_count)}</td>
+                    <td style={{ padding: 'var(--space-1) var(--space-2)' }}>
+                      <div style={{ height: '6px', borderRadius: 'var(--radius-full)', background: 'var(--color-bg-overlay)', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', borderRadius: 'var(--radius-full)', background: 'var(--color-accent-blue)', width: `${pct}%` }} />
                       </div>
                     </td>
                   </tr>
@@ -76,9 +84,9 @@ export default function UsageOverview() {
 
 function UsageCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="bg-[#161b22] border border-[#30363d] rounded-lg p-4">
-      <div className="text-[11px] text-[#8b949e] uppercase tracking-wide mb-1">{label}</div>
-      <div className="text-2xl font-bold tabular-nums">{value}</div>
+    <div style={{ background: 'var(--color-bg-surface)', border: '1px solid var(--color-border-default)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-4)' }}>
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 'var(--space-1)' }}>{label}</div>
+      <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 'var(--font-bold)', fontVariantNumeric: 'tabular-nums' }}>{value}</div>
     </div>
   )
 }
