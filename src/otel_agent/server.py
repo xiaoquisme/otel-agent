@@ -62,14 +62,27 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     set_dashboard_api(dashboard_api)
     app.include_router(dashboard_router)
 
-    @app.get("/", response_class=FileResponse)
-    async def serve_dashboard():
-        """Serve the dashboard index.html."""
+    # Serve React dashboard from frontend/dist/
+    _frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+    if (_frontend_dist / "index.html").exists():
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="static")
+
+        @app.get("/", response_class=FileResponse)
+        async def serve_dashboard():
+            """Serve the React dashboard."""
+            return FileResponse(_frontend_dist / "index.html", media_type="text/html")
+    else:
+        # Fallback: serve old index.html
         html_path = Path(__file__).parent / "dashboard" / "index.html"
-        if html_path.exists():
-            return FileResponse(html_path, media_type="text/html")
-        from fastapi.responses import HTMLResponse
-        return HTMLResponse("<h1>Dashboard</h1><p>index.html not found</p>")
+
+        @app.get("/", response_class=FileResponse)
+        async def serve_dashboard():
+            """Serve the dashboard index.html."""
+            if html_path.exists():
+                return FileResponse(html_path, media_type="text/html")
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse("<h1>Dashboard</h1><p>index.html not found</p>")
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
