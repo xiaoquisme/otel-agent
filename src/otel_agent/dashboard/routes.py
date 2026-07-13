@@ -68,12 +68,27 @@ def get_requests(
 
 @router.get("/requests/{request_id}")
 def get_request_detail(request_id: int) -> JSONResponse:
-    """Single request detail."""
+    """Single request detail with pre-rendered LLM bodies."""
     api = get_api()
-    result = api.get_request(request_id)
+    result = api.get_rendered_request(request_id)
     if result is None:
         return JSONResponse({"error": "Request not found"}, status_code=404)
     return JSONResponse(result)
+
+
+@router.get("/render/{request_id}")
+def render_request(request_id: int) -> JSONResponse:
+    """Pre-rendered LLM bodies for a request."""
+    api = get_api()
+    result = api.get_rendered_request(request_id)
+    if result is None:
+        return JSONResponse({"error": "Request not found"}, status_code=404)
+    return JSONResponse({
+        "id": result["id"],
+        "format": result.get("format"),
+        "rendered_request": result.get("rendered_request"),
+        "rendered_response": result.get("rendered_response"),
+    })
 
 
 @router.get("/events")
