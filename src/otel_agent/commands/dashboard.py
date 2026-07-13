@@ -1,5 +1,9 @@
-"""otel-agent dashboard subcommand."""
+"""otel-agent dashboard subcommand.
 
+Starts a standalone dashboard server using FastAPI (with only the dashboard
+routes).  When the proxy is running, the dashboard is already served at the
+proxy's root URL — use ``otel-agent proxy`` instead.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,8 +11,12 @@ from pathlib import Path
 
 def handle_dashboard(args) -> None:
     """Start the web dashboard server."""
-    from otel_agent.dashboard.server import DashboardServer
-    from otel_agent.process import get_proxy_status
+    from fastapi import FastAPI
+    from fastapi.responses import FileResponse
+    import uvicorn
+
+    from otel_agent.dashboard.api import DashboardAPI
+    from otel_agent.dashboard.routes import router as dashboard_router, set_api as set_dashboard_api
 
     db_path = Path(args.db).expanduser()
     port = args.port
@@ -18,15 +26,27 @@ def handle_dashboard(args) -> None:
         print("Start the proxy first: otel-agent proxy")
         return
 
-    # Detect proxy port for BUG-001 concurrent access fix
-    proxy_port = None
-    status = get_proxy_status()
-    if status is not None:
-        proxy_port = status["port"]
-        print(f"Proxy detected on :{proxy_port} — routing queries through proxy")
+    # Create a minimal FastAPI app with just the dashboard routes
+    app = FastAPI(title="otel-agent-dashboard", version="0.1.0")
 
-    server = DashboardServer(db_path=db_path, port=port, proxy_port=proxy_port)
+    dashboard_api = DashboardAPI(db_path)
+    set_dashboard_api(dashboard_api)
+    app.include_router(dashboard_router)
+
+    @app.get("/", response_class=FileResponse)
+    async def serve_dashboard():
+        """Serve the dashboard index.html."""
+        html_path = Path(__file__).parent.parent / "dashboard" / "index.html"
+        if html_path.exists():
+            return FileResponse(html_path, media_type="text/html")
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse("<h1>Dashboard</h1><p>index.html not found</p>")
+
+    @app.on_event("shutdown")
+    async def shutdown() -> None:
+        dashboard_api.close()
+
     print(f"Dashboard running at http://localhost:{port}")
     print(f"Database: {db_path}")
     print("Ctrl+C to stop\n")
-    server.serve()
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")

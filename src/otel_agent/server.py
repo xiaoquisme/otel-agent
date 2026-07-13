@@ -10,9 +10,11 @@ from typing import AsyncIterator
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from otel_agent.config import Config, Provider
+from otel_agent.dashboard.api import DashboardAPI
+from otel_agent.dashboard.routes import router as dashboard_router, set_api as set_dashboard_api
 from otel_agent.converter import (
     anthropic_to_openai_request,
     anthropic_to_openai_response,
@@ -53,10 +55,26 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     app = FastAPI(title="otel-agent", version="0.1.0")
     client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0))
     model_cache = ModelCache(config)
+    # ------------------------------------------------------------------
+    # Dashboard (merged into proxy process)
+    # ------------------------------------------------------------------
+    dashboard_api = DashboardAPI(telemetry.db_path)
+    set_dashboard_api(dashboard_api)
+    app.include_router(dashboard_router)
+
+    @app.get("/", response_class=FileResponse)
+    async def serve_dashboard():
+        """Serve the dashboard index.html."""
+        html_path = Path(__file__).parent / "dashboard" / "index.html"
+        if html_path.exists():
+            return FileResponse(html_path, media_type="text/html")
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse("<h1>Dashboard</h1><p>index.html not found</p>")
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
         await client.aclose()
+        dashboard_api.close()
         telemetry.close()
 
     # ------------------------------------------------------------------
@@ -202,49 +220,6 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     @app.get("/health")
     async def health() -> dict:
         return {"status": "ok"}
-
-    # ------------------------------------------------------------------
-    # Internal dashboard API (avoids DuckDB multi-process lock conflict)
-    # ------------------------------------------------------------------
-    @app.get("/internal/dashboard/requests")
-    async def internal_requests(
-        search: str = "",
-        method: str = "",
-        status: int = 0,
-        cursor: int = 0,
-        limit: int = 50,
-    ):
-        """Paginated request list for the dashboard (internal)."""
-        return _query_requests(telemetry, search, method, status, cursor, limit)
-
-    @app.get("/internal/dashboard/requests/{request_id}")
-    async def internal_request_detail(request_id: int):
-        """Single request detail for the dashboard (internal)."""
-        return _query_request_detail(telemetry, request_id)
-
-    @app.get("/internal/dashboard/max-id")
-    async def internal_max_id():
-        """Current max request ID for SSE (internal)."""
-        return _query_max_id(telemetry)
-
-    @app.get("/internal/dashboard/usage")
-    async def internal_usage(start: str, end: str):
-        """Current dashboard usage aggregate (internal)."""
-        return telemetry.storage.get_usage_summary(start, end)
-
-    @app.get("/internal/dashboard/requests-since/{last_id}")
-    async def internal_requests_since(last_id: int):
-        """New requests since last_id for SSE (internal)."""
-        return _query_requests_since(telemetry, last_id)
-
-    @app.get("/internal/dashboard/export")
-    async def internal_export(
-        search: str = "",
-        method: str = "",
-        status: int = 0,
-    ):
-        """All filtered requests for export (internal)."""
-        return _query_all_filtered(telemetry, search, method, status)
 
     return app
 
@@ -438,32 +413,4 @@ def _log_telemetry(
         logger.exception("Failed to log telemetry")
 
 
-# ------------------------------------------------------------------
-# Internal dashboard query helpers (use TelemetryLogger's storage backend)
-# ------------------------------------------------------------------
 
-
-def _query_requests(telemetry, search: str, method: str, status: int,
-                    cursor: int, limit: int) -> dict:
-    """Paginated request list — delegates to storage backend."""
-    return telemetry.storage.get_requests(search, method, status, cursor, limit)
-
-
-def _query_request_detail(telemetry, request_id: int) -> dict | None:
-    """Single request detail — delegates to storage backend."""
-    return telemetry.storage.get_request(request_id)
-
-
-def _query_max_id(telemetry) -> int:
-    """Current max request ID — delegates to storage backend."""
-    return telemetry.storage.get_max_id()
-
-
-def _query_requests_since(telemetry, last_id: int) -> list[dict]:
-    """New requests since last_id — delegates to storage backend."""
-    return telemetry.storage.get_requests_since(last_id)
-
-
-def _query_all_filtered(telemetry, search: str, method: str, status: int) -> list[dict]:
-    """All filtered requests — delegates to storage backend."""
-    return telemetry.storage.get_all_filtered(search, method, status)
