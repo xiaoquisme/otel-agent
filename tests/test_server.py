@@ -377,6 +377,13 @@ def test_normalize_usage_missing_usage():
     assert result == {"input_tokens": None, "output_tokens": None, "total_tokens": None}
 
 
+def test_normalize_usage_null_usage():
+    """Response with usage: null (e.g. xiaomi streaming chunks)."""
+    normalize = getattr(server, "normalize_usage")
+    result = normalize({"choices": [], "usage": None})
+    assert result == {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+
+
 def test_normalize_usage_one_component():
     """Only total_tokens provided — components are None."""
     normalize = getattr(server, "normalize_usage")
@@ -515,3 +522,49 @@ async def test_streaming_no_usage_all_null():
         assert row[0] is None
         assert row[1] is None
         assert row[2] is None
+
+
+@pytest.mark.anyio
+async def test_streaming_sends_done_when_upstream_does_not():
+    """Proxy MUST send 'data: [DONE]' even when upstream omits it.
+
+    Some providers (e.g. xiaomi/mimo) close the stream after the
+    finish_reason chunk without sending [DONE]. The proxy must
+    synthesize it so the client knows the stream is complete.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.duckdb"
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        chunks = [
+            {"choices": [{"delta": {"content": "Hello"}, "index": 0}]},
+            {"choices": [{"delta": {"content": " world"}, "index": 0}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop", "index": 0}]},
+        ]
+        # done=False simulates upstream closing without [DONE]
+        mock_stream = _FakeStreamMethod(chunks, done=False)
+
+        collected_text = ""
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/chat/completions",
+                    json={"model": "openai/gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                )
+                collected_text = resp.text
+
+        telemetry.close()
+
+        # The response MUST contain "data: [DONE]"
+        assert "data: [DONE]" in collected_text, (
+            f"Expected 'data: [DONE]' in response, got: {collected_text!r}"
+        )
+        # [DONE] must be the last data line
+        lines = [l.strip() for l in collected_text.strip().split("\n") if l.strip()]
+        assert lines[-1] == "data: [DONE]", (
+            f"Expected last line to be 'data: [DONE]', got: {lines[-1]!r}"
+        )

@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 
 def normalize_usage(response: dict | str) -> dict[str, int | None]:
     """Normalize provider usage without estimating token counts."""
-    usage = response.get("usage", {}) if isinstance(response, dict) else {}
+    raw = response.get("usage") if isinstance(response, dict) else None
+    usage = raw if isinstance(raw, dict) else {}
     def valid(value):
         return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
     input_tokens = valid(usage.get("input_tokens", usage.get("prompt_tokens")))
@@ -319,6 +320,7 @@ async def _handle_streaming(
         try:
             async with client.stream("POST", url, headers=headers, json=body) as resp:
                 resp_headers = dict(resp.headers)
+                sent_done = False
                 async for line in resp.aiter_lines():
                     if not line:
                         yield b"\n"
@@ -329,6 +331,7 @@ async def _handle_streaming(
                         if data_str.strip() == "[DONE]":
                             if source_format == "openai":
                                 yield b"data: [DONE]\n\n"
+                                sent_done = True
                             break
 
                         try:
@@ -359,6 +362,11 @@ async def _handle_streaming(
                     else:
                         # Pass through non-data lines (event:, id:, etc.)
                         yield f"{line}\n".encode()
+
+                # If upstream closed the stream without sending [DONE],
+                # send it ourselves so the client knows the stream is complete.
+                if not sent_done and source_format == "openai":
+                    yield b"data: [DONE]\n\n"
 
         except httpx.ConnectError as e:
             stream_status = 502
