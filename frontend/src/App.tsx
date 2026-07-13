@@ -3,6 +3,8 @@ import Header from './components/Header'
 import RequestList from './components/RequestList'
 import DetailPanel from './components/DetailPanel'
 import ExportButtons from './components/ExportButtons'
+import LatencyChart from './components/LatencyChart'
+import UsageOverview from './components/UsageOverview'
 import { useRequests } from './hooks/useRequests'
 import type { RequestItem } from './api/types'
 
@@ -61,6 +63,10 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0f1117] text-[#e1e4e8]">
       <Header requestCount={total} loading={loading} />
+
+      <UsageOverview />
+
+      <LatencyChart requests={requests} />
 
       <RequestList
         requests={requests}
