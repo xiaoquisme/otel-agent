@@ -9,13 +9,27 @@ export interface RequestItem {
   format: string | null
 }
 
+export interface StructuredMessage {
+  role: string
+  content: string
+  tool_calls?: { name: string; arguments: string }[]
+  reasoning_content?: string
+}
+
+export interface MessageMetadata {
+  model: string | null
+  finish_reason: string | null
+  usage: { input_tokens: number | null; output_tokens: number | null; total_tokens: number | null } | null
+  format: string | null
+}
+
 export interface RequestDetail extends RequestItem {
   request_body: string | null
   response_body: string | null
   request_headers: Record<string, string> | string | null
   response_headers: Record<string, string> | string | null
-  rendered_request: string | null
-  rendered_response: string | null
+  messages: StructuredMessage[]
+  metadata: MessageMetadata
 }
 
 export interface RequestsResponse {
