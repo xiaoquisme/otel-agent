@@ -61,7 +61,7 @@ class DuckDBStorage(StorageBackend):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(response_status)"
         )
-        for column in ("model_name TEXT", "input_tokens BIGINT", "output_tokens BIGINT", "total_tokens BIGINT"):
+        for column in ("model_name TEXT", "input_tokens BIGINT", "output_tokens BIGINT", "total_tokens BIGINT", "format TEXT"):
             conn.execute(f"ALTER TABLE requests ADD COLUMN IF NOT EXISTS {column}")
         conn.commit()
 
@@ -78,6 +78,7 @@ class DuckDBStorage(StorageBackend):
         upstream: str = "", model_name: str | None = None,
         input_tokens: int | None = None, output_tokens: int | None = None,
         total_tokens: int | None = None, timestamp: str | None = None,
+        format: str | None = None,
     ) -> None:
         from datetime import datetime, timezone
 
@@ -86,8 +87,8 @@ class DuckDBStorage(StorageBackend):
             """INSERT INTO requests
                (timestamp, method, url, upstream, request_headers, request_body,
                 response_status, response_headers, response_body, latency_ms, model_name,
-                input_tokens, output_tokens, total_tokens)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                input_tokens, output_tokens, total_tokens, format)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 timestamp or datetime.now(timezone.utc).isoformat(),
                 method,
@@ -98,7 +99,7 @@ class DuckDBStorage(StorageBackend):
                 response_status,
                 json.dumps(response_headers),
                 response_body,
-                latency_ms, model_name, input_tokens, output_tokens, total_tokens,
+                latency_ms, model_name, input_tokens, output_tokens, total_tokens, format,
             ),
         )
         conn.commit()

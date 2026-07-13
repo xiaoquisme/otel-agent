@@ -74,7 +74,7 @@ class SQLiteStorage(StorageBackend):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(response_status)"
         )
-        for column in ("model_name TEXT", "input_tokens INTEGER", "output_tokens INTEGER", "total_tokens INTEGER"):
+        for column in ("model_name TEXT", "input_tokens INTEGER", "output_tokens INTEGER", "total_tokens INTEGER", "format TEXT"):
             try:
                 conn.execute(f"ALTER TABLE requests ADD COLUMN {column}")
             except sqlite3.OperationalError:
@@ -94,6 +94,7 @@ class SQLiteStorage(StorageBackend):
         upstream: str = "", model_name: str | None = None,
         input_tokens: int | None = None, output_tokens: int | None = None,
         total_tokens: int | None = None, timestamp: str | None = None,
+        format: str | None = None,
     ) -> None:
         from datetime import datetime, timezone
 
@@ -102,8 +103,8 @@ class SQLiteStorage(StorageBackend):
             """INSERT INTO requests
                (timestamp, method, url, upstream, request_headers, request_body,
                 response_status, response_headers, response_body, latency_ms, model_name,
-                input_tokens, output_tokens, total_tokens)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                input_tokens, output_tokens, total_tokens, format)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 timestamp or datetime.now(timezone.utc).isoformat(),
                 method,
@@ -114,7 +115,7 @@ class SQLiteStorage(StorageBackend):
                 response_status,
                 json.dumps(response_headers),
                 response_body,
-                latency_ms, model_name, input_tokens, output_tokens, total_tokens,
+                latency_ms, model_name, input_tokens, output_tokens, total_tokens, format,
             ),
         )
         conn.commit()

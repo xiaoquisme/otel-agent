@@ -246,7 +246,7 @@ async def _handle_non_streaming(
         error_body = {"error": {"message": f"Connection failed to provider '{provider.name}': {e}", "type": "server_error"}}
         _log_telemetry(
             telemetry, request, 502, error_body, latency_ms, provider,
-            request_body=request_body, log_body=log_body,
+            request_body=request_body, log_body=log_body, source_format=source_format,
         )
         return JSONResponse(error_body, status_code=502)
     except httpx.TimeoutException:
@@ -254,7 +254,7 @@ async def _handle_non_streaming(
         error_body = {"error": {"message": f"Timeout connecting to provider '{provider.name}'", "type": "server_error"}}
         _log_telemetry(
             telemetry, request, 504, error_body, latency_ms, provider,
-            request_body=request_body, log_body=log_body,
+            request_body=request_body, log_body=log_body, source_format=source_format,
         )
         return JSONResponse(error_body, status_code=504)
 
@@ -276,6 +276,7 @@ async def _handle_non_streaming(
     _log_telemetry(
         telemetry, request, resp.status_code, resp_body, latency_ms, provider,
         request_body=request_body, resp_headers=dict(resp.headers), log_body=log_body,
+        source_format=source_format,
     )
 
     return JSONResponse(resp_body, status_code=resp.status_code)
@@ -368,6 +369,7 @@ async def _handle_streaming(
             _log_telemetry(
                 telemetry, request, stream_status, resp_body, latency_ms, provider,
                 request_body=request_body, resp_headers=resp_headers, log_body=log_body,
+                source_format=source_format,
             )
 
     media_type = "text/event-stream"
@@ -384,6 +386,7 @@ def _log_telemetry(
     request_body: str = "",
     resp_headers: dict[str, str] | None = None,
     log_body: bool = True,
+    source_format: str | None = None,
 ) -> None:
     """Log request/response to telemetry database."""
     try:
@@ -408,6 +411,7 @@ def _log_telemetry(
             model_name=model_name,
             input_tokens=usage["input_tokens"], output_tokens=usage["output_tokens"],
             total_tokens=usage["total_tokens"],
+            format=source_format,
         )
     except Exception:
         logger.exception("Failed to log telemetry")
