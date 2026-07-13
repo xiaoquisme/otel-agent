@@ -29,6 +29,7 @@ class RequestRecord(TypedDict, total=False):
     response_headers: str | dict
     response_body: str
     latency_ms: float
+    format: str | None
 
 
 class StorageBackend(ABC):
@@ -54,6 +55,7 @@ class StorageBackend(ABC):
         response_body: str,
         latency_ms: float,
         upstream: str = "",
+        format: str | None = None,
     ) -> None:
         """Insert a single request record."""
 

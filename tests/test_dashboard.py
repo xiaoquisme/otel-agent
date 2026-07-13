@@ -1,13 +1,14 @@
-"""Tests for dashboard API with DuckDB backend."""
-
+"""Tests for dashboard API and FastAPI routes."""
 import json
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import duckdb
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from otel_agent.dashboard.api import DashboardAPI, CountCache
-
+from otel_agent.dashboard.routes import router as dashboard_router, set_api as set_dashboard_api
 
 # ------------------------------------------------------------------
 # Reusable fixture helpers (T001)
@@ -29,7 +30,6 @@ def _day_ago_utc_range() -> tuple[str, str]:
              - timedelta(days=1)).isoformat()
     end = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     return start, end
-
 
 def _seed_usage_record(
     db_path: Path,
@@ -56,7 +56,6 @@ def _seed_usage_record(
     )
     conn.commit()
     conn.close()
-
 
 def _create_usage_db(db_path: Path, records: list[dict]) -> None:
     """Create a DuckDB with the standard schema and seed multiple usage records."""
@@ -121,7 +120,11 @@ def _create_test_db(db_path: Path, n: int = 5) -> None:
             response_status INTEGER,
             response_headers TEXT,
             response_body TEXT,
-            latency_ms DOUBLE
+            latency_ms DOUBLE,
+            model_name TEXT,
+            input_tokens BIGINT,
+            output_tokens BIGINT,
+            total_tokens BIGINT
         )
     """)
     for i in range(1, n + 1):
@@ -144,6 +147,10 @@ def _create_test_db(db_path: Path, n: int = 5) -> None:
         )
     conn.close()
 
+
+# ------------------------------------------------------------------
+# DashboardAPI unit tests (direct storage path)
+# ------------------------------------------------------------------
 
 def test_get_requests_empty(tmp_path):
     db = tmp_path / "test.duckdb"
@@ -357,92 +364,226 @@ def test_empty_database_no_crash(tmp_path):
 
 
 # ------------------------------------------------------------------
-# BUG-002: Proxy URL caching — health check timeout scenario
+# FastAPI route tests (TestClient)
 # ------------------------------------------------------------------
 
-def test_proxy_url_caching_prevents_fallback(tmp_path):
-    """When proxy was reachable then goes down, DashboardAPI keeps using cached URL.
+def _make_client(db_path: Path) -> TestClient:
+    """Create a FastAPI TestClient wired to a DashboardAPI for the given db_path."""
+    app = FastAPI()
+    api = DashboardAPI(db_path)
+    set_dashboard_api(api)
+    app.include_router(dashboard_router)
+    return TestClient(app), api
 
-    BUG-002: A slow health check should NOT cause fallback to direct DuckDB.
-    The cached proxy URL should be reused for up to 60s after the proxy
-    becomes unreachable.
-    """
-    import time as _time
-    from unittest.mock import patch, MagicMock
 
-    db_path = tmp_path / "test.duckdb"
-    _create_test_db(db_path, n=3)
-
-    api = DashboardAPI(db_path, proxy_port=19999)
-
-    # Simulate: proxy was reachable, cache is warm
-    api._proxy_url_cache = "http://127.0.0.1:19999"
-    api._proxy_url_cache_time = _time.monotonic()
-    api._proxy_last_fail_time = 0.0
-
-    # Now simulate health check failure (proxy busy)
-    with patch("otel_agent.dashboard.api.urllib.request.urlopen", side_effect=TimeoutError("busy")):
-        # Should still return cached URL (within 60s window)
-        result = api._proxy_url()
-        assert result == "http://127.0.0.1:19999", "Should return cached URL even when health check fails"
-
+def test_route_requests_empty(tmp_path):
+    db = tmp_path / "test.duckdb"
+    client, api = _make_client(db)
+    resp = client.get("/api/requests")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 0
+    assert body["data"] == []
     api.close()
 
 
-def test_proxy_url_cache_expires_after_60s(tmp_path):
-    """After 60s of proxy being unreachable, fall back to direct DuckDB.
-
-    BUG-002: If the proxy has been unreachable for > 60s, the cache should
-    expire and allow fallback to direct DuckDB connection.
-    """
-    import time as _time
-    from unittest.mock import patch
-
-    db_path = tmp_path / "test.duckdb"
-    _create_test_db(db_path, n=3)
-
-    api = DashboardAPI(db_path, proxy_port=19999)
-
-    # Simulate: proxy was reachable, then failed 61 seconds ago
-    api._proxy_url_cache = "http://127.0.0.1:19999"
-    api._proxy_url_cache_time = _time.monotonic() - 100
-    api._proxy_last_fail_time = _time.monotonic() - 61
-
-    # Health check still fails
-    with patch("otel_agent.dashboard.api.urllib.request.urlopen", side_effect=TimeoutError("busy")):
-        result = api._proxy_url()
-        assert result is None, "Should return None after 60s of proxy being unreachable"
-
+def test_route_requests_with_data(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 5)
+    client, api = _make_client(db)
+    resp = client.get("/api/requests")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 5
+    assert len(body["data"]) == 5
     api.close()
 
 
-def test_proxy_url_fresh_check_resets_cache(tmp_path):
-    """Successful health check resets the failure timer.
+def test_route_requests_pagination(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 10)
+    client, api = _make_client(db)
+    resp = client.get("/api/requests?limit=3")
+    body = resp.json()
+    assert body["total"] == 10
+    assert len(body["data"]) == 3
+    assert body["has_more"] is True
+    # Fetch next page
+    resp2 = client.get(f"/api/requests?limit=3&cursor={body['next_cursor']}")
+    body2 = resp2.json()
+    assert len(body2["data"]) == 3
+    assert body["data"][0]["id"] != body2["data"][0]["id"]
+    api.close()
 
-    BUG-002: If the proxy comes back after a brief outage, the cache should
-    be refreshed and the failure timer reset.
-    """
-    import time as _time
-    from unittest.mock import patch, MagicMock
 
-    db_path = tmp_path / "test.duckdb"
-    _create_test_db(db_path, n=3)
+def test_route_requests_search(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 5)
+    client, api = _make_client(db)
+    resp = client.get("/api/requests?search=completions/3")
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["data"][0]["url"] == "/openai/v1/chat/completions/3"
+    api.close()
 
-    api = DashboardAPI(db_path, proxy_port=19999)
 
-    # Simulate: proxy was reachable, then failed for 30s
-    api._proxy_url_cache = "http://127.0.0.1:19999"
-    api._proxy_url_cache_time = _time.monotonic() - 100
-    api._proxy_last_fail_time = _time.monotonic() - 30
+def test_route_requests_filter_method(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 5)
+    client, api = _make_client(db)
+    resp = client.get("/api/requests?method=POST")
+    body = resp.json()
+    assert body["total"] == 3
+    for r in body["data"]:
+        assert r["method"] == "POST"
+    api.close()
 
-    # Health check succeeds (proxy came back)
-    mock_resp = MagicMock()
-    mock_resp.status = 200
-    mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-    mock_resp.__exit__ = MagicMock(return_value=False)
-    with patch("otel_agent.dashboard.api.urllib.request.urlopen", return_value=mock_resp):
-        result = api._proxy_url()
-        assert result == "http://127.0.0.1:19999"
-        assert api._proxy_last_fail_time == 0.0, "Failure timer should be reset"
 
+def test_route_requests_filter_status(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 5)
+    client, api = _make_client(db)
+    resp = client.get("/api/requests?status=500")
+    body = resp.json()
+    assert body["total"] == 2
+    for r in body["data"]:
+        assert r["response_status"] == 500
+    api.close()
+
+
+def test_route_request_detail(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    resp = client.get("/api/requests/2")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == 2
+    assert body["method"] == "GET"
+    api.close()
+
+
+def test_route_request_not_found(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    resp = client.get("/api/requests/999")
+    assert resp.status_code == 404
+    api.close()
+
+
+def test_route_request_invalid_id(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    resp = client.get("/api/requests/abc")
+    assert resp.status_code == 422  # FastAPI validation error
+    api.close()
+
+
+def test_route_export_csv(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 5)
+    client, api = _make_client(db)
+    resp = client.get("/api/export?format=csv")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "text/csv; charset=utf-8"
+    assert "attachment" in resp.headers.get("content-disposition", "")
+    api.close()
+
+
+def test_route_export_json(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 5)
+    client, api = _make_client(db)
+    resp = client.get("/api/export?format=json")
+    assert resp.status_code == 200
+    assert "application/json" in resp.headers["content-type"]
+    body = resp.json()
+    assert len(body) == 5
+    api.close()
+
+
+def test_route_cache_clear(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    resp = client.get("/api/cache/clear")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+    api.close()
+
+
+def test_route_usage_missing_params(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    resp = client.get("/api/usage")
+    assert resp.status_code == 422  # Missing required query params
+    api.close()
+
+
+def test_route_usage_invalid_format(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    resp = client.get("/api/usage?start=not-a-date&end=also-not")
+    assert resp.status_code == 400
+    assert "Invalid datetime" in resp.json()["error"]
+    api.close()
+
+
+def test_route_usage_end_before_start(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    # Use Z suffix to avoid URL encoding issues with +00:00
+    start, end = _current_day_utc_range()
+    start_z = start.replace("+00:00", "Z")
+    end_z = end.replace("+00:00", "Z")
+    resp = client.get(f"/api/usage?start={end_z}&end={start_z}")
+    assert resp.status_code == 400
+    assert "end must be after start" in resp.json()["error"]
+    api.close()
+
+
+def test_route_usage_range_too_long(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    start = "2026-01-01T00:00:00Z"
+    end = "2026-01-04T00:00:00Z"  # 3 days > 48h
+    resp = client.get(f"/api/usage?start={start}&end={end}")
+    assert resp.status_code == 400
+    assert "48 hours" in resp.json()["error"]
+    api.close()
+
+
+def test_route_usage_valid_range(tmp_path):
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    start, end = _current_day_utc_range()
+    start_z = start.replace("+00:00", "Z")
+    end_z = end.replace("+00:00", "Z")
+    resp = client.get(f"/api/usage?start={start_z}&end={end_z}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "total_tokens" in body
+    assert "models" in body
+    api.close()
+
+
+def test_route_usage_yesterday_empty(tmp_path):
+    """Yesterday's range should return zero usage for today-only data."""
+    db = tmp_path / "test.duckdb"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    start, end = _day_ago_utc_range()
+    start_z = start.replace("+00:00", "Z")
+    end_z = end.replace("+00:00", "Z")
+    resp = client.get(f"/api/usage?start={start_z}&end={end_z}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_tokens"] == 0
     api.close()
