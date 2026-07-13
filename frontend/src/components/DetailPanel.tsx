@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { RequestDetail } from '../api/types'
 import { fetchRequestDetail } from '../api/client'
-import LLMBody from './LLMBody'
+import MessageDisplay from './MessageDisplay'
 
 interface DetailPanelProps {
   requestId: number | null
@@ -49,6 +49,7 @@ function copyCurl(r: RequestDetail): void {
 export default function DetailPanel({ requestId, onClose }: DetailPanelProps) {
   const [detail, setDetail] = useState<RequestDetail | null>(null)
   const [loading, setLoading] = useState(false)
+  const [view, setView] = useState<'formatted' | 'raw'>('formatted')
 
   useEffect(() => {
     if (requestId === null) {
@@ -56,6 +57,7 @@ export default function DetailPanel({ requestId, onClose }: DetailPanelProps) {
       return
     }
     setLoading(true)
+    setView('formatted')
     fetchRequestDetail(requestId)
       .then(setDetail)
       .catch(() => setDetail(null))
@@ -114,41 +116,93 @@ export default function DetailPanel({ requestId, onClose }: DetailPanelProps) {
               </button>
             </div>
 
-            {/* Request Headers */}
-            <div className="mb-5 border-l-[3px] border-[#58a6ff] bg-[rgba(88,166,255,0.05)] pl-3">
-              <h3 className="text-xs text-[#8b949e] uppercase mb-2 before:content-['📤_'] before:mr-1">
-                Request Headers
-              </h3>
-              <pre className="bg-[#0d1117] p-3 rounded-md text-[13px] leading-relaxed whitespace-pre-wrap break-all">
-                {formatHeaders(detail.request_headers)}
-              </pre>
+            {/* View toggle */}
+            <div className="flex gap-1 mb-4">
+              <button
+                className={`px-2 py-0.5 rounded text-xs border border-[#30363d] cursor-pointer ${
+                  view === 'formatted'
+                    ? 'bg-[#30363d] text-[#e1e4e8]'
+                    : 'bg-[#21262d] text-[#8b949e] hover:bg-[#30363d]'
+                }`}
+                onClick={() => setView('formatted')}
+              >
+                Formatted
+              </button>
+              <button
+                className={`px-2 py-0.5 rounded text-xs border border-[#30363d] cursor-pointer ${
+                  view === 'raw'
+                    ? 'bg-[#30363d] text-[#e1e4e8]'
+                    : 'bg-[#21262d] text-[#8b949e] hover:bg-[#30363d]'
+                }`}
+                onClick={() => setView('raw')}
+              >
+                Raw
+              </button>
             </div>
 
-            {/* Request Body */}
-            <div className="mb-5 border-l-[3px] border-[#58a6ff] bg-[rgba(88,166,255,0.05)] pl-3">
-              <h3 className="text-xs text-[#8b949e] uppercase mb-2 before:content-['📤_'] before:mr-1">
-                Request Body
-              </h3>
-              <LLMBody body={detail.request_body} renderedHtml={detail.rendered_request} />
-            </div>
+            {view === 'formatted' ? (
+              <>
+                {/* Request Messages */}
+                <div className="mb-5 border-l-[3px] border-[#58a6ff] bg-[rgba(88,166,255,0.05)] pl-3">
+                  <h3 className="text-xs text-[#8b949e] uppercase mb-2">
+                    Request
+                  </h3>
+                  <MessageDisplay
+                    messages={detail.messages?.filter((_, i) => i < (detail.messages?.length ?? 0) - (detail.metadata?.model ? 1 : 0)) ?? []}
+                    metadata={null}
+                  />
+                </div>
 
-            {/* Response Headers */}
-            <div className="mb-5 border-l-[3px] border-[#3fb950] bg-[rgba(63,185,80,0.05)] pl-3">
-              <h3 className="text-xs text-[#8b949e] uppercase mb-2 before:content-['📥_'] before:mr-1">
-                Response Headers
-              </h3>
-              <pre className="bg-[#0d1117] p-3 rounded-md text-[13px] leading-relaxed whitespace-pre-wrap break-all">
-                {formatHeaders(detail.response_headers)}
-              </pre>
-            </div>
+                {/* Response Messages */}
+                <div className="mb-5 border-l-[3px] border-[#3fb950] bg-[rgba(63,185,80,0.05)] pl-3">
+                  <h3 className="text-xs text-[#8b949e] uppercase mb-2">
+                    Response
+                  </h3>
+                  <MessageDisplay
+                    messages={detail.metadata?.model ? detail.messages?.slice(-1) ?? [] : []}
+                    metadata={detail.metadata}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Raw Request */}
+                <div className="mb-5 border-l-[3px] border-[#58a6ff] bg-[rgba(88,166,255,0.05)] pl-3">
+                  <h3 className="text-xs text-[#8b949e] uppercase mb-2">
+                    Request Headers
+                  </h3>
+                  <pre className="bg-[#0d1117] p-3 rounded-md text-[13px] leading-relaxed whitespace-pre-wrap break-all">
+                    {formatHeaders(detail.request_headers)}
+                  </pre>
+                </div>
+                <div className="mb-5 border-l-[3px] border-[#58a6ff] bg-[rgba(88,166,255,0.05)] pl-3">
+                  <h3 className="text-xs text-[#8b949e] uppercase mb-2">
+                    Request Body
+                  </h3>
+                  <pre className="bg-[#0d1117] p-3 rounded-md text-[13px] leading-relaxed whitespace-pre-wrap break-all max-h-[600px] overflow-y-auto">
+                    {detail.request_body || '(empty)'}
+                  </pre>
+                </div>
 
-            {/* Response Body */}
-            <div className="mb-5 border-l-[3px] border-[#3fb950] bg-[rgba(63,185,80,0.05)] pl-3">
-              <h3 className="text-xs text-[#8b949e] uppercase mb-2 before:content-['📥_'] before:mr-1">
-                Response Body
-              </h3>
-              <LLMBody body={detail.response_body} renderedHtml={detail.rendered_response} />
-            </div>
+                {/* Raw Response */}
+                <div className="mb-5 border-l-[3px] border-[#3fb950] bg-[rgba(63,185,80,0.05)] pl-3">
+                  <h3 className="text-xs text-[#8b949e] uppercase mb-2">
+                    Response Headers
+                  </h3>
+                  <pre className="bg-[#0d1117] p-3 rounded-md text-[13px] leading-relaxed whitespace-pre-wrap break-all">
+                    {formatHeaders(detail.response_headers)}
+                  </pre>
+                </div>
+                <div className="mb-5 border-l-[3px] border-[#3fb950] bg-[rgba(63,185,80,0.05)] pl-3">
+                  <h3 className="text-xs text-[#8b949e] uppercase mb-2">
+                    Response Body
+                  </h3>
+                  <pre className="bg-[#0d1117] p-3 rounded-md text-[13px] leading-relaxed whitespace-pre-wrap break-all max-h-[600px] overflow-y-auto">
+                    {detail.response_body || '(empty)'}
+                  </pre>
+                </div>
+              </>
+            )}
           </>
         )}
       </div>

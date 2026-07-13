@@ -154,8 +154,8 @@ class DuckDBStorage(StorageBackend):
             cursor_params + [limit + 1],
         )
         rows = result.fetchall()
-        columns = [desc[0] for desc in result.description] if result.description else []
-        data = [dict(zip(columns, r)) for r in rows[:limit]]
+        _COLUMNS = ("id", "timestamp", "method", "url", "upstream", "response_status", "latency_ms")
+        data = [dict(zip(_COLUMNS, r)) for r in rows[:limit]]
 
         has_more = len(rows) > limit
         next_cursor = data[-1]["id"] if data and has_more else 0
@@ -203,6 +203,8 @@ class DuckDBStorage(StorageBackend):
         conn = self._get_conn()
         where = "CAST(timestamp AS TIMESTAMPTZ) >= CAST(? AS TIMESTAMPTZ) AND CAST(timestamp AS TIMESTAMPTZ) < CAST(? AS TIMESTAMPTZ) AND response_status BETWEEN 200 AND 299"
         totals = conn.execute(f"SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COUNT(total_tokens), COUNT(*) - COUNT(total_tokens) FROM requests WHERE {where}", [start, end]).fetchone()
+        if totals is None:
+            totals = (0, 0, 0, 0, 0)
         rows = conn.execute(f"SELECT model_name, COALESCE(SUM(total_tokens), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COUNT(*) FROM requests WHERE {where} AND total_tokens IS NOT NULL GROUP BY model_name ORDER BY 2 DESC, model_name ASC", [start, end]).fetchall()
         return {"start": start, "end": end, "total_tokens": totals[0], "input_tokens": totals[1], "output_tokens": totals[2], "eligible_request_count": totals[3], "excluded_request_count": totals[4], "models": [{"model_name": row[0], "total_tokens": row[1], "input_tokens": row[2], "output_tokens": row[3], "request_count": row[4]} for row in rows]}
 

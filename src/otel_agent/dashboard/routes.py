@@ -1,13 +1,12 @@
 """FastAPI router for the otel-agent dashboard.
 
-Provides 7 endpoints:
+Provides 6 endpoints:
   GET /              — index.html (served by server.py mount)
   GET /api/requests  — paginated request list
-  GET /api/requests/{id} — single request detail
+  GET /api/requests/{id} — single request detail with structured messages
   GET /api/export    — CSV/JSON export
   GET /api/cache/clear — clear the COUNT cache
   GET /api/usage     — usage summary for a time range
-  GET /api/render/{id} — pre-rendered LLM bodies
 """
 from __future__ import annotations
 
@@ -67,27 +66,12 @@ def get_requests(
 
 @router.get("/requests/{request_id}")
 def get_request_detail(request_id: int) -> JSONResponse:
-    """Single request detail with pre-rendered LLM bodies."""
+    """Single request detail with structured messages for frontend rendering."""
     api = get_api()
-    result = api.get_rendered_request(request_id)
+    result = api.get_structured_request(request_id)
     if result is None:
         return JSONResponse({"error": "Request not found"}, status_code=404)
     return JSONResponse(result)
-
-
-@router.get("/render/{request_id}")
-def render_request(request_id: int) -> JSONResponse:
-    """Pre-rendered LLM bodies for a request."""
-    api = get_api()
-    result = api.get_rendered_request(request_id)
-    if result is None:
-        return JSONResponse({"error": "Request not found"}, status_code=404)
-    return JSONResponse({
-        "id": result["id"],
-        "format": result.get("format"),
-        "rendered_request": result.get("rendered_request"),
-        "rendered_response": result.get("rendered_response"),
-    })
 
 
 @router.get("/export")

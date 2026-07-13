@@ -20,3 +20,6 @@ Thumbs.db
 .ruff_cache/
 frontend/node_modules/
 frontend/dist/
+
+# Compound Engineering local config
+.compound-engineering/*.local.yaml
