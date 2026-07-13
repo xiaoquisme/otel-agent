@@ -160,26 +160,6 @@ export default function DetailPage() {
         </TabList>
 
         <TabPanel value="formatted">
-          {/* Request Body */}
-          <Collapsible defaultOpen>
-            <CollapsibleTrigger>
-              <span style={{ fontWeight: 'var(--font-semibold)' }}>Request Body</span>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <CodeBlock data={detail.request_body || '(empty)'} />
-            </CollapsibleContent>
-          </Collapsible>
-
-          {/* Response Body */}
-          <Collapsible defaultOpen>
-            <CollapsibleTrigger>
-              <span style={{ fontWeight: 'var(--font-semibold)' }}>Response Body</span>
-            </CollapsibleTrigger>
-            <CollapsibleContent>
-              <CodeBlock data={detail.response_body || '(empty)'} />
-            </CollapsibleContent>
-          </Collapsible>
-
           {/* Conversation */}
           <Collapsible defaultOpen>
             <CollapsibleTrigger>
