@@ -1,0 +1,155 @@
+/* JSON Viewer — Syntax Highlighting */
+.json-key { color: #79c0ff; }
+.json-string { color: #a5d6ff; }
+.json-number { color: #d2a8ff; }
+.json-boolean { color: #58a6ff; }
+.json-null { color: #8b949e; font-style: italic; }
+
+/* Body Viewer States */
+.body-empty { color: #8b949e; font-style: italic; }
+.body-raw pre {
+  background: #0d1117;
+  padding: 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+/* LLM Body Viewer — Chat Messages */
+.chat-message { margin-bottom: 12px; border-radius: 8px; padding: 10px 14px; }
+.chat-system { background: #1c2128; border: 1px solid #30363d; }
+.chat-user { background: #1a2332; border-left: 3px solid #58a6ff; }
+.chat-assistant { background: #1a2a1f; border-left: 3px solid #3fb950; }
+.chat-role {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.chat-system .chat-role { background: #30363d; color: #8b949e; }
+.chat-user .chat-role { background: #1f3a5c; color: #58a6ff; }
+.chat-assistant .chat-role { background: #1f3a2e; color: #3fb950; }
+.chat-content {
+  font-size: 13px;
+  line-height: 1.6;
+  max-height: 500px;
+  overflow-y: auto;
+}
+.chat-content p { margin-bottom: 8px; }
+.chat-content p:last-child { margin-bottom: 0; }
+.chat-content pre {
+  background: #0d1117;
+  padding: 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 8px 0;
+}
+.chat-content code {
+  background: #21262d;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.chat-content pre code { background: none; padding: 0; }
+.chat-content ul,
+.chat-content ol { padding-left: 20px; margin: 8px 0; }
+.chat-content li { margin-bottom: 4px; }
+.chat-content blockquote {
+  border-left: 3px solid #30363d;
+  padding-left: 12px;
+  color: #8b949e;
+  margin: 8px 0;
+}
+.chat-content h1,
+.chat-content h2,
+.chat-content h3 { margin: 12px 0 6px; }
+.chat-content h1 { font-size: 16px; }
+.chat-content h2 { font-size: 14px; }
+.chat-content h3 { font-size: 13px; }
+
+/* Response Metadata */
+.response-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.response-meta-badge {
+  background: #21262d;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: #e1e4e8;
+}
+.response-meta-badge.model { border-color: #58a6ff; color: #58a6ff; }
+.response-meta-badge.finish { border-color: #3fb950; color: #3fb950; }
+
+/* Body Viewer Toggle */
+.body-viewer { position: relative; }
+.body-toggle-bar { display: flex; gap: 4px; margin-bottom: 8px; }
+.body-toggle-btn {
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #8b949e;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.body-toggle-btn.active { background: #30363d; color: #e1e4e8; }
+
+/* Truncation & Incomplete Indicators */
+.body-truncated {
+  background: #2d1f0e;
+  border: 1px solid #d29922;
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: #d29922;
+}
+.body-truncated::before { content: "\26A0  "; }
+.streaming-incomplete {
+  background: #0d1a2e;
+  border: 1px solid #388bfd;
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #58a6ff;
+  font-style: italic;
+}
+.chat-tool { background: #2d2a1e; border-left: 3px solid #d29922; }
+.chat-tool .chat-role { background: #3d3520; color: #d29922; }
+.tool-call {
+  background: #1c2128;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin: 4px 0;
+  font-size: 12px;
+}
+.tool-call-name {
+  color: #d2a8ff;
+  font-weight: 600;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+.tool-call-args {
+  color: #8b949e;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-top: 4px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+}
