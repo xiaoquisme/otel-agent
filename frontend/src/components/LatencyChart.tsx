@@ -52,7 +52,8 @@ export default function LatencyChart({ requests }: LatencyChartProps) {
     if (!chart || !requests.length) return
 
     const last = requests[requests.length - 1]
-    const label = last.method + ' ' + (last.url?.split('?')[0] || '')
+    const urlStr = typeof last.url === 'string' ? last.url : ''
+    const label = last.method + ' ' + (urlStr.split('?')[0] || '')
     chart.data.labels!.push(label)
     chart.data.datasets[0].data.push(last.latency_ms || 0)
 
