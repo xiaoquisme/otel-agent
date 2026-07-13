@@ -349,6 +349,15 @@ def _make_client(db_path: Path) -> TestClient:
     return TestClient(app), api
 
 
+def test_route_events_removed(tmp_path):
+    """GET /api/events returns 404 after SSE removal."""
+    db = tmp_path / "test.duckdb"
+    client, api = _make_client(db)
+    resp = client.get("/api/events")
+    assert resp.status_code == 404
+    api.close()
+
+
 def test_route_requests_empty(tmp_path):
     db = tmp_path / "test.duckdb"
     client, api = _make_client(db)
