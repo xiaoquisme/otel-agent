@@ -75,12 +75,26 @@ The current dashboard has three core UX problems:
 
 ## Implementation Units
 
+### Existing Codebase Note
+The otel-agent frontend already has significant infrastructure in place. The following components and files exist and should be reused/extended rather than rebuilt from scratch:
+
+- `frontend/src/components/RequestTable.tsx`, `RequestRow.tsx` — existing request list
+- `frontend/src/components/MessageDisplay.tsx`, `ToolCallBlock.tsx`, `ReasoningBlock.tsx` — existing message rendering
+- `frontend/src/components/LatencyChart.tsx` — existing chart (to be replaced with SVG sparkline)
+- `frontend/src/components/FilterBar.tsx`, `Pagination.tsx` — existing filter/pagination
+- `frontend/src/components/UsageCards.tsx`, `ModelTable.tsx` — existing usage display
+- `frontend/src/hooks/useRequests.ts`, `useUsage.ts` — existing data hooks
+- `frontend/src/components/ui/` — existing primitives (Button, Card, Badge, Tabs, CodeBlock, Collapsible, SearchInput, Select)
+- `frontend/src/styles/globals.css` — existing global styles (~40 hardcoded hex colors must be migrated to tokens)
+
+Each implementation unit should reference the existing file in its Approach section and specify what changes (extension, replacement, or new build). Units that list existing files in their Files list must note "(extend existing)" or "(replace)" after the path.
+
 ### U1. Design System Foundation
 **Goal:** Establish the design token system and base UI primitives.
 **Dependencies:** None.
 **Files:**
 - `frontend/src/styles/tokens.css` — design tokens (colors, spacing, typography, shadows)
-- `frontend/src/styles/globals.css` — global styles, resets, utilities
+- `frontend/src/styles/globals.css` — global styles, resets, utilities (migrate ~40 hardcoded hex colors to CSS custom property tokens)
 - `frontend/src/components/ui/Button.tsx` — button primitive with variants
 - `frontend/src/components/ui/Card.tsx` — card container
 - `frontend/src/components/ui/Badge.tsx` — status/method badges
@@ -114,7 +128,7 @@ The current dashboard has three core UX problems:
 **Goal:** Set up React Router with the new page layout structure.
 **Dependencies:** U1.
 **Files:**
-- `frontend/src/router.tsx` — route definitions
+- `frontend/src/router.tsx` — route definitions (must include `*` catch-all route rendering `NotFoundPage`)
 - `frontend/src/layouts/DashboardLayout.tsx` — main layout with sidebar/header
 - `frontend/src/pages/ListPage.tsx` — request list (replaces current App)
 - `frontend/src/pages/DetailPage.tsx` — request detail (new dedicated page)
@@ -134,6 +148,7 @@ The current dashboard has three core UX problems:
 - `/` renders ListPage
 - `/request/123` renders DetailPage with id=123
 - Unknown route shows 404
+  - Requires a `NotFoundPage.tsx` component with a message and link back to `/`.
 - Navigation between pages preserves state (search params)
 
 **Verification:** Can navigate between list and detail, URLs are clean, back button works.
@@ -154,11 +169,13 @@ The current dashboard has three core UX problems:
 
 **Approach:**
 1. ListPage combines header, usage summary, and request table
-2. FilterBar uses new UI primitives (SearchInput, Select)
-3. RequestRow uses Badge for method/status, shows latency as a mini sparkline
-4. Pagination uses Button primitives
-5. URL params sync for search/filter state (shareable links)
+2. **States:** Loading (skeleton), empty (no requests / zero search results), error (API failure), and success states must be handled in this unit — do not defer to U7.
+2. FilterBar: extend existing `FilterBar.tsx` to use new UI primitives (SearchInput, Select). Extract filter logic into a reusable component.
+3. RequestRow: extend existing `RequestRow.tsx` to use Badge for method/status, shows latency as a mini sparkline.
+4. Pagination: extend existing `Pagination.tsx` to use Button primitives.
+5. URL params sync for search/filter state (shareable links) — use `useSearchParams` from React Router to sync filter state to URL.
 6. Click row → navigate to `/request/:id`
+7. **States:** Loading (skeleton rows), empty (no requests / zero search results with helpful message), error (API failure with retry), and success states.
 
 **Test scenarios:**
 - List renders with requests from API
@@ -183,16 +200,17 @@ The current dashboard has three core UX problems:
 - `frontend/src/components/detail/ConversationBlock.tsx` — messages with MessageDisplay
 - `frontend/src/components/detail/RawBodyBlock.tsx` — raw JSON with CodeMirror
 - `frontend/src/components/detail/HeadersBlock.tsx` — request/response headers
-- `frontend/src/hooks/useRequestDetail.ts` — fetch single request
+- ``frontend/src/hooks/useRequestDetail.ts` — hook that fetches a single request by ID from the API, handles loading/error/not-found states, and returns `{ data, loading, error }`. Follow the pattern of existing `useRequests.ts`.
 - `tests/detail-page.test.tsx` — detail page tests
 
 **Approach:**
 1. DetailPage loads request by ID from URL params
+2. **States:** Loading (skeleton), not found (invalid ID / 404 with back link), error (API failure), and success states.
 2. Layout: full-width with collapsible blocks (Notion-style)
 3. RequestHeader: prominent method badge, URL, status, latency
 4. MetadataBlock: model, tokens, finish reason in a card grid
 5. ConversationBlock: full message history with MessageDisplay (not just last message)
-6. RawBodyBlock: CodeMirror JSON viewer with:
+6. RawBodyBlock: CodeMirror JSON viewer (requires `@codemirror/lang-json` — install via `npm install @codemirror/lang-json @codemirror/view @codemirror/state`). Lazy-load via dynamic import to avoid adding ~50KB to initial bundle. Features:
    - Syntax highlighting
    - Line numbers
    - Code folding (collapse nested objects)
@@ -201,7 +219,7 @@ The current dashboard has three core UX problems:
    - Toggle between request/response body
 7. HeadersBlock: collapsible key-value display
 8. All blocks are collapsible with smooth animation
-9. Keyboard: `Esc` to go back, `J`/`K` to navigate next/prev request
+9. Keyboard: `Esc` to go back (detail page only). J/K navigation is handled globally by U7.
 
 **Test scenarios:**
 - Detail page loads request by ID
@@ -213,7 +231,6 @@ The current dashboard has three core UX problems:
 - CodeMirror supports code folding
 - Collapsible blocks expand/collapse
 - Esc navigates back to list
-- J/K navigate between requests
 
 **Verification:** Can view any request detail, long bodies are readable, all blocks work.
 
@@ -231,6 +248,7 @@ The current dashboard has three core UX problems:
 
 **Approach:**
 1. MessageDisplay renders ALL messages from the conversation (not just last)
+2. **States:** Loading (skeleton), empty (no messages), error, and success states.
 2. Each message is a MessageBubble with role indicator
 3. ToolCallBlock becomes collapsible with argument preview
 4. ReasoningBlock becomes collapsible with content preview
@@ -261,8 +279,9 @@ The current dashboard has three core UX problems:
 
 **Approach:**
 1. UsageCards: clean card grid with token counts
+2. **States:** Loading (skeleton), empty (no usage data), error, and success states.
 2. ModelTable: sortable table with progress bars
-3. LatencySparkline: lightweight SVG sparkline (no Chart.js dependency)
+3. LatencySparkline: lightweight SVG sparkline — replace existing `LatencyChart.tsx` (which uses Chart.js) with a simple SVG-based component. No external charting dependency needed.
 4. Optional: move usage to sidebar or dedicated section
 5. Real-time updates via polling (keep existing pattern)
 
@@ -290,9 +309,9 @@ The current dashboard has three core UX problems:
 
 **Approach:**
 1. Responsive: mobile-first with breakpoints at 640px, 768px, 1024px
-2. Mobile: list view with slide-over detail (not separate page)
+2. Mobile: list view with push navigation to detail page (consistent with KTD1 routing decision — no slide-over panels)
 3. Desktop: full detail page
-4. Keyboard: global shortcuts (J/K navigation, Esc back, / search)
+4. Keyboard: global shortcuts — J/K navigate next/prev request (from any page), Esc back to list, / focus search. These are the ONLY global keyboard shortcuts; page-specific shortcuts (e.g., detail page Esc) are owned by their respective units.
 5. Loading skeletons for all async content
 6. Tooltips on hover for truncated content
 7. ARIA labels for accessibility
@@ -313,11 +332,13 @@ The current dashboard has three core UX problems:
 ## Verification Contract
 
 ### Automated Tests
-- Unit tests for all UI primitives (U1)
-- Component tests for all major components (U3-U6)
-- Integration test for routing and navigation (U2)
-- Responsive layout tests (U7)
-- Keyboard navigation tests (U7)
+Note: No test infrastructure currently exists. U1 must set up the test framework (Vitest + React Testing Library) before any test files can be written.
+
+- Unit tests for all UI primitives (U1) — `tests/ui-primitives.test.tsx`
+- Component tests for all major components (U3-U6) — `tests/list-page.test.tsx`, `tests/detail-page.test.tsx`, `tests/message-display.test.tsx`, `tests/usage-components.test.tsx`
+- Integration test for routing and navigation (U2) — `tests/router.test.tsx`
+- Responsive layout tests (U7) — `tests/responsive.test.tsx`
+- Keyboard navigation tests (U7) — `tests/keyboard.test.tsx`
 
 ### Manual Verification
 - Visual inspection of all pages
