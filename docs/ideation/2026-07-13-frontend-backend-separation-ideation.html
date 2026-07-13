@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ideation: Frontend-Backend Separation for otel-agent Dashboard</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f1117;color:#c9d1d9;line-height:1.65;max-width:880px;margin:0 auto;padding:32px 24px 80px}
+h1{font-size:28px;font-weight:700;color:#e6edf3;margin-bottom:4px}
+.meta{font-size:13px;color:#8b949e;margin-bottom:32px}
+.meta span{margin-right:16px}
+h2{font-size:20px;font-weight:600;color:#e6edf3;margin:36px 0 16px;padding-top:12px;border-top:1px solid #21262d}
+h3{font-size:16px;font-weight:600;color:#e6edf3;margin:24px 0 8px}
+p{margin-bottom:12px}
+ul,ol{padding-left:20px;margin-bottom:12px}
+li{margin-bottom:6px}
+code{background:#1c2128;padding:2px 6px;border-radius:4px;font-size:13px;font-family:'SF Mono','Fira Code',monospace;color:#79c0ff}
+pre{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;overflow-x:auto;font-size:13px;line-height:1.5;margin-bottom:16px}
+pre code{background:none;padding:0;color:#c9d1d9}
+table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:14px}
+th{text-align:left;padding:10px 12px;border-bottom:2px solid #30363d;color:#8b949e;font-size:12px;text-transform:uppercase;font-weight:600}
+td{padding:10px 12px;border-bottom:1px solid #21262d}
+.tag{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;margin-right:4px}
+.tag-axis{background:#1f3a5c;color:#58a6ff}
+.tag-confidence-high{background:#1a3a2a;color:#3fb950}
+.tag-confidence-med{background:#2d2a1e;color:#d29922}
+.tag-complexity-low{background:#1a2a1f;color:#3fb950}
+.tag-complexity-med{background:#1f3a2e;color:#58a6ff}
+.tag-complexity-high{background:#3a1f1f;color:#f85149}
+.idea-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px;margin-bottom:20px}
+.idea-card h3{margin-top:0}
+.idea-card .basis{font-size:13px;color:#8b949e;margin-bottom:8px}
+.idea-card .basis strong{color:#d2a8ff}
+.idea-card .rationale{font-size:14px;color:#c9d1d9;margin-bottom:8px}
+.idea-card .downsides{font-size:13px;color:#8b949e;font-style:italic}
+.jump-list{background:#0d1117;border:1px solid #21262d;border-radius:8px;padding:16px 20px;margin-bottom:24px}
+.jump-list h3{margin-top:0;margin-bottom:8px;font-size:14px;color:#8b949e}
+.jump-list ol{padding-left:20px;margin-bottom:0}
+.jump-list li{margin-bottom:4px;font-size:14px}
+.jump-list a{color:#58a6ff;text-decoration:none}
+.jump-list a:hover{text-decoration:underline}
+.rejection-table{font-size:13px}
+.rejection-table td:first-child{color:#8b949e;width:30px}
+svg.diagram{width:100%;max-width:700px;margin:16px auto;display:block}
+footer.composition-signal{margin-top:48px;padding-top:16px;border-top:1px solid #21262d;font-size:12px;color:#484f58;text-align:center}
+</style>
+</head>
+<body>
+
+<h1>Ideation: Frontend-Backend Separation for otel-agent Dashboard</h1>
+<div class="meta">
+  <span><time datetime="2026-07-13">2026-07-13</time></span>
+  <span>Topic: frontend-backend-separation</span>
+  <span>Focus: LLM response rendering framework + dashboard decoupling</span>
+  <span>Mode: repo-grounded</span>
+</div>
+
+<h2>Grounding Context</h2>
+<p><strong>Project:</strong> otel-agent — LLM API gateway with OpenAI/Anthropic compatible endpoints, model-name-based provider routing, and telemetry logging.</p>
+<p><strong>Stack:</strong> Python 3.10+, FastAPI (proxy), httpx, DuckDB/SQLite, PyYAML. Build: hatchling + uv.</p>
+<p><strong>Dashboard architecture:</strong> <code>dashboard/server.py</code> (BaseHTTPRequestHandler, 226 lines) serves a monolithic <code>index.html</code> (995 lines, ~500 lines JS) + JSON API endpoints. <code>dashboard/api.py</code> reads from DuckDB via proxy internal API or direct connection.</p>
+<p><strong>Core pain:</strong> ~500 lines of hand-rolled JS handle LLM response format detection (OpenAI/Anthropic/streaming), content extraction, markdown rendering (marked.js + DOMPurify), tool call display, JSON syntax highlighting, and streaming chunk parsing. This duplicates format knowledge already in <code>converter.py</code>. Bug specs 011, 012, 018 (4 bug reports), 020 are all dashboard rendering issues.</p>
+<p><strong>Historical decisions:</strong> Spec 004 mandated "no JS frameworks — plain HTML/CSS/JS." Spec 016 said "~800 lines is acceptable." The file is now 995 lines and growing. DuckDB lock constraint requires dashboard queries to route through proxy's internal HTTP API.</p>
+
+<h2>Topic Axes</h2>
+<ol>
+  <li><strong>Dashboard UI rendering</strong> — LLM response display, markdown, streaming, tool calls, format detection</li>
+  <li><strong>Backend-for-frontend API</strong> — HTTP handler, SSE, JSON endpoints, data flow</li>
+  <li><strong>Frontend architecture</strong> — single-file HTML vs SPA vs framework, component structure</li>
+  <li><strong>Development workflow</strong> — testing, iterating, separating frontend/backend</li>
+  <li><strong>Deployment &amp; packaging</strong> — how dashboard is served, embedded vs standalone</li>
+</ol>
+
+<h2>Ranked Ideas</h2>
+
+<div class="jump-list">
+  <h3>Ideas</h3>
+  <ol>
+    <li><a href="#idea1">Merge Dashboard into FastAPI Proxy</a></li>
+    <li><a href="#idea2">Backend-Side LLM Format Renderer + Normalization API</a></li>
+    <li><a href="#idea3">React + Vite + Vercel AI SDK Frontend</a></li>
+    <li><a href="#idea4">Provider Format Plugin Registry</a></li>
+    <li><a href="#idea5">Python Test Harness for LLM Body Rendering</a></li>
+    <li><a href="#idea6">ES Modules + Alpine.js Component System</a></li>
+  </ol>
+</div>
+
+<!-- ===== IDEA 1 ===== -->
+<article class="idea-card" id="idea1">
+<h3>1. Merge Dashboard into FastAPI Proxy</h3>
+<span class="tag tag-axis">Deployment &amp; packaging</span>
+<span class="tag tag-confidence-high">Confidence: High</span>
+<span class="tag tag-complexity-med">Complexity: Medium</span>
+
+<p class="basis"><strong>Basis:</strong> <code>direct:</code> — <code>DashboardAPI._proxy_url()</code> is 45 lines of health-check caching that exists solely because two servers share one DuckDB file. <code>dashboard/server.py</code> manually reimplements URL routing (<code>do_GET</code> with <code>urlparse</code>/<code>parse_qs</code>) that FastAPI does declaratively. BUG-001/BUG-02 workarounds exist only because of the two-process architecture.</p>
+
+<p class="rationale"><strong>Why it matters:</strong> Eliminates the entire class of multi-process DuckDB bugs (BUG-001, BUG-002). Removes ~226 lines of legacy BaseHTTPRequestHandler code. Unifies deployment to one process, one port. Gives the dashboard access to FastAPI middleware (CORS, auth, logging, async) for free. Every future feature (WebSocket upgrades, rate limiting) no longer needs dual implementation.</p>
+
+<p class="downsides"><strong>Downsides:</strong> Requires migrating all 7 dashboard endpoints to FastAPI routes. SSE implementation changes from manual threading to <code>StreamingResponse</code>. Needs careful handling of the static file serving for the HTML dashboard.</p>
+
+<p><strong>Meeting test:</strong> "How many HTTP servers are running?" Today: 2. After: 1.</p>
+</article>
+
+<!-- ===== IDEA 2 ===== -->
+<article class="idea-card" id="idea2">
+<h3>2. Backend-Side LLM Format Renderer + Normalization API</h3>
+<span class="tag tag-axis">Backend-for-frontend API</span>
+<span class="tag tag-confidence-high">Confidence: High</span>
+<span class="tag tag-complexity-med">Complexity: Medium</span>
+
+<p class="basis"><strong>Basis:</strong> <code>direct:</code> — <code>detectFormat()</code> (index.html:503-511) duplicates format knowledge in <code>converter.py</code>. The four <code>extract*Content()</code> functions (index.html:596-654) reimplement what Python already does. Adding a <code>render_body</code> parameter to the dashboard API that returns pre-rendered HTML is a natural extension of the existing <code>DashboardAPI</code> class.</p>
+
+<p class="rationale"><strong>Why it matters:</strong> This is the highest-impact idea for the user's stated pain. The ~500 lines of JS format detection, extraction, and rendering collapse to ~50 lines of HTML embedding. Format changes (adding Google Gemini, Mistral) need only one Python change instead of parallel JS updates. Rendering becomes testable with pytest instead of browser automation. The <code>converter.py</code> already has format expertise — this unifies it.</p>
+
+<p class="downsides"><strong>Downsides:</strong> Pre-rendered HTML is format-locked at render time. Server-side rendering adds latency to detail panel opens. Streaming previews still need special handling (pre-render at storage time vs. at request time).</p>
+
+<p><strong>Meeting test:</strong> "If we add a new provider format, do we need to update the frontend JS?" — Answer should be "no."</p>
+
+<!-- Architecture diagram -->
+<svg class="diagram" viewBox="0 0 700 180" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#58a6ff"/></marker></defs>
+  <rect x="10" y="50" width="140" height="80" rx="8" fill="#161b22" stroke="#30363d"/>
+  <text x="80" y="85" text-anchor="middle" fill="#e6edf3" font-size="13" font-weight="600">Dashboard API</text>
+  <text x="80" y="105" text-anchor="middle" fill="#8b949e" font-size="11">api.py</text>
+  <rect x="200" y="50" width="160" height="80" rx="8" fill="#161b22" stroke="#58a6ff" stroke-width="2"/>
+  <text x="280" y="80" text-anchor="middle" fill="#58a6ff" font-size="13" font-weight="600">LLM Renderer</text>
+  <text x="280" y="100" text-anchor="middle" fill="#8b949e" font-size="11">render.py (NEW)</text>
+  <text x="280" y="115" text-anchor="middle" fill="#8b949e" font-size="10">format detect + markdown</text>
+  <rect x="410" y="50" width="140" height="80" rx="8" fill="#161b22" stroke="#30363d"/>
+  <text x="480" y="85" text-anchor="middle" fill="#e6edf3" font-size="13" font-weight="600">converter.py</text>
+  <text x="480" y="105" text-anchor="middle" fill="#8b949e" font-size="11">existing format logic</text>
+  <rect x="590" y="50" width="100" height="80" rx="8" fill="#1a2a1f" stroke="#3fb950"/>
+  <text x="640" y="85" text-anchor="middle" fill="#3fb950" font-size="13" font-weight="600">Frontend</text>
+  <text x="640" y="105" text-anchor="middle" fill="#8b949e" font-size="11">thin consumer</text>
+  <line x1="150" y1="90" x2="200" y2="90" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="360" y1="90" x2="410" y2="90" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="550" y1="90" x2="590" y2="90" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="175" y="82" text-anchor="middle" fill="#8b949e" font-size="9">reads</text>
+  <text x="385" y="82" text-anchor="middle" fill="#8b949e" font-size="9">uses</text>
+  <text x="570" y="82" text-anchor="middle" fill="#8b949e" font-size="9">serves HTML</text>
+</svg>
+</article>
+
+<!-- ===== IDEA 3 ===== -->
+<article class="idea-card" id="idea3">
+<h3>3. React + Vite + Vercel AI SDK Frontend</h3>
+<span class="tag tag-axis">Frontend architecture</span>
+<span class="tag tag-confidence-high">Confidence: High</span>
+<span class="tag tag-complexity-high">Complexity: High</span>
+
+<p class="basis"><strong>Basis:</strong> <code>external:</code> — Vercel AI SDK (<code>ai</code> npm package) is the gold standard for LLM UI rendering. It handles OpenAI/Anthropic format detection, streaming SSE, tool call assembly, and reasoning token display natively. <code>@ai-sdk/openai</code> and <code>@ai-sdk/anthropic</code> providers handle streaming SSE parsing. Paired with <code>react-markdown</code> + <code>rehype-highlight</code> for rich rendering. <code>reasoned:</code> — React+Vite is the ecosystem where Vercel AI SDK is native; ~45KB gzipped bundle is acceptable for a developer tool.</p>
+
+<p class="rationale"><strong>Why it matters:</strong> This is the "use an existing rendering framework" path the user explicitly asked about. Vercel AI SDK eliminates: manual <code>detectFormat()</code>, manual <code>parseStreamingChunks()</code>, manual <code>extract*Content()</code> functions, manual <code>highlightJsonString()</code>, and manual <code>renderMarkdown()</code>. The SDK's <code>useChat</code> hooks handle streaming state, message assembly, and tool call rendering. Combined with <code>@tanstack/react-table</code> for the request list and <code>recharts</code> for charts, this replaces the entire 995-line monolith with a proper component architecture.</p>
+
+<p class="downsides"><strong>Downsides:</strong> Highest migration effort. Introduces npm/node toolchain. Changes deployment model (built assets served by FastAPI). Breaks the "no JS frameworks" precedent from Spec 004. ~45KB gzipped runtime overhead.</p>
+
+<p><strong>Meeting test:</strong> "Does the user want to use a rendering framework they don't have to maintain?" — If yes, this is the answer.</p>
+</article>
+
+<!-- ===== IDEA 4 ===== -->
+<article class="idea-card" id="idea4">
+<h3>4. Provider Format Plugin Registry</h3>
+<span class="tag tag-axis">Frontend architecture</span>
+<span class="tag tag-confidence-med">Confidence: Medium</span>
+<span class="tag tag-complexity-med">Complexity: Medium</span>
+
+<p class="basis"><strong>Basis:</strong> <code>reasoned:</code> — Currently adding a new LLM format requires editing <code>converter.py</code> (4 conversion functions), adding format detection branches in 5+ JS functions in <code>index.html</code>, updating <code>AUTH_HEADERS</code> in <code>server.py</code>, and adding tests in <code>test_converter.py</code>. A plugin registry where each format bundles its own converter, renderer, auth headers, and tests makes each format a single file. <code>direct:</code> — The <code>AUTH_HEADERS</code> dict in <code>server.py</code> and <code>detectFormat()</code> in JS are manual registries that must be updated per-format.</p>
+
+<p class="rationale"><strong>Why it matters:</strong> Compounds because every subsequent provider addition becomes trivial. Without it, each new format multiplies the surface area across 3+ subsystems. With it, the marginal cost of supporting a new format approaches zero. This is the strongest second-order compounding choice in the set.</p>
+
+<p class="downsides"><strong>Downsides:</strong> Requires upfront design of the plugin interface. May be premature optimization if only 2-3 providers are planned. Adds indirection that new contributors must understand.</p>
+
+<p><strong>Meeting test:</strong> "What's the checklist for adding Google Gemini support?" Today: 5+ files, 3+ subsystems. With plugin registry: 1 new file.</p>
+</article>
+
+<!-- ===== IDEA 5 ===== -->
+<article class="idea-card" id="idea5">
+<h3>5. Python Test Harness for LLM Body Rendering</h3>
+<span class="tag tag-axis">Development workflow</span>
+<span class="tag tag-confidence-high">Confidence: High</span>
+<span class="tag tag-complexity-low">Complexity: Low</span>
+
+<p class="basis"><strong>Basis:</strong> <code>direct:</code> — Spec 018 had 4 separate bug reports (BUG-001 through BUG-004) for body rendering alone, all discovered after deployment. The <code>detectFormat()</code> function (index.html:503-511) has 6 format branches with edge cases — zero Python test coverage. Extracting format detection and rendering into a testable Python module (<code>dashboard/render.py</code>) with 30+ fixture bodies would catch these before they reach users.</p>
+
+<p class="rationale"><strong>Why it matters:</strong> Every dashboard spec from 011 onward has had post-deployment bugs in body rendering. This is the highest-ROI change because it addresses the root cause (untested format logic) without requiring a full architecture rewrite. It also unblocks Ideas 2 and 3 by creating the testable Python renderer that those ideas depend on.</p>
+
+<p class="downsides"><strong>Downsides:</strong> Doesn't solve the 500-line JS problem by itself — the frontend still has its own rendering code. Is a stepping stone, not a destination.</p>
+
+<p><strong>Meeting test:</strong> "How many test cases cover the format detection function?" Currently zero in Python; should be 12+.</p>
+</article>
+
+<!-- ===== IDEA 6 ===== -->
+<article class="idea-card" id="idea6">
+<h3>6. ES Modules + Alpine.js Component System</h3>
+<span class="tag tag-axis">Frontend architecture</span>
+<span class="tag tag-confidence-med">Confidence: Medium</span>
+<span class="tag tag-complexity-low">Complexity: Low</span>
+
+<p class="basis"><strong>Basis:</strong> <code>direct:</code> — The 995-line <code>index.html</code> contains CSS (~170 lines), HTML (~100 lines), and JS (~720 lines) in one file with no module system. The LLM rendering functions (lines 500-820) form a coherent API boundary that could be an ES module. <code>external:</code> — Alpine.js (~15KB) provides <code>x-data</code>, <code>x-for</code>, <code>x-show</code> reactivity without a build step. ES modules work natively in modern browsers via <code>&lt;script type="module"&gt;</code>.</p>
+
+<p class="rationale"><strong>Why it matters:</strong> This is the minimal-disruption path toward componentization. It preserves the "no build tool" constraint from Spec 004 while gaining module isolation. Each LLM format (OpenAI, Anthropic, streaming) becomes its own module. The rendering framework choice (marked.js, react-markdown, or a custom renderer) slots in per-component. This could be a stepping stone to Idea 3 (React) or a permanent lightweight solution.</p>
+
+<p class="downsides"><strong>Downsides:</strong> Doesn't fully solve the LLM format detection problem — the JS still needs to detect and render formats. Alpine.js has a smaller ecosystem than React. No TypeScript type safety without a build step.</p>
+
+<p><strong>Meeting test:</strong> "If I change the markdown rendering logic, do I have to look at the table pagination code?" Currently yes; after split, no.</p>
+</article>
+
+<h2>Rejection Summary</h2>
+
+<table class="rejection-table">
+<thead><tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Pre-Rendering Pipeline in Storage Layer</td><td>Subsumed by Idea 2 (backend renderer) — pre-rendering at storage time is an implementation detail of the same concept, not a separate direction</td></tr>
+<tr><td>2</td><td>HTMX Server-Rendered Fragments</td><td>Conflicts with Idea 3 (React) — if going SPA, HTMX is the wrong direction. If staying server-rendered, Idea 2 already covers it</td></tr>
+<tr><td>3</td><td>Kill the Dashboard Process (static HTML generator)</td><td>Too extreme — eliminates real-time updates which are a core dashboard feature. Better solved by merging servers (Idea 1)</td></tr>
+<tr><td>4</td><td>Terminal-Native Dashboard (Textual/Rich)</td><td>Interesting but diverges from the user's stated goal of frontend-backend separation with a rendering framework. Different product direction</td></tr>
+<tr><td>5</td><td>LLM Renders LLM Responses</td><td>Clever but introduces latency and cost for rendering. Not reliable for a debugging tool that needs instant display</td></tr>
+<tr><td>6</td><td>CLI Report on Demand</td><td><code>otel-agent view</code> already exists. Doesn't address the dashboard rendering pain — it sidesteps it</td></tr>
+<tr><td>7</td><td>Unified Format Schema + TypeScript Types</td><td>Good hygiene but doesn't directly solve the rendering problem. Better as a follow-up to Idea 2 or 4</td></tr>
+<tr><td>8</td><td>Web Component Library (<code>otel-llm-viewer</code>)</td><td>Good idea but subsumed by Idea 3 (React components are more maintainable) or Idea 6 (ES modules achieve similar isolation with less overhead)</td></tr>
+<tr><td>9</td><td>Auto-Generate Dashboard UI from Schema</td><td>Over-engineered for current scale. Schema-driven generation pays off at 10+ formats; otel-agent has 2</td></tr>
+<tr><td>10</td><td>Replace SSE with HTTP Polling + ETag</td><td>SSE works fine. Polling is a regression in UX. Not worth the complexity trade-off</td></tr>
+<tr><td>11</td><td>Jinja2-Templated Dashboard</td><td>Server-side rendering doesn't solve the LLM response rendering complexity — the format detection logic still needs to live somewhere. Better handled by Idea 2</td></tr>
+<tr><td>12</td><td>Schema-Driven Co-generation</td><td>Good practice but premature. The immediate pain is rendering, not type propagation. Can be added after Ideas 1-3</td></tr>
+<tr><td>13</td><td>Provider Tags in Stored Data</td><td>Good idea but subsumed by Idea 2 — if the backend renders, it already knows the format at write time</td></tr>
+<tr><td>14</td><td>Grafana Panel Model</td><td>Interesting architecture but over-engineered for a debugging tool. The dashboard has 4 sections, not 20</td></tr>
+<tr><td>15</td><td>Slack Thread Model (progressive disclosure)</td><td>The detail overlay already follows this pattern. Not a new idea</td></tr>
+<tr><td>16</td><td>ELK Log Stream + Client-Side Index</td><td>The current SSE + cursor pagination works. Client-side ring buffer adds complexity without proportional value</td></tr>
+<tr><td>17</td><td>Postman Response Inspector (tabbed)</td><td>Good UX pattern but doesn't address the core rendering pain. The tabs would still need the same format detection logic</td></tr>
+<tr><td>18</td><td>Grafana Alert Thresholds</td><td>Nice-to-have but doesn't address the frontend-backend separation or rendering framework question</td></tr>
+<tr><td>19</td><td>Datadog Faceted Filter Bar</td><td>Good UX but doesn't address the core pain. The <code>CountCache</code> already exists; surfacing it is a UI polish, not architecture</td></tr>
+<tr><td>20</td><td>Loki Request Lifecycle Trace</td><td>Interesting but adds storage complexity. The dashboard already shows latency; lifecycle tracing is a separate feature</td></tr>
+<tr><td>21</td><td>Drop HTML File / Ship JS Bundle (esbuild)</td><td>Subsumed by Idea 3 (React+Vite) or Idea 6 (ES modules). esbuild alone doesn't solve the rendering framework question</td></tr>
+</tbody>
+</table>
+
+<footer class="composition-signal">Composed 2026-07-13T14:56Z by ce-ideate from codebase grounding (otel-agent repo)</footer>
+</body>
+</html>
