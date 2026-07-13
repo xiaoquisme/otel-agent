@@ -1,13 +1,12 @@
 """FastAPI router for the otel-agent dashboard.
 
-Provides 7 endpoints:
+Provides 6 endpoints:
   GET /              — index.html (served by server.py mount)
   GET /api/requests  — paginated request list
-  GET /api/requests/{id} — single request detail
+  GET /api/requests/{id} — single request detail with structured messages
   GET /api/export    — CSV/JSON export
   GET /api/cache/clear — clear the COUNT cache
   GET /api/usage     — usage summary for a time range
-  GET /api/render/{id} — pre-rendered LLM bodies
 """
 from __future__ import annotations
 
