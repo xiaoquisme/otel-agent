@@ -43,7 +43,7 @@ class DashboardAPI:
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self._storage = create_storage("duckdb", db_path, read_only=True)
+        self._storage = create_storage("duckdb", db_path)
         self._count_cache = CountCache(ttl=5.0)
 
     def get_requests(self, search: str = "", method: str = "", status: int = 0,
