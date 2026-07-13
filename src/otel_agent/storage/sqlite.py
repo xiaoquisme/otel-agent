@@ -74,6 +74,11 @@ class SQLiteStorage(StorageBackend):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(response_status)"
         )
+        for column in ("model_name TEXT", "input_tokens INTEGER", "output_tokens INTEGER", "total_tokens INTEGER"):
+            try:
+                conn.execute(f"ALTER TABLE requests ADD COLUMN {column}")
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
 
     def log_request(
@@ -86,7 +91,9 @@ class SQLiteStorage(StorageBackend):
         response_headers: dict,
         response_body: str,
         latency_ms: float,
-        upstream: str = "",
+        upstream: str = "", model_name: str | None = None,
+        input_tokens: int | None = None, output_tokens: int | None = None,
+        total_tokens: int | None = None, timestamp: str | None = None,
     ) -> None:
         from datetime import datetime, timezone
 
@@ -94,10 +101,11 @@ class SQLiteStorage(StorageBackend):
         conn.execute(
             """INSERT INTO requests
                (timestamp, method, url, upstream, request_headers, request_body,
-                response_status, response_headers, response_body, latency_ms)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                response_status, response_headers, response_body, latency_ms, model_name,
+                input_tokens, output_tokens, total_tokens)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                datetime.now(timezone.utc).isoformat(),
+                timestamp or datetime.now(timezone.utc).isoformat(),
                 method,
                 url,
                 upstream,
@@ -106,7 +114,7 @@ class SQLiteStorage(StorageBackend):
                 response_status,
                 json.dumps(response_headers),
                 response_body,
-                latency_ms,
+                latency_ms, model_name, input_tokens, output_tokens, total_tokens,
             ),
         )
         conn.commit()
@@ -218,6 +226,14 @@ class SQLiteStorage(StorageBackend):
             f"SELECT * FROM requests WHERE {where} ORDER BY id DESC", params
         )
         return [self._row_to_dict(r) for r in cur.fetchall()]
+
+    def get_usage_summary(self, start: str, end: str) -> dict:
+        """Aggregate completed request usage in a UTC half-open range."""
+        conn = self._get_conn()
+        where = "timestamp >= ? AND timestamp < ? AND response_status BETWEEN 200 AND 299"
+        totals = conn.execute(f"SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COUNT(total_tokens), COUNT(*) - COUNT(total_tokens) FROM requests WHERE {where}", (start, end)).fetchone()
+        rows = conn.execute(f"SELECT model_name, COALESCE(SUM(total_tokens), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COUNT(*) FROM requests WHERE {where} AND total_tokens IS NOT NULL GROUP BY model_name ORDER BY 2 DESC, model_name ASC", (start, end)).fetchall()
+        return {"start": start, "end": end, "total_tokens": totals[0], "input_tokens": totals[1], "output_tokens": totals[2], "eligible_request_count": totals[3], "excluded_request_count": totals[4], "models": [{"model_name": row[0], "total_tokens": row[1], "input_tokens": row[2], "output_tokens": row[3], "request_count": row[4]} for row in rows]}
 
     def close(self) -> None:
         if self._conn is not None:

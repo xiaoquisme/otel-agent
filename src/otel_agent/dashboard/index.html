@@ -138,6 +138,35 @@ tr:hover { background: #161b22; cursor: pointer; }
 .tool-call { background: #1c2128; border: 1px solid #30363d; border-radius: 4px; padding: 6px 10px; margin: 4px 0; font-size: 12px; }
 .tool-call-name { color: #d2a8ff; font-weight: 600; font-family: 'SF Mono', 'Fira Code', monospace; }
 .tool-call-args { color: #8b949e; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; margin-top: 4px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; }
+
+/* Usage Overview Section */
+.usage-overview { padding: 16px 24px; }
+.usage-overview h2 { font-size: 14px; font-weight: 600; color: #8b949e; text-transform: uppercase; margin-bottom: 12px; letter-spacing: 0.5px; }
+.usage-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+.usage-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+.usage-card .card-label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+.usage-card .card-value { font-size: 28px; font-weight: 700; color: #e1e4e8; font-variant-numeric: tabular-nums; }
+.usage-card .card-sub { font-size: 12px; color: #8b949e; margin-top: 4px; }
+.usage-loading { color: #8b949e; font-size: 13px; padding: 20px; text-align: center; }
+.usage-error { background: #1c1410; border: 1px solid #d29922; border-radius: 6px; padding: 8px 12px; font-size: 13px; color: #d29922; margin-bottom: 12px; }
+.usage-coverage { font-size: 12px; color: #8b949e; margin-top: 8px; }
+.usage-coverage strong { color: #e1e4e8; }
+.usage-zero { font-size: 13px; color: #8b949e; font-style: italic; }
+
+/* Model Ranking Table */
+.model-table-wrap { margin-top: 16px; }
+.model-table-wrap h3 { font-size: 12px; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; }
+.model-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.model-table th { background: transparent; text-align: left; padding: 6px 8px; border-bottom: 1px solid #30363d; font-weight: 600; color: #8b949e; font-size: 11px; text-transform: uppercase; }
+.model-table td { padding: 6px 8px; border-bottom: 1px solid #21262d; }
+.model-table .model-name { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; color: #58a6ff; }
+.model-table .model-rank { color: #8b949e; font-weight: 600; width: 24px; }
+.model-table .model-tokens { font-variant-numeric: tabular-nums; text-align: right; }
+.model-table .model-requests { text-align: right; color: #8b949e; }
+.model-bar-cell { width: 120px; }
+.model-bar { height: 6px; border-radius: 3px; background: #30363d; overflow: hidden; }
+.model-bar-fill { height: 100%; border-radius: 3px; background: #58a6ff; }
+.model-table .unknown-model { color: #8b949e; font-style: italic; }
 </style>
 </head>
 <body>
@@ -164,6 +193,47 @@ tr:hover { background: #161b22; cursor: pointer; }
   </select>
   <button class="btn secondary" onclick="exportData('csv')">Export CSV</button>
   <button class="btn secondary" onclick="exportData('json')">Export JSON</button>
+</div>
+
+<div class="usage-overview" id="usage-overview">
+  <h2>Usage Today</h2>
+  <div id="usage-status" aria-live="polite">
+    <div class="usage-loading">Loading usage data...</div>
+  </div>
+  <div id="usage-content" style="display:none;">
+    <div class="usage-cards">
+      <div class="usage-card">
+        <div class="card-label">Total Tokens</div>
+        <div class="card-value" id="usage-total">0</div>
+      </div>
+      <div class="usage-card">
+        <div class="card-label">Input Tokens</div>
+        <div class="card-value" id="usage-input">0</div>
+      </div>
+      <div class="usage-card">
+        <div class="card-label">Output Tokens</div>
+        <div class="card-value" id="usage-output">0</div>
+      </div>
+    </div>
+    <div id="usage-coverage" class="usage-coverage"></div>
+    <div class="model-table-wrap" id="model-table-wrap" style="display:none;">
+      <h3>Model Breakdown</h3>
+      <table class="model-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Model</th>
+            <th class="model-tokens">Total</th>
+            <th class="model-tokens">Input</th>
+            <th class="model-tokens">Output</th>
+            <th class="model-requests">Requests</th>
+            <th class="model-bar-cell"></th>
+          </tr>
+        </thead>
+        <tbody id="model-table-body"></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <div class="chart-wrap">
@@ -469,11 +539,11 @@ function extractStreamingContent(parsed) {
   if (!parsed || !parsed.preview) return null;
   const chunks = parseStreamingChunks(parsed.preview);
   if (!chunks.length) return null;
-  // Reassemble content from delta chunks
   let content = '';
   let reasoningContent = '';
   let model = '';
   let finishReason = '';
+  const toolCalls = {};
   for (const chunk of chunks) {
     if (chunk.model) model = chunk.model;
     const choice = chunk.choices && chunk.choices[0];
@@ -482,12 +552,30 @@ function extractStreamingContent(parsed) {
     const delta = choice.delta || {};
     if (delta.content) content += delta.content;
     if (delta.reasoning_content) reasoningContent += delta.reasoning_content;
+    if (delta.tool_calls) {
+      for (const tc of delta.tool_calls) {
+        const idx = tc.index || 0;
+        if (!toolCalls[idx]) toolCalls[idx] = { id: tc.id || '', name: '', args: '' };
+        if (tc.id) toolCalls[idx].id = tc.id;
+        if (tc.function) {
+          if (tc.function.name) toolCalls[idx].name = tc.function.name;
+          if (tc.function.arguments) toolCalls[idx].args += tc.function.arguments;
+        }
+      }
+    }
   }
-  const incomplete = !content && !reasoningContent;
-  // Show reasoning content as a note if present
+  const tcList = Object.values(toolCalls);
+  const incomplete = !content && !reasoningContent && tcList.length === 0;
   let fullContent = content;
   if (reasoningContent) fullContent = content + '\n\n---\n**Reasoning:** ' + reasoningContent;
-  return { content: fullContent, model, finishReason: finishReason || 'streaming', incomplete };
+  if (tcList.length > 0) {
+    const tcHtml = tcList.map(tc => {
+      const args = tc.args ? (function(){ try { return JSON.stringify(JSON.parse(tc.args), null, 2); } catch(e) { return tc.args; } })() : '';
+      return '<div class="tool-call"><span class="tool-call-name">' + escapeHtml(tc.name || 'tool') + '</span><div class="tool-call-args">' + escapeHtml(args) + '</div></div>';
+    }).join('');
+    fullContent = fullContent ? renderMarkdown(fullContent) + tcHtml : tcHtml;
+  }
+  return { content: fullContent, model, finishReason: finishReason || 'streaming', incomplete, isHtml: tcList.length > 0 };
 }
 
 /* ========== Markdown Rendering ========== */
@@ -651,7 +739,7 @@ function renderLlmResponseBody(parsed, rawBody) {
   if (finishReason) metaHtml += `<span class="response-meta-badge finish">${escapeHtml(finishReason)}</span>`;
   metaHtml += '</div>';
 
-  const contentHtml = renderMarkdown(data.content);
+  const contentHtml = data.isHtml ? data.content : renderMarkdown(data.content);
   const incompleteNote = data.incomplete
     ? '<div class="streaming-incomplete">Streaming preview may be incomplete \u2014 limited chunks captured</div>'
     : '';
@@ -810,6 +898,99 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDetai
 initChart();
 loadRequests();
 connectSSE();
+
+/* ========== Usage Overview (T020+T026+T034) ========== */
+
+function getUsageDateRange() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return {
+    start: start.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    end: end.toISOString().replace(/\.\d{3}Z$/, 'Z'),
+  };
+}
+
+function formatNumber(n) {
+  if (n == null) return '0';
+  return Number(n).toLocaleString();
+}
+
+function escapeText(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+async function loadUsage() {
+  const statusEl = document.getElementById('usage-status');
+  const contentEl = document.getElementById('usage-content');
+  const range = getUsageDateRange();
+
+  try {
+    const resp = await fetch(`/api/usage?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: 'Failed to load usage' }));
+      statusEl.innerHTML = '<div class="usage-error" role="alert">' + escapeText(err.error || 'Failed to load usage') + '</div>';
+      return;
+    }
+    const data = await resp.json();
+
+    // Hide loading, show content
+    statusEl.style.display = 'none';
+    contentEl.style.display = '';
+
+    // Populate cards (T020)
+    document.getElementById('usage-total').textContent = formatNumber(data.total_tokens);
+    document.getElementById('usage-input').textContent = formatNumber(data.input_tokens);
+    document.getElementById('usage-output').textContent = formatNumber(data.output_tokens);
+
+    // Coverage note (T034)
+    const coverageEl = document.getElementById('usage-coverage');
+    if (data.excluded_request_count > 0) {
+      coverageEl.innerHTML = '<strong>' + formatNumber(data.excluded_request_count) + '</strong> request' +
+        (data.excluded_request_count === 1 ? '' : 's') +
+        ' excluded — usage data was unavailable for completed requests without token information.';
+    } else if (data.eligible_request_count === 0) {
+      coverageEl.innerHTML = '<span class="usage-zero">No requests with token data recorded today.</span>';
+    } else {
+      coverageEl.innerHTML = '<strong>' + formatNumber(data.eligible_request_count) + '</strong> request' +
+        (data.eligible_request_count === 1 ? '' : 's') + ' with token data.';
+    }
+
+    // Model ranking table (T026)
+    const modelWrap = document.getElementById('model-table-wrap');
+    const modelBody = document.getElementById('model-table-body');
+    if (data.models && data.models.length > 0) {
+      modelWrap.style.display = '';
+      const maxTokens = data.models[0].total_tokens || 1;
+      modelBody.innerHTML = data.models.map((m, i) => {
+        const pct = Math.round(((m.total_tokens || 0) / maxTokens) * 100);
+        const nameClass = m.model_name ? 'model-name' : 'model-name unknown-model';
+        const nameText = m.model_name ? escapeText(m.model_name) : 'Unknown model';
+        return '<tr>' +
+          '<td class="model-rank">' + (i + 1) + '</td>' +
+          '<td class="' + nameClass + '">' + nameText + '</td>' +
+          '<td class="model-tokens">' + formatNumber(m.total_tokens) + '</td>' +
+          '<td class="model-tokens">' + formatNumber(m.input_tokens) + '</td>' +
+          '<td class="model-tokens">' + formatNumber(m.output_tokens) + '</td>' +
+          '<td class="model-requests">' + formatNumber(m.request_count) + '</td>' +
+          '<td class="model-bar-cell"><div class="model-bar"><div class="model-bar-fill" style="width:' + pct + '%"></div></div></td>' +
+          '</tr>';
+      }).join('');
+    } else {
+      modelWrap.style.display = 'none';
+    }
+  } catch (e) {
+    // Non-blocking error — usage section is independent from request list
+    statusEl.innerHTML = '<div class="usage-error" role="alert">Could not load usage data.</div>';
+  }
+}
+
+// Load usage on initial page load
+loadUsage();
+
+// Refresh usage every 30 seconds
+setInterval(loadUsage, 30000);
 </script>
 </body>
 </html>

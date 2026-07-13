@@ -62,7 +62,11 @@ def migrate_sqlite_to_duckdb(sqlite_path: Path, duckdb_path: Path) -> bool:
                 response_status INTEGER,
                 response_headers TEXT,
                 response_body TEXT,
-                latency_ms DOUBLE
+                latency_ms DOUBLE,
+                model_name TEXT,
+                input_tokens BIGINT,
+                output_tokens BIGINT,
+                total_tokens BIGINT
             )
         """)
 
@@ -72,14 +76,19 @@ def migrate_sqlite_to_duckdb(sqlite_path: Path, duckdb_path: Path) -> bool:
                 """INSERT INTO requests
                    (id, timestamp, method, url, upstream, request_headers,
                     request_body, response_status, response_headers,
-                    response_body, latency_ms)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    response_body, latency_ms, model_name, input_tokens,
+                    output_tokens, total_tokens)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     row["id"], row["timestamp"], row["method"], row["url"],
                     row["upstream"], row["request_headers"],
                     row["request_body"], row["response_status"],
                     row["response_headers"], row["response_body"],
                     row["latency_ms"],
+                    row["model_name"] if "model_name" in row.keys() else None,
+                    row["input_tokens"] if "input_tokens" in row.keys() else None,
+                    row["output_tokens"] if "output_tokens" in row.keys() else None,
+                    row["total_tokens"] if "total_tokens" in row.keys() else None,
                 ),
             )
 

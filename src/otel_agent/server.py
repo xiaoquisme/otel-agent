@@ -27,6 +27,20 @@ from otel_agent.router import parse_model, resolve_provider
 
 logger = logging.getLogger(__name__)
 
+
+def normalize_usage(response: dict | str) -> dict[str, int | None]:
+    """Normalize provider usage without estimating token counts."""
+    usage = response.get("usage", {}) if isinstance(response, dict) else {}
+    def valid(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+    input_tokens = valid(usage.get("input_tokens", usage.get("prompt_tokens")))
+    output_tokens = valid(usage.get("output_tokens", usage.get("completion_tokens")))
+    total_tokens = valid(usage.get("total_tokens"))
+    if total_tokens is None:
+        values = [value for value in (input_tokens, output_tokens) if value is not None]
+        total_tokens = sum(values) if values else None
+    return {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens}
+
 # Auth header patterns per provider API format
 AUTH_HEADERS = {
     "openai": lambda key: {"Authorization": f"Bearer {key}"},
@@ -213,6 +227,11 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         """Current max request ID for SSE (internal)."""
         return _query_max_id(telemetry)
 
+    @app.get("/internal/dashboard/usage")
+    async def internal_usage(start: str, end: str):
+        """Current dashboard usage aggregate (internal)."""
+        return telemetry.storage.get_usage_summary(start, end)
+
     @app.get("/internal/dashboard/requests-since/{last_id}")
     async def internal_requests_since(last_id: int):
         """New requests since last_id for SSE (internal)."""
@@ -307,6 +326,7 @@ async def _handle_streaming(
         collected_text = ""
         resp_headers: dict[str, str] = {}
         stream_status = 200
+        last_valid_usage: dict | None = None
         try:
             async with client.stream("POST", url, headers=headers, json=body) as resp:
                 resp_headers = dict(resp.headers)
@@ -343,6 +363,10 @@ async def _handle_streaming(
 
                         # Collect for telemetry
                         collected_text += json.dumps(chunk_data)
+                        # T031: Extract usage from streaming chunks
+                        chunk_usage = normalize_usage(chunk_data)
+                        if chunk_usage["total_tokens"] is not None:
+                            last_valid_usage = chunk_usage
                     else:
                         # Pass through non-data lines (event:, id:, etc.)
                         yield f"{line}\n".encode()
@@ -357,8 +381,17 @@ async def _handle_streaming(
             yield f"data: {error_msg}\n\n".encode()
         finally:
             latency_ms = (time.monotonic() - start_time) * 1000
+            resp_body: dict = {"streamed": True, "preview": collected_text}
+            # T031: If usage was captured from streaming chunks, include it in the
+            # response body so _log_telemetry can normalize and persist it.
+            if last_valid_usage is not None:
+                resp_body["usage"] = {
+                    "input_tokens": last_valid_usage["input_tokens"],
+                    "output_tokens": last_valid_usage["output_tokens"],
+                    "total_tokens": last_valid_usage["total_tokens"],
+                }
             _log_telemetry(
-                telemetry, request, stream_status, {"streamed": True, "preview": collected_text[:5_000]}, latency_ms, provider,
+                telemetry, request, stream_status, resp_body, latency_ms, provider,
                 request_body=request_body, resp_headers=resp_headers, log_body=log_body,
             )
 
@@ -380,6 +413,11 @@ def _log_telemetry(
     """Log request/response to telemetry database."""
     try:
         body_str = json.dumps(resp_body) if isinstance(resp_body, dict) else str(resp_body)
+        usage = normalize_usage(resp_body)
+        # Extract client-visible model from response body for analytics
+        model_name = None
+        if isinstance(resp_body, dict):
+            model_name = resp_body.get("model") if resp_body.get("model") else None
         stored_body = request_body[:500_000] if log_body else ""
         stored_headers = redact_sensitive_headers(resp_headers) if resp_headers else {}
         telemetry.log_request(
@@ -392,6 +430,9 @@ def _log_telemetry(
             response_body=body_str[:500_000],
             latency_ms=latency_ms,
             upstream=provider.base_url,
+            model_name=model_name,
+            input_tokens=usage["input_tokens"], output_tokens=usage["output_tokens"],
+            total_tokens=usage["total_tokens"],
         )
     except Exception:
         logger.exception("Failed to log telemetry")

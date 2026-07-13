@@ -46,6 +46,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_export(params)
         elif path == "/api/cache/clear":
             self._serve_cache_clear()
+        elif path == "/api/usage":
+            self._serve_usage(params)
         else:
             self._serve_404()
 
@@ -163,6 +165,36 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _serve_cache_clear(self) -> None:
         self.api.clear_cache()
         self._serve_json({"status": "ok"})
+
+    def _serve_usage(self, params: dict) -> None:
+        """Serve usage summary for a UTC range (public GET /api/usage)."""
+        start = params.get("start", [None])[0]
+        end = params.get("end", [None])[0]
+
+        # Validate required parameters
+        if not start or not end:
+            self._serve_json({"error": "Missing required parameters: start, end"}, 400)
+            return
+
+        # Validate ISO-8601 format and range
+        from datetime import datetime, timezone
+        try:
+            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            self._serve_json({"error": "Invalid datetime format. Use ISO-8601 UTC."}, 400)
+            return
+
+        if end_dt <= start_dt:
+            self._serve_json({"error": "end must be after start"}, 400)
+            return
+
+        if (end_dt - start_dt).total_seconds() > 48 * 3600:
+            self._serve_json({"error": "Range must not exceed 48 hours"}, 400)
+            return
+
+        result = self.api.get_usage_summary(start, end)
+        self._serve_json(result)
 
 
 class DashboardServer:

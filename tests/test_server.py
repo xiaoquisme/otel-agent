@@ -1,6 +1,7 @@
 """Tests for _log_telemetry and request/response body logging."""
 import json
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -8,9 +9,51 @@ import duckdb
 import httpx
 import pytest
 
+from otel_agent import server
 from otel_agent.config import Config
 from otel_agent.logger import TelemetryLogger
 from otel_agent.server import _log_telemetry, create_app
+
+
+# ------------------------------------------------------------------
+# Reusable fixture helpers (T002)
+# ------------------------------------------------------------------
+
+def _make_openai_usage_response(
+    *, input_tokens: int = 10, output_tokens: int = 5,
+    total_tokens: int | None = None,
+) -> dict:
+    """Build an OpenAI-shaped response body with usage."""
+    usage = {"prompt_tokens": input_tokens, "completion_tokens": output_tokens}
+    if total_tokens is not None:
+        usage["total_tokens"] = total_tokens
+    else:
+        usage["total_tokens"] = input_tokens + output_tokens
+    return {"choices": [{"message": {"content": "ok"}}], "usage": usage, "model": "gpt-4"}
+
+
+def _make_anthropic_usage_response(
+    *, input_tokens: int = 10, output_tokens: int = 5,
+) -> dict:
+    """Build an Anthropic-shaped response body with usage."""
+    return {
+        "content": [{"type": "text", "text": "ok"}],
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+        "model": "claude-sonnet-4-20250514",
+    }
+
+
+def _make_no_usage_response() -> dict:
+    """Build a response body with no usage data."""
+    return {"choices": [{"message": {"content": "ok"}}]}
+
+
+def _make_malformed_usage_response() -> dict:
+    """Build a response with invalid usage values."""
+    return {
+        "choices": [{"message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": -1, "completion_tokens": True, "total_tokens": "bad"},
+    }
 
 
 def _make_provider(name: str = "openai", base_url: str = "https://api.openai.com") -> MagicMock:
@@ -292,3 +335,183 @@ async def test_nonstreaming_after_streaming():
         # Second record: non-streaming (no 'streamed' key)
         second = json.loads(rows[1][0])
         assert second.get("streamed") is not True
+
+# ------------------------------------------------------------------
+# T012: normalize_usage unit tests
+# ------------------------------------------------------------------
+
+def test_normalize_usage_openai_with_total():
+    """OpenAI shape with explicit total_tokens."""
+    normalize = getattr(server, "normalize_usage")
+    result = normalize({"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+    assert result == {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+
+
+def test_normalize_usage_openai_computed_total():
+    """OpenAI shape without total_tokens — computed from components."""
+    normalize = getattr(server, "normalize_usage")
+    result = normalize({"usage": {"prompt_tokens": 10, "completion_tokens": 5}})
+    assert result == {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+
+
+def test_normalize_usage_anthropic():
+    """Anthropic shape."""
+    normalize = getattr(server, "normalize_usage")
+    result = normalize({"usage": {"input_tokens": 20, "output_tokens": 10}})
+    assert result == {"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}
+
+
+def test_normalize_usage_invalid_values():
+    """Negative and non-int values produce None."""
+    normalize = getattr(server, "normalize_usage")
+    result = normalize({"usage": {"prompt_tokens": -1, "completion_tokens": True, "total_tokens": "bad"}})
+    assert result["input_tokens"] is None
+    assert result["output_tokens"] is None
+    assert result["total_tokens"] is None
+
+
+def test_normalize_usage_missing_usage():
+    """Response with no usage key."""
+    normalize = getattr(server, "normalize_usage")
+    result = normalize({"choices": []})
+    assert result == {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+
+
+def test_normalize_usage_one_component():
+    """Only total_tokens provided — components are None."""
+    normalize = getattr(server, "normalize_usage")
+    result = normalize({"usage": {"total_tokens": 9}})
+    assert result == {"input_tokens": None, "output_tokens": None, "total_tokens": 9}
+
+
+def test_normalize_usage_string_response():
+    """Non-dict response returns None for all fields."""
+    normalize = getattr(server, "normalize_usage")
+    result = normalize("not a dict")
+    assert result == {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+
+
+def test_log_telemetry_stores_model_name():
+    """_log_telemetry extracts model from response body."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "model_name.duckdb"
+        telemetry = TelemetryLogger(db_path)
+        _log_telemetry(
+            telemetry, _make_request(), 200,
+            {"choices": [], "model": "openai/gpt-4o", "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}},
+            100.0, _make_provider(),
+        )
+        telemetry.close()
+        conn = duckdb.connect(str(db_path), read_only=True)
+        row = conn.execute("SELECT model_name, input_tokens, output_tokens, total_tokens FROM requests").fetchone()
+        conn.close()
+        assert row[0] == "openai/gpt-4o"
+        assert row[1] == 10
+        assert row[2] == 5
+        assert row[3] == 15
+
+
+def test_log_telemetry_no_model_name():
+    """_log_telemetry stores NULL model_name when response has none."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "no_model.duckdb"
+        telemetry = TelemetryLogger(db_path)
+        _log_telemetry(
+            telemetry, _make_request(), 200,
+            {"choices": []},
+            100.0, _make_provider(),
+        )
+        telemetry.close()
+        conn = duckdb.connect(str(db_path), read_only=True)
+        row = conn.execute("SELECT model_name FROM requests").fetchone()
+        conn.close()
+        assert row[0] is None
+
+
+def test_log_telemetry_log_body_false_no_usage():
+    """When log_body=False and no usage, analytics are all NULL."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "no_log.duckdb"
+        telemetry = TelemetryLogger(db_path)
+        _log_telemetry(
+            telemetry, _make_request(), 200,
+            {"choices": []},
+            100.0, _make_provider(), log_body=False,
+        )
+        telemetry.close()
+        conn = duckdb.connect(str(db_path), read_only=True)
+        row = conn.execute("SELECT request_body, model_name, input_tokens FROM requests").fetchone()
+        conn.close()
+        assert row[0] == ""
+        assert row[1] is None
+        assert row[2] is None
+
+
+# ------------------------------------------------------------------
+# T029: Streaming usage tests (US3)
+# ------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_streaming_captures_terminal_usage():
+    """Streaming chunks with usage data are captured and persisted."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "stream_usage.duckdb"
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        chunks = [
+            {"choices": [{"delta": {"content": "Hello"}, "index": 0}]},
+            {"choices": [{"delta": {"content": " world"}, "index": 0}], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}},
+        ]
+        mock_stream = _FakeStreamMethod(chunks)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/chat/completions",
+                    json={"model": "openai/gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                )
+                await resp.aread()
+
+        telemetry.close()
+        conn = duckdb.connect(str(db_path), read_only=True)
+        row = conn.execute("SELECT input_tokens, output_tokens, total_tokens FROM requests").fetchone()
+        conn.close()
+        assert row is not None, "No telemetry record found"
+        assert row[0] == 10
+        assert row[1] == 5
+        assert row[2] == 15
+
+
+@pytest.mark.anyio
+async def test_streaming_no_usage_all_null():
+    """Streaming without usage data produces NULL analytics."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "stream_null.duckdb"
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        chunks = [
+            {"choices": [{"delta": {"content": "Hello"}, "index": 0}]},
+        ]
+        mock_stream = _FakeStreamMethod(chunks)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/chat/completions",
+                    json={"model": "openai/gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                )
+                await resp.aread()
+
+        telemetry.close()
+        conn = duckdb.connect(str(db_path), read_only=True)
+        row = conn.execute("SELECT input_tokens, output_tokens, total_tokens FROM requests").fetchone()
+        conn.close()
+        assert row[0] is None
+        assert row[1] is None
+        assert row[2] is None

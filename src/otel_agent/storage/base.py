@@ -108,5 +108,9 @@ class StorageBackend(ABC):
         """
 
     @abstractmethod
+    def get_usage_summary(self, start: str, end: str) -> dict:
+        """Return completed request usage for a UTC half-open range."""
+
+    @abstractmethod
     def close(self) -> None:
         """Release database resources."""

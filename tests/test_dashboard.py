@@ -2,11 +2,107 @@
 
 import json
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import duckdb
-
 from otel_agent.dashboard.api import DashboardAPI, CountCache
+
+
+# ------------------------------------------------------------------
+# Reusable fixture helpers (T001)
+# ------------------------------------------------------------------
+
+def _current_day_utc_range() -> tuple[str, str]:
+    """Return (start, end) UTC ISO-8601 strings for the current calendar day."""
+    now = datetime.now(timezone.utc)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    end = (now.replace(hour=0, minute=0, second=0, microsecond=0)
+           + timedelta(days=1)).isoformat()
+    return start, end
+
+
+def _day_ago_utc_range() -> tuple[str, str]:
+    """Return (start, end) for yesterday — should match nothing for current-day tests."""
+    now = datetime.now(timezone.utc)
+    start = (now.replace(hour=0, minute=0, second=0, microsecond=0)
+             - timedelta(days=1)).isoformat()
+    end = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    return start, end
+
+
+def _seed_usage_record(
+    db_path: Path,
+    *,
+    timestamp: str | None = None,
+    model_name: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    total_tokens: int | None = None,
+    response_status: int = 200,
+) -> None:
+    """Insert one request record with analytics fields into an existing DuckDB."""
+    conn = duckdb.connect(str(db_path))
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO requests
+           (timestamp, method, url, upstream, request_headers, request_body,
+            response_status, response_headers, response_body, latency_ms,
+            model_name, input_tokens, output_tokens, total_tokens)
+           VALUES (?, 'POST', '/test', '', '{}', '{}', ?, '{}', '{}', 1.0,
+                   ?, ?, ?, ?)""",
+        (timestamp, response_status, model_name, input_tokens, output_tokens, total_tokens),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _create_usage_db(db_path: Path, records: list[dict]) -> None:
+    """Create a DuckDB with the standard schema and seed multiple usage records."""
+    conn = duckdb.connect(str(db_path))
+    conn.execute("CREATE SEQUENCE IF NOT EXISTS requests_id_seq START 1")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS requests (
+            id INTEGER DEFAULT nextval('requests_id_seq') PRIMARY KEY,
+            timestamp TEXT NOT NULL,
+            method TEXT NOT NULL,
+            url TEXT NOT NULL,
+            upstream TEXT,
+            request_headers TEXT,
+            request_body TEXT,
+            response_status INTEGER,
+            response_headers TEXT,
+            response_body TEXT,
+            latency_ms DOUBLE,
+            model_name TEXT,
+            input_tokens BIGINT,
+            output_tokens BIGINT,
+            total_tokens BIGINT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)")
+    for r in records:
+        conn.execute(
+            """INSERT INTO requests
+               (timestamp, method, url, upstream, request_headers, request_body,
+                response_status, response_headers, response_body, latency_ms,
+                model_name, input_tokens, output_tokens, total_tokens)
+               VALUES (?, ?, ?, '', '{}', '{}', ?, '{}', '{}', 1.0,
+                       ?, ?, ?, ?)""",
+            (
+                r.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                r.get("method", "POST"),
+                r.get("url", "/test"),
+                r.get("response_status", 200),
+                r.get("model_name"),
+                r.get("input_tokens"),
+                r.get("output_tokens"),
+                r.get("total_tokens"),
+            ),
+        )
+    conn.commit()
+    conn.close()
 
 
 def _create_test_db(db_path: Path, n: int = 5) -> None:

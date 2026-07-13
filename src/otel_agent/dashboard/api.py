@@ -190,6 +190,15 @@ class DashboardAPI:
         # Fallback: direct storage connection
         return self._storage.get_all_filtered(search, method, status)
 
+    def get_usage_summary(self, start: str, end: str) -> dict:
+        """Return proxy-safe usage summary for the requested UTC range."""
+        proxy_result = self._http_get("/internal/dashboard/usage", {"start": start, "end": end})
+        if proxy_result is not None:
+            return proxy_result
+        if not self.db_path.exists():
+            return {"start": start, "end": end, "total_tokens": 0, "input_tokens": 0, "output_tokens": 0, "eligible_request_count": 0, "excluded_request_count": 0, "models": []}
+        return self._storage.get_usage_summary(start, end)
+
     def clear_cache(self) -> None:
         """Clear the COUNT cache."""
         self._count_cache.clear()
