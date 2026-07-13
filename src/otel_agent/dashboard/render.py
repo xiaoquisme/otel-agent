@@ -22,7 +22,7 @@ _BLEACH_TAGS = {
     "blockquote", "table", "thead", "tbody", "tr", "th", "td",
     "hr", "img", "div", "span", "dl", "dt", "dd",
 }
-_BLEACH_ATTRS = {"a": ["href", "title", "target", "rel"], "img": ["src", "alt"]}
+_BLEACH_ATTRS = {"a": ["href", "title", "target", "rel"], "img": ["src", "alt"], "div": ["class"], "span": ["class"]}
 
 _md_ext = ["fenced_code", "tables", "nl2br"]
 
@@ -432,10 +432,9 @@ def _render_chat_message(role: str, content: str, is_html: bool = False) -> str:
             f"</div>"
         )
 
-    # Detect pre-rendered HTML (e.g. from tool-call rendering) to avoid
-    # passing it through bleach which strips class attributes.
-    if not is_html and content and "tool-call" in content:
-        is_html = True
+    # Callers set is_html=True when content was assembled by render_tool_calls().
+    # No heuristic string-matching — that created an injection vector where
+    # user content containing "tool-call" bypassed bleach sanitization.
 
     if is_html:
         rendered_content = content
@@ -468,7 +467,7 @@ def render_request_body(body: str, format_tag: str | None = None) -> str | None:
     elif fmt == "anthropic" and isinstance(parsed, dict):
         messages = _extract_anthropic_request(parsed)
 
-    if not messages or not messages:
+    if not messages:
         return None
 
     return "".join(_render_chat_message(m["role"], m["content"]) for m in messages)
@@ -550,7 +549,6 @@ def render_body(body: str | None, context: str = "request", format_tag: str | No
 
     fmt = detect_format(body, format_tag)
     if fmt != "unknown":
-        is_request = fmt in ("openai", "anthropic") and detect_format(body, format_tag) == fmt
         llm_html: str | None = None
         if fmt in ("openai", "anthropic"):
             llm_html = render_request_body(body, format_tag) or render_response_body(body, format_tag)
