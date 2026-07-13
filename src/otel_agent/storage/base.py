@@ -90,17 +90,6 @@ class StorageBackend(ABC):
         """
 
     @abstractmethod
-    def get_requests_since(self, last_id: int) -> list[dict]:
-        """Return requests with ``id > last_id``, ordered by id ascending.
-
-        Used by the SSE live-feed endpoint.
-        """
-
-    @abstractmethod
-    def get_max_id(self) -> int:
-        """Return the current maximum request id, or 0 if the table is empty."""
-
-    @abstractmethod
     def get_all_filtered(
         self, search: str = "", method: str = "", status: int = 0
     ) -> list[dict]:

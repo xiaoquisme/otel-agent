@@ -59,18 +59,6 @@ class DashboardAPI:
             return None
         return self._storage.get_request(request_id)
 
-    def get_requests_since(self, last_id: int) -> list[dict]:
-        """Get requests with id > last_id (for SSE)."""
-        if not self.db_path.exists():
-            return []
-        return self._storage.get_requests_since(last_id)
-
-    def get_max_id(self) -> int:
-        """Get the current max request id."""
-        if not self.db_path.exists():
-            return 0
-        return self._storage.get_max_id()
-
     def get_all_filtered(self, search: str = "", method: str = "", status: int = 0) -> list[dict]:
         """Get all filtered requests (for export, no pagination)."""
         if not self.db_path.exists():

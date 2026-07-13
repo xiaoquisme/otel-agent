@@ -20,7 +20,6 @@ export interface UseRequestsActions {
   setStatus: (status: number) => void
   goNext: () => void
   goPrev: () => void
-  prependRequest: (req: RequestItem) => void
 }
 
 export function useRequests(): UseRequestsState & UseRequestsActions {
@@ -92,13 +91,6 @@ export function useRequests(): UseRequestsState & UseRequestsActions {
     }
   }, [search, method, status, doFetch])
 
-  const prependRequest = useCallback((req: RequestItem) => {
-    setRequests((prev) => {
-      const next = [req, ...prev]
-      return next.length > 50 ? next.slice(0, 50) : next
-    })
-  }, [])
-
   return {
     requests,
     total,
@@ -114,6 +106,5 @@ export function useRequests(): UseRequestsState & UseRequestsActions {
     setStatus,
     goNext,
     goPrev,
-    prependRequest,
   }
 }

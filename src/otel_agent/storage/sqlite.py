@@ -204,20 +204,6 @@ class SQLiteStorage(StorageBackend):
                     pass
         return result_dict
 
-    def get_requests_since(self, last_id: int) -> list[dict]:
-        conn = self._get_conn()
-        cur = conn.execute(
-            "SELECT id, timestamp, method, url, upstream, response_status, latency_ms "
-            "FROM requests WHERE id > ? ORDER BY id ASC",
-            (last_id,),
-        )
-        return [self._row_to_dict(r) for r in cur.fetchall()]
-
-    def get_max_id(self) -> int:
-        conn = self._get_conn()
-        row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM requests").fetchone()
-        return row[0]
-
     def get_all_filtered(
         self, search: str = "", method: str = "", status: int = 0
     ) -> list[dict]:

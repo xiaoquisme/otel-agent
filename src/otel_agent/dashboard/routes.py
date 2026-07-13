@@ -1,10 +1,9 @@
 """FastAPI router for the otel-agent dashboard.
 
-Provides 8 endpoints:
+Provides 7 endpoints:
   GET /              — index.html (served by server.py mount)
   GET /api/requests  — paginated request list
   GET /api/requests/{id} — single request detail
-  GET /api/events    — SSE stream of new requests
   GET /api/export    — CSV/JSON export
   GET /api/cache/clear — clear the COUNT cache
   GET /api/usage     — usage summary for a time range
@@ -12,7 +11,6 @@ Provides 8 endpoints:
 """
 from __future__ import annotations
 
-import asyncio
 import csv
 import io
 import json
@@ -21,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response
 
 from otel_agent.dashboard.api import DashboardAPI
 
@@ -90,28 +88,6 @@ def render_request(request_id: int) -> JSONResponse:
         "rendered_request": result.get("rendered_request"),
         "rendered_response": result.get("rendered_response"),
     })
-
-
-@router.get("/events")
-async def sse_events():
-    """Server-Sent Events stream of new requests."""
-    api = get_api()
-    state = {"last_id": api.get_max_id()}
-
-    async def event_generator():
-        while True:
-            new_requests = api.get_requests_since(state["last_id"])
-            for req in new_requests:
-                data = json.dumps(req)
-                yield f"data: {data}\n\n"
-                state["last_id"] = req["id"]
-            await asyncio.sleep(1)
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-    )
 
 
 @router.get("/export")

@@ -186,22 +186,6 @@ class DuckDBStorage(StorageBackend):
                     pass
         return result_dict
 
-    def get_requests_since(self, last_id: int) -> list[dict]:
-        conn = self._get_conn()
-        result = conn.execute(
-            "SELECT id, timestamp, method, url, upstream, response_status, latency_ms "
-            "FROM requests WHERE id > ? ORDER BY id ASC",
-            (last_id,),
-        )
-        rows = result.fetchall()
-        columns = [desc[0] for desc in result.description] if result.description else []
-        return [dict(zip(columns, r)) for r in rows]
-
-    def get_max_id(self) -> int:
-        conn = self._get_conn()
-        row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM requests").fetchone()
-        return row[0]
-
     def get_all_filtered(
         self, search: str = "", method: str = "", status: int = 0
     ) -> list[dict]:

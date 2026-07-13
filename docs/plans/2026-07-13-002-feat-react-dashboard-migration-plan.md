@@ -18,7 +18,7 @@ execution: code
 
 **Stop conditions:**
 - Dashboard serves from the same FastAPI process (existing `GET /` route serves the built SPA)
-- All current features work: request list, detail panel, SSE, search/filter, pagination, usage stats, charts, export
+- All current features work: request list, detail panel, search/filter, pagination, usage stats, charts, export
 - TypeScript compiles with zero errors
 - All existing tests pass; new component tests added
 - `npm run build` produces a production bundle served by FastAPI's `StaticFiles`
@@ -55,7 +55,7 @@ The dashboard currently serves a single `index.html` file with embedded CSS (~17
 **Feature parity:**
 - R6. Request list with search, method/status filters, cursor-based pagination
 - R7. Detail panel (slide-out) showing pre-rendered LLM bodies (formatted/raw toggle)
-- R8. SSE real-time updates (new requests appear in list)
+- R8. ~~SSE real-time updates~~ *Removed — SSE polling caused DB pressure; users refresh manually*
 - R9. Usage overview (token counts, model breakdown table)
 - R10. Latency chart (Chart.js or recharts)
 - R11. CSV/JSON export buttons
@@ -63,7 +63,7 @@ The dashboard currently serves a single `index.html` file with embedded CSS (~17
 
 **Backward compatibility:**
 - R12. `GET /` serves the SPA (replaces current index.html serving)
-- R13. All existing API endpoints unchanged (`/api/requests`, `/api/requests/{id}`, `/api/events`, `/api/export`, `/api/usage`, `/api/cache/clear`, `/api/render/{id}`)
+- R13. All existing API endpoints unchanged (`/api/requests`, `/api/requests/{id}`, `/api/export`, `/api/usage`, `/api/cache/clear`, `/api/render/{id}`)
 - R14. `otel-agent dashboard` CLI command continues to work
 
 ### Scope Boundaries
@@ -73,7 +73,6 @@ The dashboard currently serves a single `index.html` file with embedded CSS (~17
 - Component architecture for all current features
 - Dark theme CSS (port existing styles to CSS modules or Tailwind)
 - API client layer
-- SSE integration
 - Chart.js or recharts for latency chart
 - Build pipeline and FastAPI integration
 

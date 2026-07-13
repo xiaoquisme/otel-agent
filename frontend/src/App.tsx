@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState } from 'react'
 import Header from './components/Header'
 import RequestList from './components/RequestList'
 import DetailPanel from './components/DetailPanel'
@@ -6,7 +6,6 @@ import ExportButtons from './components/ExportButtons'
 import LatencyChart from './components/LatencyChart'
 import UsageOverview from './components/UsageOverview'
 import { useRequests } from './hooks/useRequests'
-import type { RequestItem } from './api/types'
 
 export default function App() {
   const {
@@ -24,39 +23,9 @@ export default function App() {
     setStatus,
     goNext,
     goPrev,
-    prependRequest,
   } = useRequests()
 
   const [selectedId, setSelectedId] = useState<number | null>(null)
-  const eventSourceRef = useRef<EventSource | null>(null)
-
-  // SSE real-time updates
-  const connectSSE = useCallback(() => {
-    const es = new EventSource('/api/events')
-    es.onmessage = (e) => {
-      try {
-        const req: RequestItem = JSON.parse(e.data) as RequestItem
-        // Only prepend if on first page with no filters
-        if (search === '' && method === '' && status === 0) {
-          prependRequest(req)
-        }
-      } catch {
-        // ignore parse errors
-      }
-    }
-    es.onerror = () => {
-      es.close()
-      setTimeout(connectSSE, 5000)
-    }
-    eventSourceRef.current = es
-  }, [search, method, status, prependRequest])
-
-  useEffect(() => {
-    connectSSE()
-    return () => {
-      eventSourceRef.current?.close()
-    }
-  }, [connectSSE])
 
   const currentParams = { search, method, status }
 

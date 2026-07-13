@@ -40,8 +40,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_requests(params)
         elif path.startswith("/api/requests/"):
             self._serve_request_detail(path)
-        elif path == "/api/events":
-            self._serve_sse()
         elif path == "/api/export":
             self._serve_export(params)
         elif path == "/api/cache/clear":
@@ -92,27 +90,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._serve_json({"error": "Request not found"}, 404)
             return
         self._serve_json(result)
-
-    def _serve_sse(self) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
-
-        last_id = self.api.get_max_id()
-        try:
-            while True:
-                new_requests = self.api.get_requests_since(last_id)
-                for req in new_requests:
-                    data = json.dumps(req)
-                    self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
-                    self.wfile.flush()
-                    last_id = req["id"]
-                import time
-                time.sleep(1)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
 
     def _serve_export(self, params: dict) -> None:
         fmt = params.get("format", ["csv"])[0]

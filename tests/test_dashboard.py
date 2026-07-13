@@ -240,31 +240,6 @@ def test_get_request_not_found(tmp_path):
     api.close()
 
 
-def test_get_requests_since(tmp_path):
-    db = tmp_path / "test.duckdb"
-    _create_test_db(db, 5)
-    api = DashboardAPI(db)
-    result = api.get_requests_since(3)
-    assert len(result) == 2
-    assert all(r["id"] > 3 for r in result)
-    api.close()
-
-
-def test_get_max_id(tmp_path):
-    db = tmp_path / "test.duckdb"
-    _create_test_db(db, 5)
-    api = DashboardAPI(db)
-    assert api.get_max_id() == 5
-    api.close()
-
-
-def test_get_max_id_empty(tmp_path):
-    db = tmp_path / "test.duckdb"
-    api = DashboardAPI(db)
-    assert api.get_max_id() == 0
-    api.close()
-
-
 def test_get_all_filtered(tmp_path):
     db = tmp_path / "test.duckdb"
     _create_test_db(db, 5)
@@ -357,8 +332,6 @@ def test_empty_database_no_crash(tmp_path):
     result = api.get_requests()
     assert result == {"data": [], "total": 0, "cursor": 0, "next_cursor": 0, "has_more": False}
     assert api.get_request(1) is None
-    assert api.get_requests_since(0) == []
-    assert api.get_max_id() == 0
     assert api.get_all_filtered() == []
     api.close()
 
