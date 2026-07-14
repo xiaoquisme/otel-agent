@@ -88,7 +88,7 @@ function MessageBubble({ message }: { message: StructuredMessage }) {
       {message.tool_calls && message.tool_calls.length > 0 && (
         <div style={{ marginTop: 'var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
           {message.tool_calls.map((tc, i) => (
-            <ToolCallBlock key={i} name={tc.name} arguments={tc.arguments} />
+            <ToolCallBlock key={i} id={tc.id} name={tc.name} arguments={tc.arguments} />
           ))}
         </div>
       )}

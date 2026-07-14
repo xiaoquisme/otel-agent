@@ -33,6 +33,7 @@ def _extract_openai_request_messages(parsed: dict[str, Any]) -> list[dict[str, A
             for tc in m["tool_calls"]:
                 fn = tc.get("function", tc)
                 tool_calls.append({
+                    "id": tc.get("id"),
                     "name": fn.get("name", "tool"),
                     "arguments": fn.get("arguments", ""),
                 })
@@ -98,7 +99,7 @@ def _extract_streaming_messages(parsed: dict[str, Any]) -> tuple[list[dict[str, 
     reasoning_content = ""
     model = ""
     finish_reason = ""
-    tool_calls: dict[int, dict[str, str]] = {}
+    tool_calls: dict[int, dict[str, str | None]] = {}
     usage: dict[str, Any] = {}
 
     for chunk in chunks:
@@ -127,7 +128,9 @@ def _extract_streaming_messages(parsed: dict[str, Any]) -> tuple[list[dict[str, 
             for tc in delta["tool_calls"]:
                 idx = tc.get("index", 0)
                 if idx not in tool_calls:
-                    tool_calls[idx] = {"name": "", "arguments": ""}
+                    tool_calls[idx] = {"id": None, "name": "", "arguments": ""}
+                if tc.get("id"):
+                    tool_calls[idx]["id"] = tc["id"]
                 if tc.get("function"):
                     if tc["function"].get("name"):
                         tool_calls[idx]["name"] = tc["function"]["name"]
@@ -167,7 +170,7 @@ def _extract_openai_response_messages(parsed: dict[str, Any]) -> tuple[list[dict
     tool_calls = msg.get("tool_calls")
     if tool_calls:
         assistant_msg["tool_calls"] = [
-            {"name": tc.get("function", {}).get("name", "tool"), "arguments": tc.get("function", {}).get("arguments", "")}
+            {"id": tc.get("id"), "name": tc.get("function", {}).get("name", "tool"), "arguments": tc.get("function", {}).get("arguments", "")}
             for tc in tool_calls
         ]
 
@@ -195,7 +198,7 @@ def _extract_anthropic_response_messages(parsed: dict[str, Any]) -> tuple[list[d
     tool_calls = []
     for b in content:
         if isinstance(b, dict) and b.get("type") == "tool_use":
-            tool_calls.append({"name": b.get("name", "tool"), "arguments": json.dumps(b.get("input", {}))})
+            tool_calls.append({"id": b.get("id"), "name": b.get("name", "tool"), "arguments": json.dumps(b.get("input", {}))})
 
     messages: list[dict[str, Any]] = []
     assistant_msg: dict[str, Any] = {"role": "assistant", "content": combined_text}
