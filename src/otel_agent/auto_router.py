@@ -6,6 +6,7 @@ algorithms (Thompson Sampling) to balance exploration vs exploitation.
 from __future__ import annotations
 
 import random
+from collections import defaultdict
 from dataclasses import dataclass, field
 
 from otel_agent.config import Provider
@@ -16,6 +17,7 @@ class ProviderScore:
     """Beta distribution parameters for Thompson Sampling."""
     successes: float = 1.0  # Start with 1 to avoid 0/0
     failures: float = 1.0
+    seeded: bool = False  # Track whether cost-based seeding has been applied
 
     def sample(self) -> float:
         """Sample from the Beta distribution."""
@@ -41,27 +43,15 @@ class AutoRouter:
     """
 
     # tier -> provider_name -> ProviderScore
-    scores: dict[str, dict[str, ProviderScore]] = field(default_factory=dict)
-
-    def _get_or_create_score(self, tier: str, provider_name: str) -> ProviderScore:
-        """Get or create a score entry for a provider in a tier."""
-        if tier not in self.scores:
-            self.scores[tier] = {}
-        if provider_name not in self.scores[tier]:
-            self.scores[tier][provider_name] = ProviderScore()
-        return self.scores[tier][provider_name]
+    scores: dict[str, dict[str, ProviderScore]] = field(
+        default_factory=lambda: defaultdict(dict)
+    )
 
     def seed_from_costs(self, tier: str, providers: list[Provider]) -> None:
-        """Seed initial scores based on relative cost.
-
-        Cheaper providers start with higher success priors, giving them
-        an advantage in early exploration while still allowing Thompson
-        Sampling to correct if they perform poorly.
-        """
+        """Seed initial scores based on relative cost (only once per provider)."""
         if not providers:
             return
 
-        # Calculate average cost for this tier
         costs = []
         for p in providers:
             avg_cost = (p.cost_per_1k_input + p.cost_per_1k_output) / 2
@@ -74,12 +64,11 @@ class AutoRouter:
         avg_cost = sum(c for _, c in costs) / len(costs)
 
         for name, cost in costs:
-            score = self._get_or_create_score(tier, name)
-            # Cheaper providers get more initial successes
-            # cost_ratio: how much cheaper than average (0.5 = half price, 2.0 = double)
+            score = self.scores[tier].setdefault(name, ProviderScore())
+            if score.seeded:
+                continue  # Already seeded — skip
+            score.seeded = True
             cost_ratio = cost / avg_cost if avg_cost > 0 else 1.0
-            # Map cost ratio to success bonus: cheaper = more successes
-            # A provider at half the average cost gets +2 success prior
             bonus = max(0, (1.0 - cost_ratio) * 4)
             score.successes += bonus
 
@@ -88,28 +77,19 @@ class AutoRouter:
         tier: str,
         available: list[Provider],
     ) -> Provider | None:
-        """Select the best provider for a tier using Thompson Sampling.
-
-        Args:
-            tier: The complexity tier (simple, medium, complex, reasoning)
-            available: Providers that support this tier and are available
-
-        Returns:
-            The selected provider, or None if no providers are available.
-        """
+        """Select the best provider for a tier using Thompson Sampling."""
         if not available:
             return None
 
         # Ensure all providers have scores
         for p in available:
-            self._get_or_create_score(tier, p.name)
+            self.scores[tier].setdefault(p.name, ProviderScore())
 
         # Sample from each provider's Beta distribution
-        samples = []
-        for p in available:
-            score = self.scores[tier][p.name]
-            sample_value = score.sample()
-            samples.append((sample_value, p))
+        samples = [
+            (self.scores[tier][p.name].sample(), p)
+            for p in available
+        ]
 
         # Select the provider with the highest sample
         samples.sort(key=lambda x: x[0], reverse=True)
@@ -121,14 +101,8 @@ class AutoRouter:
         tier: str,
         success: bool,
     ) -> None:
-        """Record the outcome of a routing decision.
-
-        Args:
-            provider_name: The provider that was used
-            tier: The complexity tier
-            success: Whether the request succeeded
-        """
-        score = self._get_or_create_score(tier, provider_name)
+        """Record the outcome of a routing decision."""
+        score = self.scores[tier].setdefault(provider_name, ProviderScore())
         if success:
             score.record_success()
         else:
@@ -138,13 +112,12 @@ class AutoRouter:
         """Get statistics for all providers in a tier."""
         if tier not in self.scores:
             return {}
-        result = {}
-        for name, score in self.scores[tier].items():
-            total = score.successes + score.failures
-            result[name] = {
+        return {
+            name: {
                 "successes": score.successes,
                 "failures": score.failures,
                 "mean": score.mean,
-                "sample_count": total - 2,  # Subtract prior
+                "sample_count": score.successes + score.failures - 2,
             }
-        return result
+            for name, score in self.scores[tier].items()
+        }

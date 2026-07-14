@@ -121,15 +121,6 @@ class TestSessionCache:
         assert cache.get(None, msgs1).provider_name == "openai"
         assert cache.get(None, msgs2).provider_name == "anthropic"
 
-    def test_record_failure(self):
-        cache = SessionCache()
-        msgs = [{"role": "user", "content": "hi"}]
-        cache.set("s1", msgs, "openai", "simple")
-        count = cache.record_failure("s1", msgs)
-        assert count == 1
-        count = cache.record_failure("s1", msgs)
-        assert count == 2
-
     def test_clear(self):
         cache = SessionCache()
         msgs = [{"role": "user", "content": "hi"}]

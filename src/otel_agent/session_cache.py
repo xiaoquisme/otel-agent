@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -16,7 +16,6 @@ class SessionEntry:
     provider_name: str
     tier: str
     timestamp: float
-    failure_count: int = 0
 
 
 class SessionCache:
@@ -43,15 +42,11 @@ class SessionCache:
         return "default"
 
     def get(self, session_id: str | None, messages: list[dict]) -> SessionEntry | None:
-        """Look up a cached session routing decision.
-
-        Returns None if not found or expired.
-        """
+        """Look up a cached session routing decision."""
         key = self._make_key(session_id, messages)
         entry = self._cache.get(key)
         if entry is None:
             return None
-        # Check TTL
         if time.monotonic() - entry.timestamp > self.ttl_seconds:
             del self._cache[key]
             return None
@@ -71,15 +66,6 @@ class SessionCache:
             tier=tier,
             timestamp=time.monotonic(),
         )
-
-    def record_failure(self, session_id: str | None, messages: list[dict]) -> int:
-        """Record a failure for a session. Returns current failure count."""
-        key = self._make_key(session_id, messages)
-        entry = self._cache.get(key)
-        if entry:
-            entry.failure_count += 1
-            return entry.failure_count
-        return 0
 
     def clear(self) -> None:
         """Clear all cached sessions."""
