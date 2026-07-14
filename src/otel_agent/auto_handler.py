@@ -1,0 +1,226 @@
+"""Auto-mode handler — orchestrates the auto-routing pipeline.
+
+Intercepts model="auto" requests and routes them through:
+1. Task classification (classifier.py)
+2. Session cache lookup (session_cache.py)
+3. Provider selection via Thompson Sampling (auto_router.py)
+4. Fallback with circuit breaking (circuit_breaker.py)
+5. Response headers and telemetry logging
+"""
+from __future__ import annotations
+
+import json
+import logging
+import time
+from typing import Any
+
+import httpx
+
+from otel_agent.auto_router import AutoRouter
+from otel_agent.circuit_breaker import CircuitBreaker
+from otel_agent.classifier import classify_task
+from otel_agent.config import Config, Provider
+from otel_agent.session_cache import SessionCache
+
+logger = logging.getLogger(__name__)
+
+# Module-level singletons (initialized once per process)
+_auto_router = AutoRouter()
+_circuit_breaker = CircuitBreaker()
+_session_cache = SessionCache()
+
+
+def get_auto_router() -> AutoRouter:
+    return _auto_router
+
+
+def get_circuit_breaker() -> CircuitBreaker:
+    return _circuit_breaker
+
+
+def get_session_cache() -> SessionCache:
+    return _session_cache
+
+
+def _select_provider_for_tier(
+    tier: str,
+    config: Config,
+    session_id: str | None,
+    messages: list[dict],
+) -> tuple[Provider, str, str] | None:
+    """Select a provider for the given tier.
+
+    Returns (provider, tier_used, reason) or None if no providers available.
+    """
+    # Check session cache first
+    cached = _session_cache.get(session_id, messages)
+    if cached:
+        provider = config.get_provider(cached.provider_name)
+        if provider and _circuit_breaker.is_available(cached.provider_name):
+            return provider, cached.tier, "session_sticky"
+
+    # Get available providers for this tier
+    available = config.get_providers_for_tier(tier)
+    available = [p for p in available if _circuit_breaker.is_available(p.name)]
+
+    if not available:
+        # Try lower tiers as fallback
+        tier_order = ["simple", "medium", "complex", "reasoning"]
+        idx = tier_order.index(tier) if tier in tier_order else 0
+        for fallback_tier in tier_order[idx:]:
+            available = config.get_providers_for_tier(fallback_tier)
+            available = [p for p in available if _circuit_breaker.is_available(p.name)]
+            if available:
+                tier = fallback_tier
+                break
+
+    if not available:
+        return None
+
+    # Seed router if needed
+    _auto_router.seed_from_costs(tier, available)
+
+    # Select via Thompson Sampling
+    provider = _auto_router.select_provider(tier, available)
+    if provider is None:
+        return None
+
+    return provider, tier, "cost_optimized"
+
+
+async def handle_auto_mode(
+    body: dict,
+    config: Config,
+    client: httpx.AsyncClient,
+    telemetry: Any,
+    request: Any,
+    is_stream: bool,
+) -> Any:
+    """Handle a model='auto' request through the auto-routing pipeline.
+
+    This function intercepts before parse_model() and orchestrates:
+    classification → session lookup → provider selection → fallback → response
+    """
+    from otel_agent.server import (
+        _handle_non_streaming,
+        _handle_streaming,
+        AUTH_HEADERS,
+        openai_to_anthropic_request,
+    )
+
+    messages = body.get("messages", [])
+    session_id = request.headers.get("X-Session-ID")
+
+    # Step 1: Classify the task
+    tier = classify_task(messages)
+
+    # Step 2: Select provider (with session stickiness + circuit breaking)
+    result = _select_provider_for_tier(tier, config, session_id, messages)
+
+    if result is None:
+        return JSONResponse(
+            {"error": {"message": "No providers available for auto-routing", "type": "server_error"}},
+            status_code=503,
+        )
+
+    provider, tier_used, reason = result
+
+    # Step 3: Cache session decision
+    _session_cache.set(session_id, messages, provider.name, tier_used)
+
+    # Step 4: Prepare upstream request
+    upstream_body = dict(body)
+    upstream_body["model"] = provider.name + "/" + body.get("model", "auto")
+    # For auto mode, we don't know the upstream model name — use a generic one
+    # The provider will use whatever model it has available
+    upstream_body.pop("model", None)
+
+    needs_conversion = provider.api_format == "anthropic"
+    if needs_conversion:
+        upstream_body = openai_to_anthropic_request(upstream_body)
+        url = f"{provider.base_url.rstrip('/')}/messages"
+    else:
+        url = f"{provider.base_url.rstrip('/')}/chat/completions"
+
+    headers = AUTH_HEADERS[provider.api_format](provider.api_key)
+    headers["Content-Type"] = "application/json"
+
+    start_time = time.monotonic()
+    original_body = json.dumps(body)
+
+    # Step 5: Forward request with fallback
+    fallback_depth = 0
+    max_fallbacks = 5
+    current_provider = provider
+    current_tier = tier_used
+
+    while fallback_depth < max_fallbacks:
+        try:
+            if is_stream:
+                response = await _handle_streaming(
+                    client, url, headers, upstream_body,
+                    current_provider, telemetry, request, start_time,
+                    source_format="openai", target_format=current_provider.api_format,
+                    request_body=original_body, log_body=config.log_request_body,
+                )
+            else:
+                response = await _handle_non_streaming(
+                    client, url, headers, upstream_body,
+                    current_provider, telemetry, request, start_time,
+                    source_format="openai", target_format=current_provider.api_format,
+                    request_body=original_body, log_body=config.log_request_body,
+                )
+
+            # Step 6: Record success and add routing headers
+            _auto_router.record_outcome(current_provider.name, current_tier, success=True)
+            _circuit_breaker.record_success(current_provider.name)
+
+            # Add routing decision headers
+            if hasattr(response, 'headers'):
+                response.headers["X-Routed-Provider"] = current_provider.name
+                response.headers["X-Routed-Tier"] = current_tier
+                response.headers["X-Routed-Reason"] = reason
+                if fallback_depth > 0:
+                    response.headers["X-Routed-Fallback-Depth"] = str(fallback_depth)
+
+            return response
+
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            # Record failure and try next provider
+            _auto_router.record_outcome(current_provider.name, current_tier, success=False)
+            _circuit_breaker.record_failure(current_provider.name)
+
+            # Try next provider in fallback chain
+            fallback_depth += 1
+            available = config.get_providers_for_tier(current_tier)
+            available = [
+                p for p in available
+                if p.name != current_provider.name and _circuit_breaker.is_available(p.name)
+            ]
+
+            if not available:
+                return JSONResponse(
+                    {"error": {"message": f"All providers failed. Last error: {e}", "type": "server_error"}},
+                    status_code=502,
+                )
+
+            current_provider = available[0]
+            reason = f"fallback_from_{current_provider.name}"
+
+            # Update URL and headers for new provider
+            needs_conversion = current_provider.api_format == "anthropic"
+            if needs_conversion:
+                url = f"{current_provider.base_url.rstrip('/')}/messages"
+            else:
+                url = f"{current_provider.base_url.rstrip('/')}/chat/completions"
+            headers = AUTH_HEADERS[current_provider.api_format](current_provider.api_key)
+            headers["Content-Type"] = "application/json"
+
+    return JSONResponse(
+        {"error": {"message": "Max fallback depth exceeded", "type": "server_error"}},
+        status_code=502,
+    )
+
+
+# Import here to avoid circular imports
+from fastapi.responses import JSONResponse
