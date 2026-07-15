@@ -26,6 +26,8 @@ from otel_agent.config import Config, Provider
 from otel_agent.converter import (
     anthropic_to_openai_request,
     anthropic_to_openai_response,
+    convert_anthropic_chunk_to_openai,
+    convert_openai_chunk_to_anthropic,
     openai_to_anthropic_request,
     openai_to_anthropic_response,
 )
@@ -42,6 +44,7 @@ _session_cache = SessionCache()
 
 # Tier ordering: simple is cheapest, reasoning is most expensive
 TIER_ORDER = ["simple", "medium", "complex", "reasoning"]
+TIER_INDEX = {t: i for i, t in enumerate(TIER_ORDER)}
 
 # Auth header patterns per provider API format
 AUTH_HEADERS = {
@@ -55,6 +58,23 @@ def _build_upstream_url(provider: Provider) -> str:
     base = provider.base_url.rstrip("/")
     path = "messages" if provider.api_format == "anthropic" else "chat/completions"
     return f"{base}/{path}"
+
+
+def _build_request_headers(provider: Provider) -> dict[str, str]:
+    """Build auth + content-type headers for a provider."""
+    headers = AUTH_HEADERS[provider.api_format](provider.api_key)
+    headers["Content-Type"] = "application/json"
+    return headers
+
+
+def _build_routing_decision(
+    tier: str, provider_name: str, reason: str, fallback_depth: int, error: str | None = None,
+) -> dict:
+    """Build a routing_decision dict for telemetry and response headers."""
+    d = {"tier": tier, "provider": provider_name, "reason": reason, "fallback_depth": fallback_depth}
+    if error:
+        d["error"] = error
+    return d
 
 
 def _select_provider_for_tier(
@@ -80,7 +100,7 @@ def _select_provider_for_tier(
 
     if not available:
         # Fallback: try cheaper tiers first (simple < medium < complex < reasoning)
-        idx = TIER_ORDER.index(tier) if tier in TIER_ORDER else len(TIER_ORDER)
+        idx = TIER_INDEX.get(tier, len(TIER_ORDER))
         for fallback_tier in reversed(TIER_ORDER[:idx]):
             available = config.get_providers_for_tier(fallback_tier)
             available = [p for p in available if _circuit_breaker.is_available(p.name)]
@@ -106,18 +126,19 @@ def _prepare_request_body(
     body: dict,
     provider: Provider,
     client_format: str,
-) -> tuple[dict, str]:
+) -> dict:
     """Prepare the upstream request body for a provider.
 
     Handles format conversion between client format and provider format.
-    Returns (upstream_body, source_format) where source_format is what the
-    client expects back (for response conversion).
     """
     upstream_body = dict(body)
 
     # Use provider's default model (client sent "auto", provider needs a real model)
+    # If no default_model configured, remove the "auto" so the provider uses its own default
     if provider.default_model:
         upstream_body["model"] = provider.default_model
+    else:
+        upstream_body.pop("model", None)
 
     # Convert between formats if needed
     if client_format == "openai" and provider.api_format == "anthropic":
@@ -125,7 +146,7 @@ def _prepare_request_body(
     elif client_format == "anthropic" and provider.api_format == "openai":
         upstream_body = anthropic_to_openai_request(upstream_body)
 
-    return upstream_body, client_format
+    return upstream_body
 
 
 def _log_routing_telemetry(
@@ -199,10 +220,7 @@ async def handle_auto_mode(
     messages = body.get("messages", [])
     session_id = request.headers.get("X-Session-ID")
 
-    # Step 1: Classify the task
     tier = classify_task(messages)
-
-    # Step 2: Select provider (with session stickiness + circuit breaking)
     result = _select_provider_for_tier(tier, config, session_id, messages)
 
     if result is None:
@@ -213,19 +231,18 @@ async def handle_auto_mode(
 
     provider, tier_used, reason = result
 
-    # Step 3: Cache session decision
-    _session_cache.set(session_id, messages, provider.name, tier_used)
+    # Cache session decision (skip if already cached with same provider/tier)
+    cached = _session_cache.get(session_id, messages)
+    if cached is None or cached.provider_name != provider.name or cached.tier != tier_used:
+        _session_cache.set(session_id, messages, provider.name, tier_used)
 
-    # Step 4: Prepare upstream request
-    upstream_body, source_format = _prepare_request_body(body, provider, client_format)
+    upstream_body = _prepare_request_body(body, provider, client_format)
     url = _build_upstream_url(provider)
-    headers = AUTH_HEADERS[provider.api_format](provider.api_key)
-    headers["Content-Type"] = "application/json"
+    headers = _build_request_headers(provider)
 
     start_time = time.monotonic()
     original_body = json.dumps(body)
 
-    # Step 5: Forward request with fallback
     fallback_depth = 0
     max_fallbacks = 5
     current_provider = provider
@@ -233,32 +250,17 @@ async def handle_auto_mode(
 
     while fallback_depth < max_fallbacks:
         try:
-            if is_stream:
-                return await _handle_streaming_auto(
-                    client, url, headers, upstream_body,
-                    current_provider, telemetry, request, start_time,
-                    source_format=source_format, target_format=current_provider.api_format,
-                    request_body=original_body, log_body=config.log_request_body,
-                    routing_decision={
-                        "tier": tier_used,
-                        "provider": current_provider.name,
-                        "reason": reason,
-                        "fallback_depth": fallback_depth,
-                    },
-                )
-            else:
-                return await _handle_non_streaming_auto(
-                    client, url, headers, upstream_body,
-                    current_provider, telemetry, request, start_time,
-                    source_format=source_format, target_format=current_provider.api_format,
-                    request_body=original_body, log_body=config.log_request_body,
-                    routing_decision={
-                        "tier": tier_used,
-                        "provider": current_provider.name,
-                        "reason": reason,
-                        "fallback_depth": fallback_depth,
-                    },
-                )
+            routing_decision = _build_routing_decision(
+                tier_used, current_provider.name, reason, fallback_depth,
+            )
+            handler = _handle_streaming_auto if is_stream else _handle_non_streaming_auto
+            return await handler(
+                client, url, headers, upstream_body,
+                current_provider, telemetry, request, start_time,
+                source_format=client_format, target_format=current_provider.api_format,
+                request_body=original_body, log_body=config.log_request_body,
+                routing_decision=routing_decision,
+            )
 
         except (httpx.ConnectError, httpx.TimeoutException) as e:
             _auto_router.record_outcome(current_provider.name, current_tier, success=False)
@@ -276,11 +278,9 @@ async def handle_auto_mode(
                 error_body = {"error": {"message": f"All providers failed. Last error: {e}", "type": "server_error"}}
                 _log_routing_telemetry(
                     telemetry, request, 502, error_body, latency_ms,
-                    current_provider, routing_decision={
-                        "tier": tier_used, "provider": current_provider.name,
-                        "reason": reason, "fallback_depth": fallback_depth,
-                        "error": str(e),
-                    },
+                    current_provider, routing_decision=_build_routing_decision(
+                        tier_used, current_provider.name, reason, fallback_depth, error=str(e),
+                    ),
                     request_body=original_body, log_body=config.log_request_body,
                     client_format=client_format,
                 )
@@ -289,19 +289,16 @@ async def handle_auto_mode(
             current_provider = available[0]
             reason = f"fallback_from_{current_provider.name}"
             url = _build_upstream_url(current_provider)
-            headers = AUTH_HEADERS[current_provider.api_format](current_provider.api_key)
-            headers["Content-Type"] = "application/json"
-            upstream_body, _ = _prepare_request_body(body, current_provider, client_format)
+            headers = _build_request_headers(current_provider)
+            upstream_body = _prepare_request_body(body, current_provider, client_format)
 
     latency_ms = (time.monotonic() - start_time) * 1000
     error_body = {"error": {"message": "Max fallback depth exceeded", "type": "server_error"}}
     _log_routing_telemetry(
         telemetry, request, 502, error_body, latency_ms,
-        current_provider, routing_decision={
-            "tier": tier_used, "provider": current_provider.name,
-            "reason": reason, "fallback_depth": fallback_depth,
-            "error": "max_fallbacks_exceeded",
-        },
+        current_provider, routing_decision=_build_routing_decision(
+            tier_used, current_provider.name, reason, fallback_depth, error="max_fallbacks_exceeded",
+        ),
         request_body=original_body, log_body=config.log_request_body,
         client_format=client_format,
     )
@@ -384,7 +381,6 @@ async def _handle_streaming_auto(
     routing_decision: dict | None = None,
 ) -> StreamingResponse:
     """Handle a streaming auto-mode request. Raises on connection errors."""
-    import json as _json
 
     async def stream_generator():
         collected_text = ""
@@ -410,26 +406,23 @@ async def _handle_streaming_auto(
                             break
 
                         try:
-                            chunk_data = _json.loads(data_str)
-                        except _json.JSONDecodeError:
+                            chunk_data = json.loads(data_str)
+                        except json.JSONDecodeError:
                             continue
 
                         if source_format == target_format:
-                            yield f"data: {_json.dumps(chunk_data)}\n\n".encode()
+                            yield f"data: {json.dumps(chunk_data)}\n\n".encode()
                         elif source_format == "openai" and target_format == "anthropic":
-                            from otel_agent.converter import convert_anthropic_chunk_to_openai
                             converted = convert_anthropic_chunk_to_openai(chunk_data)
                             if converted:
-                                yield f"data: {_json.dumps(converted)}\n\n".encode()
+                                yield f"data: {json.dumps(converted)}\n\n".encode()
                         elif source_format == "anthropic" and target_format == "openai":
-                            from otel_agent.converter import convert_openai_chunk_to_anthropic
                             converted = convert_openai_chunk_to_anthropic(chunk_data)
                             if converted:
-                                yield f"data: {_json.dumps(converted)}\n\n".encode()
+                                yield f"data: {json.dumps(converted)}\n\n".encode()
 
-                        collected_text += _json.dumps(chunk_data)
-                        from otel_agent.server import normalize_usage as _nu
-                        chunk_usage = _nu(chunk_data)
+                        collected_text += json.dumps(chunk_data)
+                        chunk_usage = normalize_usage(chunk_data)
                         if chunk_usage["total_tokens"] is not None:
                             last_valid_usage = chunk_usage
                     else:
@@ -440,11 +433,11 @@ async def _handle_streaming_auto(
 
         except httpx.ConnectError:
             stream_status = 502
-            error_msg = _json.dumps({"error": {"message": "Connection failed", "type": "server_error"}})
+            error_msg = json.dumps({"error": {"message": "Connection failed", "type": "server_error"}})
             yield f"data: {error_msg}\n\n".encode()
         except httpx.TimeoutException:
             stream_status = 504
-            error_msg = _json.dumps({"error": {"message": "Timeout", "type": "server_error"}})
+            error_msg = json.dumps({"error": {"message": "Timeout", "type": "server_error"}})
             yield f"data: {error_msg}\n\n".encode()
         finally:
             latency_ms = (time.monotonic() - start_time) * 1000
