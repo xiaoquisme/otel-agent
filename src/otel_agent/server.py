@@ -432,6 +432,9 @@ def _log_telemetry(
         model_name = None
         if isinstance(resp_body, dict):
             model_name = resp_body.get("model") if resp_body.get("model") else None
+        # Prefix with provider config name for dashboard display
+        if model_name:
+            model_name = f"{provider.name}/{model_name}"
         stored_body = request_body[:500_000] if log_body else ""
         stored_headers = redact_sensitive_headers(resp_headers) if resp_headers else {}
         telemetry.log_request(

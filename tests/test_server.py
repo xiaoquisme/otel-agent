@@ -412,7 +412,7 @@ def test_log_telemetry_stores_model_name():
         conn = duckdb.connect(str(db_path), read_only=True)
         row = conn.execute("SELECT model_name, input_tokens, output_tokens, total_tokens FROM requests").fetchone()
         conn.close()
-        assert row[0] == "openai/gpt-4o"
+        assert row[0] == "openai/openai/gpt-4o"
         assert row[1] == 10
         assert row[2] == 5
         assert row[3] == 15

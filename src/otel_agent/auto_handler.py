@@ -169,6 +169,9 @@ def _log_routing_telemetry(
         model_name = None
         if isinstance(resp_body, dict):
             model_name = resp_body.get("model") if resp_body.get("model") else None
+        # Prefix with provider config name for dashboard display
+        if model_name:
+            model_name = f"{provider.name}/{model_name}"
         stored_body = request_body[:500_000] if log_body else ""
         stored_headers = redact_sensitive_headers(resp_headers) if resp_headers else {}
 
@@ -388,6 +391,7 @@ async def _handle_streaming_auto(
         stream_status = 200
         last_valid_usage: dict | None = None
         sent_done = False
+        model_name: str | None = None
 
         try:
             async with client.stream("POST", url, headers=headers, json=body) as resp:
@@ -421,6 +425,10 @@ async def _handle_streaming_auto(
                             if converted:
                                 yield f"data: {json.dumps(converted)}\n\n".encode()
 
+                        # Extract model name from first chunk
+                        if model_name is None:
+                            model_name = chunk_data.get("model")
+
                         collected_text += json.dumps(chunk_data)
                         chunk_usage = normalize_usage(chunk_data)
                         if chunk_usage["total_tokens"] is not None:
@@ -441,7 +449,7 @@ async def _handle_streaming_auto(
             yield f"data: {error_msg}\n\n".encode()
         finally:
             latency_ms = (time.monotonic() - start_time) * 1000
-            resp_body: dict = {"streamed": True, "preview": collected_text}
+            resp_body: dict = {"streamed": True, "preview": collected_text, "model": model_name}
             if last_valid_usage is not None:
                 resp_body["usage"] = {
                     "input_tokens": last_valid_usage["input_tokens"],
