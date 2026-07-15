@@ -101,6 +101,13 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         model = body.get("model", "")
         is_stream = body.get("stream", False)
 
+        # Auto-mode interception
+        if model == "auto":
+            from otel_agent.auto_handler import handle_auto_mode
+            return await handle_auto_mode(
+                body, config, client, telemetry, request, is_stream,
+            )
+
         try:
             provider_name, upstream_model = parse_model(model)
         except ValueError as e:
@@ -155,6 +162,14 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         body = await request.json()
         model = body.get("model", "")
         is_stream = body.get("stream", False)
+
+        # Auto-mode interception
+        if model == "auto":
+            from otel_agent.auto_handler import handle_auto_mode
+            return await handle_auto_mode(
+                body, config, client, telemetry, request, is_stream,
+                client_format="anthropic",
+            )
 
         try:
             provider_name, upstream_model = parse_model(model)
