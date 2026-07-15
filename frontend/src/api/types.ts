@@ -7,6 +7,7 @@ export interface RequestItem {
   response_status: number
   latency_ms: number | null
   format: string | null
+  model_name: string | null
 }
 
 export interface StructuredMessage {

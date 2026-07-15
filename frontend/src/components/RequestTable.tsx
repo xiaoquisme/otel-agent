@@ -105,7 +105,7 @@ export default function RequestTable({
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--text-sm)' }}>
           <thead>
             <tr>
-              {['ID', 'Timestamp', 'Method', 'URL', 'Status', 'Latency'].map((header) => (
+              {['ID', 'Timestamp', 'Method', 'URL', 'Status', 'Latency', 'Model'].map((header) => (
                 <th
                   key={header}
                   style={{
@@ -174,6 +174,9 @@ export default function RequestTable({
                   </td>
                   <td style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--color-border-muted)' }}>
                     {req.latency_ms != null ? `${req.latency_ms.toFixed(0)}ms` : '0ms'}
+                  </td>
+                  <td style={{ padding: 'var(--space-2) var(--space-3)', borderBottom: '1px solid var(--color-border-muted)', color: 'var(--color-text-secondary)', maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {req.model_name ?? '—'}
                   </td>
                 </tr>
               )

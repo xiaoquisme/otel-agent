@@ -149,12 +149,12 @@ class DuckDBStorage(StorageBackend):
             cursor_params = params
 
         result = conn.execute(
-            f"SELECT id, timestamp, method, url, upstream, response_status, latency_ms "
+            f"SELECT id, timestamp, method, url, upstream, response_status, latency_ms, model_name "
             f"FROM requests WHERE {cursor_where} ORDER BY id DESC LIMIT ?",
             cursor_params + [limit + 1],
         )
         rows = result.fetchall()
-        _COLUMNS = ("id", "timestamp", "method", "url", "upstream", "response_status", "latency_ms")
+        _COLUMNS = ("id", "timestamp", "method", "url", "upstream", "response_status", "latency_ms", "model_name")
         data = [dict(zip(_COLUMNS, r)) for r in rows[:limit]]
 
         has_more = len(rows) > limit

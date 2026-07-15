@@ -169,7 +169,7 @@ class SQLiteStorage(StorageBackend):
             cursor_params = params
 
         cur = conn.execute(
-            f"SELECT id, timestamp, method, url, upstream, response_status, latency_ms "
+            f"SELECT id, timestamp, method, url, upstream, response_status, latency_ms, model_name "
             f"FROM requests WHERE {cursor_where} ORDER BY id DESC LIMIT ?",
             cursor_params + [limit + 1],
         )
