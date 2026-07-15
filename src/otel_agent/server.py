@@ -168,6 +168,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             from otel_agent.auto_handler import handle_auto_mode
             return await handle_auto_mode(
                 body, config, client, telemetry, request, is_stream,
+                client_format="anthropic",
             )
 
         try:

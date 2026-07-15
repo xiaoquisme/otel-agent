@@ -69,6 +69,7 @@ class Provider:
     max_context: int = 0
     rate_limit_rpm: int = 0
     tiers: list[str] = field(default_factory=lambda: list(VALID_TIERS))
+    default_model: str = ""
 
     @property
     def supports_auto_routing(self) -> bool:
@@ -146,6 +147,7 @@ class Config:
                 max_context=int(item.get("max_context", 0)),
                 rate_limit_rpm=int(item.get("rate_limit_rpm", 0)),
                 tiers=tiers,
+                default_model=str(item.get("default_model", "")),
             )
 
         self._providers = providers
