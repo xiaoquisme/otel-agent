@@ -16,13 +16,64 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 def _parse_body(body: str) -> Any:
-    """Safely parse a JSON body string; return None on failure."""
+    """Safely parse a JSON body string; return None on failure.
+
+    When the body is truncated (e.g. by the 500 KB storage limit) and
+    therefore invalid JSON, attempt a best-effort recovery: close any
+    open strings, arrays, and objects so that ``json.loads`` can parse
+    the result.  This lets us extract partial ``messages`` arrays from
+    large request bodies that were cut off mid-string.
+    """
     if not body:
         return None
     try:
         return json.loads(body)
     except (json.JSONDecodeError, TypeError):
-        return None
+        pass
+
+    # --- Best-effort truncation recovery ---
+    # Walk the string tracking depth and string state so we can append
+    # the minimal closing characters needed for valid JSON.
+    in_string = False
+    escape_next = False
+    stack: list[str] = []  # tracks opening brackets/braces in order
+
+    for ch in body:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            stack.append(ch)
+        elif ch == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+        elif ch == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+
+    # Build a repair suffix
+    suffix = ""
+    if in_string:
+        suffix += '"'  # close unterminated string
+    # Close open containers inside-out (matching the nesting order)
+    for opener in reversed(stack):
+        suffix += "}" if opener == "{" else "]"
+
+    if suffix:
+        try:
+            return json.loads(body + suffix)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return None
 
 
 def detect_format(body: str, format_tag: str | None = None) -> str:
@@ -78,11 +129,29 @@ def detect_format(body: str, format_tag: str | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 def _parse_streaming_chunks(preview_str: str) -> list[dict[str, Any]]:
-    """Parse concatenated JSON chunks (mirrors JS parseStreamingChunks)."""
+    """Parse concatenated JSON chunks (mirrors JS parseStreamingChunks).
+
+    Tracks whether we are inside a JSON string so that ``{`` / ``}``
+    characters inside string values do not confuse the depth counter.
+    """
     chunks: list[dict[str, Any]] = []
     depth = 0
     start = -1
+    in_string = False
+    escape_next = False
     for i, ch in enumerate(preview_str):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        # Outside a string — normal depth tracking
         if ch == "{":
             if depth == 0:
                 start = i
