@@ -109,4 +109,12 @@ def aggregate_models(
                 "owned_by": provider_name,
             })
 
+    # Synthetic "auto" model — routes to the best provider via Thompson Sampling
+    result.append({
+        "id": "auto",
+        "object": "model",
+        "created": 0,
+        "owned_by": "otel-agent",
+    })
+
     return {"object": "list", "data": result}
