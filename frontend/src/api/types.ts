@@ -13,7 +13,7 @@ export interface RequestItem {
 export interface StructuredMessage {
   role: string
   content: string
-  tool_calls?: { name: string; arguments: string }[]
+  tool_calls?: { id?: string; name: string; arguments: string }[]
   reasoning_content?: string
 }
 

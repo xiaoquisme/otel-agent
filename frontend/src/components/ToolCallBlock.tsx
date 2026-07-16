@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 interface ToolCallBlockProps {
+  id?: string
   name: string
   arguments: string
 }
@@ -14,7 +15,7 @@ function formatArguments(args: string): string {
   }
 }
 
-export default function ToolCallBlock({ name, arguments: args }: ToolCallBlockProps) {
+export default function ToolCallBlock({ id, name, arguments: args }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
 
@@ -49,6 +50,11 @@ export default function ToolCallBlock({ name, arguments: args }: ToolCallBlockPr
       >
         <span style={{ color: 'var(--color-accent-yellow)', fontSize: 'var(--text-xs)' }}>⚡</span>
         <span style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-sm)', fontFamily: 'var(--font-mono)' }}>{name}</span>
+        {id && (
+          <span style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', opacity: 0.7 }}>
+            {id}
+          </span>
+        )}
         <span style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-xs)', marginLeft: 'auto' }}>
           {expanded ? '▾' : '▸'}
         </span>

@@ -54,7 +54,8 @@ The current dashboard has three core UX problems:
 ### KTD1: Router for multi-page layout
 **Decision:** Use React Router v6 for client-side routing.
 **Rationale:** The detail view needs to be a full page (`/request/:id`) to handle long bodies properly. A slide-over panel cannot provide enough screen real estate for 500K+ JSON bodies.
-**Alternatives considered:** Keep slide-over (rejected — not enough space), hash routing (rejected — ugly URLs).
+**Alternatives considered:** Keep slide-over (rejected — not enough space), hash routing (rejected — ugly URLs), state-based navigation without router (rejected — URLs not shareable), expand row to full-viewport (rejected — loses list context).
+**Note:** For an app with 2-3 pages, evaluate whether state-based navigation (useState for current view + selected request ID) with URL param sync via a custom hook could achieve shareable URLs without the full routing dependency. If URL shareability is not critical, the simpler approach is preferred.
 
 ### KTD2: Code viewer for JSON bodies
 **Decision:** Use `@codemirror/lang-json` for JSON viewing with syntax highlighting, line numbers, folding, and search.
@@ -69,7 +70,8 @@ The current dashboard has three core UX problems:
 ### KTD4: Component library approach
 **Decision:** Build a minimal component library (`src/components/ui/`) with reusable primitives (Button, Card, Badge, Tabs, CodeBlock, etc.).
 **Rationale:** Notion-style blocks need consistent building blocks. Building 8-10 primitives gives us the flexibility of Notion without the overhead of a full UI library.
-**Alternatives considered:** shadcn/ui (rejected — adds Radix dependency), Radix UI primitives (rejected — overkill for this project), Headless UI (rejected — not needed).
+**Alternatives considered:** shadcn/ui (copy-paste primitives with tested accessibility, no runtime Radix dependency — worth evaluating for accessibility benefits), Radix UI primitives (rejected — overkill for this project), Headless UI (rejected — not needed).
+**Note:** The existing primitives already exist and work. The real decision is whether to enhance them in place or adopt shadcn/ui for better accessibility out of the box. shadcn/ui copies code into your project (no import dependency), which aligns with the "own your components" philosophy.
 
 ---
 
@@ -90,27 +92,28 @@ The otel-agent frontend already has significant infrastructure in place. The fol
 Each implementation unit should reference the existing file in its Approach section and specify what changes (extension, replacement, or new build). Units that list existing files in their Files list must note "(extend existing)" or "(replace)" after the path.
 
 ### U1. Design System Foundation
-**Goal:** Establish the design token system and base UI primitives.
+**Goal:** Set up test framework and migrate globals.css hardcoded colors to design tokens. All UI primitives already exist — extend, don't rebuild.
 **Dependencies:** None.
 **Files:**
-- `frontend/src/styles/tokens.css` — design tokens (colors, spacing, typography, shadows)
-- `frontend/src/styles/globals.css` — global styles, resets, utilities (migrate ~40 hardcoded hex colors to CSS custom property tokens)
-- `frontend/src/components/ui/Button.tsx` — button primitive with variants
-- `frontend/src/components/ui/Card.tsx` — card container
-- `frontend/src/components/ui/Badge.tsx` — status/method badges
-- `frontend/src/components/ui/Tabs.tsx` — tabbed interface
-- `frontend/src/components/ui/CodeBlock.tsx` — syntax-highlighted code viewer
-- `frontend/src/components/ui/Collapsible.tsx` — collapsible sections
-- `frontend/src/components/ui/SearchInput.tsx` — search with debounce
-- `frontend/src/components/ui/Select.tsx` — dropdown select
-- `frontend/src/components/ui/index.ts` — barrel export
-- `tests/ui-primitives.test.tsx` — tests for UI primitives
+- `frontend/src/styles/tokens.css` — design tokens (colors, spacing, typography, shadows) — (extend existing)
+- `frontend/src/styles/globals.css` — global styles, resets, utilities (migrate ~40 hardcoded hex colors to CSS custom property tokens) — (extend existing)
+- `frontend/src/components/ui/Button.tsx` — button primitive with variants — (extend existing)
+- `frontend/src/components/ui/Card.tsx` — card container — (extend existing)
+- `frontend/src/components/ui/Badge.tsx` — status/method badges — (extend existing)
+- `frontend/src/components/ui/Tabs.tsx` — tabbed interface — (extend existing)
+- `frontend/src/components/ui/CodeBlock.tsx` — syntax-highlighted code viewer — (extend existing)
+- `frontend/src/components/ui/Collapsible.tsx` — collapsible sections — (extend existing)
+- `frontend/src/components/ui/SearchInput.tsx` — search with debounce — (extend existing)
+- `frontend/src/components/ui/Select.tsx` — dropdown select — (extend existing)
+- `frontend/src/components/ui/index.ts` — barrel export — (extend existing)
+- `tests/ui-primitives.test.tsx` — tests for UI primitives — (new)
 
 **Approach:**
-1. Define design tokens in CSS custom properties (extend existing `index.css` variables)
-2. Build each primitive with consistent API (variant prop, size prop, disabled state)
-3. All primitives use the token system, no hardcoded colors
-4. Each primitive gets a basic render test
+1. Set up Vitest + React Testing Library (no test framework exists yet)
+2. Extend each existing primitive with consistent API (variant prop, size prop, disabled state, loading state)
+3. Migrate globals.css hardcoded hex colors to CSS custom property tokens — no new colors, map each existing value to the nearest token
+4. Add basic render tests for each primitive
+5. Add Skeleton.tsx to U1 (currently listed in U7 but should be available for all loading states)
 
 **Test scenarios:**
 - Button renders with correct variant styles
@@ -119,8 +122,9 @@ Each implementation unit should reference the existing file in its Approach sect
 - CodeBlock renders JSON with syntax highlighting
 - Collapsible expands/collapses on click
 - All primitives accept className override
+- No hardcoded hex colors remain in globals.css after migration
 
-**Verification:** All primitives render correctly in isolation, tokens are applied consistently.
+**Verification:** All primitives render correctly in isolation, tokens are applied consistently, no visual regressions from color migration.
 
 ---
 
@@ -267,7 +271,8 @@ Each implementation unit should reference the existing file in its Approach sect
 
 ---
 
-### U6. Usage Dashboard
+### U6. Usage Dashboard — DEFERRED
+> **Note:** This unit is deferred to a follow-up task. The usage data isn't broken — it just exists. The design system (U1) will naturally improve the existing usage components. Ship U1-U5 + U7 first, then revisit usage redesign based on user feedback.
 **Goal:** Redesign usage overview as a proper dashboard section.
 **Dependencies:** U1, U2.
 **Files:**
@@ -300,12 +305,12 @@ Each implementation unit should reference the existing file in its Approach sect
 **Goal:** Final polish, responsive design, and accessibility.
 **Dependencies:** U1-U6.
 **Files:**
-- `frontend/src/styles/responsive.css` — responsive breakpoints
-- `frontend/src/components/ui/Tooltip.tsx` — tooltip primitive
-- `frontend/src/components/ui/Skeleton.tsx` — loading skeleton
-- `frontend/src/hooks/useKeyboard.ts` — keyboard navigation hook
-- `tests/responsive.test.tsx` — responsive tests
-- `tests/keyboard.test.tsx` — keyboard navigation tests
+- `frontend/src/styles/responsive.css` — responsive breakpoints — (extend existing)
+- `frontend/src/components/ui/Tooltip.tsx` — tooltip primitive — (extend existing)
+- `frontend/src/components/ui/Skeleton.tsx` — loading skeleton — (extend existing, move to U1)
+- `frontend/src/hooks/useKeyboard.ts` — keyboard navigation hook — (extend existing)
+- `tests/responsive.test.tsx` — responsive tests — (new)
+- `tests/keyboard.test.tsx` — keyboard navigation tests — (new)
 
 **Approach:**
 1. Responsive: mobile-first with breakpoints at 640px, 768px, 1024px
@@ -314,7 +319,13 @@ Each implementation unit should reference the existing file in its Approach sect
 4. Keyboard: global shortcuts — J/K navigate next/prev request (from any page), Esc back to list, / focus search. These are the ONLY global keyboard shortcuts; page-specific shortcuts (e.g., detail page Esc) are owned by their respective units.
 5. Loading skeletons for all async content
 6. Tooltips on hover for truncated content
-7. ARIA labels for accessibility
+7. **Accessibility (WCAG 2.1 AA target):**
+   - ARIA patterns: Tabs→tablist/tab/tabpanel, Collapsible→region/expanded, CodeMirror→aria-label
+   - `prefers-reduced-motion` media query for collapsible animations
+   - Color contrast: 4.5:1+ for text, 3:1+ for UI components
+   - Touch targets: 44x44px minimum on mobile
+   - Focus management: visible focus indicators, logical tab order
+   - Screen reader: add axe-core to test suite for automated checks
 8. Focus management for keyboard navigation
 
 **Test scenarios:**
