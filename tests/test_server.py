@@ -14,7 +14,6 @@ from otel_agent.config import Config
 from otel_agent.logger import TelemetryLogger
 from otel_agent.server import _log_telemetry, create_app
 
-
 # ------------------------------------------------------------------
 # Reusable fixture helpers (T002)
 # ------------------------------------------------------------------
@@ -242,7 +241,6 @@ async def test_streaming_telemetry_logged():
         conn = duckdb.connect(str(db_path), read_only=True)
         row = conn.execute("SELECT response_body FROM requests").fetchone()
         conn.close()
-
         assert row is not None, "No telemetry record found — streaming request was NOT logged"
         parsed = json.loads(row[0])
         assert parsed["streamed"] is True
@@ -540,13 +538,8 @@ async def test_streaming_sends_done_when_upstream_does_not():
 
         chunks = [
             {"choices": [{"delta": {"content": "Hello"}, "index": 0}]},
-            {"choices": [{"delta": {"content": " world"}, "index": 0}]},
-            {"choices": [{"delta": {}, "finish_reason": "stop", "index": 0}]},
         ]
-        # done=False simulates upstream closing without [DONE]
         mock_stream = _FakeStreamMethod(chunks, done=False)
-
-        collected_text = ""
 
         with patch("httpx.AsyncClient.stream", mock_stream):
             from httpx import ASGITransport
@@ -555,16 +548,58 @@ async def test_streaming_sends_done_when_upstream_does_not():
                     "/v1/chat/completions",
                     json={"model": "openai/gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True},
                 )
-                collected_text = resp.text
+                lines = resp.text.strip().split("\n")
+                last_line = lines[-1].strip()
+                assert last_line == "data: [DONE]"
 
         telemetry.close()
+        conn = duckdb.connect(str(db_path), read_only=True)
+        row = conn.execute("SELECT response_body FROM requests").fetchone()
+        conn.close()
+        assert row is not None
+        parsed = json.loads(row[0])
+        assert parsed["streamed"] is True
 
-        # The response MUST contain "data: [DONE]"
-        assert "data: [DONE]" in collected_text, (
-            f"Expected 'data: [DONE]' in response, got: {collected_text!r}"
-        )
-        # [DONE] must be the last data line
-        lines = [l.strip() for l in collected_text.strip().split("\n") if l.strip()]
-        assert lines[-1] == "data: [DONE]", (
-            f"Expected last line to be 'data: [DONE]', got: {lines[-1]!r}"
+
+# ------------------------------------------------------------------
+# Streaming model name prefix regression (root cause of missing prefix)
+# ------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_streaming_model_name_prefix_in_db():
+    """Streaming chunks WITH a 'model' field must produce a prefixed model_name in DB.
+
+    Regression test for the bug where streaming telemetry stored NULL
+    model_name because the upstream didn't include 'model' in chunks.
+    When the upstream DOES include 'model', the stored model_name must
+    be prefixed with the provider config name (e.g. 'openai/gpt-4').
+    """
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "stream_model_prefix.duckdb"
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        chunks = [
+            {"choices": [{"delta": {"content": "Hello"}, "index": 0}], "model": "gpt-4"},
+            {"choices": [{"delta": {"content": " world"}, "index": 0}]},
+        ]
+        mock_stream = _FakeStreamMethod(chunks)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/chat/completions",
+                    json={"model": "openai/gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                )
+                await resp.aread()
+
+        telemetry.close()
+        conn = duckdb.connect(str(db_path), read_only=True)
+        row = conn.execute("SELECT model_name FROM requests").fetchone()
+        conn.close()
+        assert row is not None, "No telemetry record found"
+        assert row[0] == "openai/gpt-4", (
+            f"Expected prefixed model_name 'openai/gpt-4', got {row[0]!r}"
         )
