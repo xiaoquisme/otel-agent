@@ -44,11 +44,7 @@ def normalize_usage(response: dict | str) -> dict[str, int | None]:
         total_tokens = sum(values) if values else None
     return {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens}
 
-# Auth header patterns per provider API format
-AUTH_HEADERS = {
-    "openai": lambda key: {"Authorization": f"Bearer {key}"},
-    "anthropic": lambda key: {"x-api-key": key, "anthropic-version": "2023-06-01"},
-}
+from otel_agent.provider_utils import AUTH_HEADERS, build_upstream_url, build_request_headers, prefix_model_name
 
 
 def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
@@ -127,12 +123,9 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
 
         if needs_conversion:
             upstream_body = openai_to_anthropic_request(upstream_body)
-            url = f"{provider.base_url.rstrip('/')}/messages"
-        else:
-            url = f"{provider.base_url.rstrip('/')}/chat/completions"
 
-        headers = AUTH_HEADERS[provider.api_format](provider.api_key)
-        headers["Content-Type"] = "application/json"
+        url = build_upstream_url(provider)
+        headers = build_request_headers(provider)
 
         start_time = time.monotonic()
         original_body = json.dumps(body)
@@ -188,12 +181,9 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
 
         if needs_conversion:
             upstream_body = anthropic_to_openai_request(upstream_body)
-            url = f"{provider.base_url.rstrip('/')}/chat/completions"
-        else:
-            url = f"{provider.base_url.rstrip('/')}/messages"
 
-        headers = AUTH_HEADERS[provider.api_format](provider.api_key)
-        headers["Content-Type"] = "application/json"
+        url = build_upstream_url(provider)
+        headers = build_request_headers(provider)
 
         start_time = time.monotonic()
         original_body = json.dumps(body)
@@ -328,10 +318,11 @@ async def _handle_streaming(
     """Handle a streaming request to an upstream provider."""
 
     async def stream_generator() -> AsyncIterator[bytes]:
-        collected_text = ""
+        collected_chunks: list[str] = []
         resp_headers: dict[str, str] = {}
         stream_status = 200
         last_valid_usage: dict | None = None
+        model_name: str | None = None
         try:
             async with client.stream("POST", url, headers=headers, json=body) as resp:
                 resp_headers = dict(resp.headers)
@@ -368,8 +359,12 @@ async def _handle_streaming(
                             if converted:
                                 yield f"data: {json.dumps(converted)}\n\n".encode()
 
+                        # Extract model name from first chunk
+                        if model_name is None:
+                            model_name = chunk_data.get("model")
+
                         # Collect for telemetry
-                        collected_text += json.dumps(chunk_data)
+                        collected_chunks.append(json.dumps(chunk_data))
                         # T031: Extract usage from streaming chunks
                         chunk_usage = normalize_usage(chunk_data)
                         if chunk_usage["total_tokens"] is not None:
@@ -393,7 +388,7 @@ async def _handle_streaming(
             yield f"data: {error_msg}\n\n".encode()
         finally:
             latency_ms = (time.monotonic() - start_time) * 1000
-            resp_body: dict = {"streamed": True, "preview": collected_text}
+            resp_body: dict = {"streamed": True, "preview": "".join(collected_chunks), "model": model_name}
             # T031: If usage was captured from streaming chunks, include it in the
             # response body so _log_telemetry can normalize and persist it.
             if last_valid_usage is not None:
@@ -423,6 +418,7 @@ def _log_telemetry(
     resp_headers: dict[str, str] | None = None,
     log_body: bool = True,
     source_format: str | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> None:
     """Log request/response to telemetry database."""
     try:
@@ -431,16 +427,17 @@ def _log_telemetry(
         # Extract client-visible model from response body for analytics
         model_name = None
         if isinstance(resp_body, dict):
-            model_name = resp_body.get("model") if resp_body.get("model") else None
-        # Prefix with provider config name for dashboard display
-        if model_name:
-            model_name = f"{provider.name}/{model_name}"
+            model_name = resp_body.get("model")
+        model_name = prefix_model_name(model_name, provider.name)
         stored_body = request_body[:500_000] if log_body else ""
         stored_headers = redact_sensitive_headers(resp_headers) if resp_headers else {}
+        stored_request_headers = dict(request.headers)
+        if extra_headers:
+            stored_request_headers.update(extra_headers)
         telemetry.log_request(
             method=request.method,
             url=str(request.url),
-            request_headers=dict(request.headers),
+            request_headers=stored_request_headers,
             request_body=stored_body,
             response_status=status_code,
             response_headers=stored_headers,

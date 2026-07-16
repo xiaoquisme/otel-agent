@@ -21,12 +21,14 @@ class SessionEntry:
 class SessionCache:
     """Cache for session-sticky routing decisions.
 
-    Default TTL: 30 minutes
+    Default TTL: 30 minutes. Automatically cleans up expired entries
+    at most once per 60 seconds on set().
     """
 
     def __init__(self, ttl_minutes: float = 30.0) -> None:
         self.ttl_seconds = ttl_minutes * 60
         self._cache: dict[str, SessionEntry] = {}
+        self._last_cleanup: float = 0
 
     def _make_key(self, session_id: str | None, messages: list[dict]) -> str:
         """Create a cache key from session ID or message fingerprint."""
@@ -38,7 +40,7 @@ class SessionCache:
                 content = msg.get("content", "")
                 if isinstance(content, str):
                     fingerprint = content[:100]
-                    return f"hash:{hashlib.md5(fingerprint.encode()).hexdigest()}"
+                    return f"hash:{hashlib.sha256(fingerprint.encode()).hexdigest()[:32]}"
         return "default"
 
     def get(self, session_id: str | None, messages: list[dict]) -> SessionEntry | None:
@@ -66,6 +68,11 @@ class SessionCache:
             tier=tier,
             timestamp=time.monotonic(),
         )
+        # Throttled cleanup: at most once per 60 seconds
+        now = time.monotonic()
+        if now - self._last_cleanup > 60:
+            self._last_cleanup = now
+            self.cleanup()
 
     def clear(self) -> None:
         """Clear all cached sessions."""

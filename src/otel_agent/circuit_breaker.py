@@ -7,7 +7,6 @@ after a cooldown period.
 from __future__ import annotations
 
 import time
-from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -16,6 +15,7 @@ class CircuitState(Enum):
     CLOSED = "closed"      # Normal operation
     OPEN = "open"          # Provider excluded
     HALF_OPEN = "half_open"  # Probing with one request
+
 
 
 @dataclass
@@ -49,6 +49,10 @@ class ProviderCircuit:
         return False
 
 
+# Module-level default circuit for unknown providers
+_CLOSED_CIRCUIT = ProviderCircuit()
+
+
 @dataclass
 class CircuitBreaker:
     """Tracks circuit breaker state for all providers.
@@ -58,25 +62,24 @@ class CircuitBreaker:
     """
     threshold: int = 5
     cooldown: float = 60.0
-    circuits: dict[str, ProviderCircuit] = field(
-        default_factory=lambda: defaultdict(ProviderCircuit)
-    )
+    circuits: dict[str, ProviderCircuit] = field(default_factory=dict)
 
     def is_available(self, provider_name: str) -> bool:
         """Check if a provider is available (not circuit-broken)."""
-        return self.circuits[provider_name].should_allow_request(self.cooldown)
+        circuit = self.circuits.get(provider_name, _CLOSED_CIRCUIT)
+        return circuit.should_allow_request(self.cooldown)
 
     def record_success(self, provider_name: str) -> None:
         """Record a successful request to a provider."""
-        self.circuits[provider_name].record_success()
+        self.circuits.setdefault(provider_name, ProviderCircuit()).record_success()
 
     def record_failure(self, provider_name: str) -> None:
         """Record a failed request to a provider."""
-        self.circuits[provider_name].record_failure(self.threshold)
+        self.circuits.setdefault(provider_name, ProviderCircuit()).record_failure(self.threshold)
 
     def get_state(self, provider_name: str) -> CircuitState:
         """Get the current circuit state for a provider (no side effects)."""
-        return self.circuits[provider_name].state
+        return self.circuits.get(provider_name, _CLOSED_CIRCUIT).state
 
     def get_all_states(self) -> dict[str, str]:
         """Get circuit states for all tracked providers."""

@@ -14,7 +14,6 @@ import logging
 import time
 from typing import Any
 
-
 import httpx
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -31,8 +30,9 @@ from otel_agent.converter import (
     openai_to_anthropic_request,
     openai_to_anthropic_response,
 )
-from otel_agent.logger import TelemetryLogger, redact_sensitive_headers
-from otel_agent.server import normalize_usage
+from otel_agent.logger import TelemetryLogger
+from otel_agent.provider_utils import build_upstream_url, build_request_headers, prefix_model_name
+from otel_agent.server import normalize_usage, _log_telemetry
 from otel_agent.session_cache import SessionCache
 
 logger = logging.getLogger(__name__)
@@ -45,26 +45,6 @@ _session_cache = SessionCache()
 # Tier ordering: simple is cheapest, reasoning is most expensive
 TIER_ORDER = ["simple", "medium", "complex", "reasoning"]
 TIER_INDEX = {t: i for i, t in enumerate(TIER_ORDER)}
-
-# Auth header patterns per provider API format
-AUTH_HEADERS = {
-    "openai": lambda key: {"Authorization": f"Bearer {key}"},
-    "anthropic": lambda key: {"x-api-key": key, "anthropic-version": "2023-06-01"},
-}
-
-
-def _build_upstream_url(provider: Provider) -> str:
-    """Build the upstream URL for a provider."""
-    base = provider.base_url.rstrip("/")
-    path = "messages" if provider.api_format == "anthropic" else "chat/completions"
-    return f"{base}/{path}"
-
-
-def _build_request_headers(provider: Provider) -> dict[str, str]:
-    """Build auth + content-type headers for a provider."""
-    headers = AUTH_HEADERS[provider.api_format](provider.api_key)
-    headers["Content-Type"] = "application/json"
-    return headers
 
 
 def _build_routing_decision(
@@ -149,55 +129,6 @@ def _prepare_request_body(
     return upstream_body
 
 
-def _log_routing_telemetry(
-    telemetry: TelemetryLogger,
-    request: Request,
-    status_code: int,
-    resp_body: dict | str,
-    latency_ms: float,
-    provider: Provider,
-    routing_decision: dict,
-    request_body: str = "",
-    resp_headers: dict[str, str] | None = None,
-    log_body: bool = True,
-    client_format: str = "openai",
-) -> None:
-    """Log request with routing metadata to telemetry database."""
-    try:
-        body_str = json.dumps(resp_body) if isinstance(resp_body, dict) else str(resp_body)
-        usage = normalize_usage(resp_body)
-        model_name = None
-        if isinstance(resp_body, dict):
-            model_name = resp_body.get("model") if resp_body.get("model") else None
-        # Prefix with provider config name for dashboard display
-        if model_name:
-            model_name = f"{provider.name}/{model_name}"
-        stored_body = request_body[:500_000] if log_body else ""
-        stored_headers = redact_sensitive_headers(resp_headers) if resp_headers else {}
-
-        # Inject routing_decision into request_headers for persistence
-        enriched_headers = dict(request.headers)
-        enriched_headers["x-routing-decision"] = json.dumps(routing_decision)
-
-        telemetry.log_request(
-            method=request.method,
-            url=str(request.url),
-            request_headers=enriched_headers,
-            request_body=stored_body,
-            response_status=status_code,
-            response_headers=stored_headers,
-            response_body=body_str[:500_000],
-            latency_ms=latency_ms,
-            upstream=provider.base_url,
-            model_name=model_name,
-            input_tokens=usage["input_tokens"], output_tokens=usage["output_tokens"],
-            total_tokens=usage["total_tokens"], timestamp=None,
-            format=client_format,
-        )
-    except Exception:
-        logger.exception("Failed to log auto-routing telemetry")
-
-
 
 
 async def handle_auto_mode(
@@ -234,14 +165,12 @@ async def handle_auto_mode(
 
     provider, tier_used, reason = result
 
-    # Cache session decision (skip if already cached with same provider/tier)
-    cached = _session_cache.get(session_id, messages)
-    if cached is None or cached.provider_name != provider.name or cached.tier != tier_used:
-        _session_cache.set(session_id, messages, provider.name, tier_used)
+    # Cache session decision for sticky routing
+    _session_cache.set(session_id, messages, provider.name, tier_used)
 
     upstream_body = _prepare_request_body(body, provider, client_format)
-    url = _build_upstream_url(provider)
-    headers = _build_request_headers(provider)
+    url = build_upstream_url(provider)
+    headers = build_request_headers(provider)
 
     start_time = time.monotonic()
     original_body = json.dumps(body)
@@ -279,31 +208,33 @@ async def handle_auto_mode(
             if not available:
                 latency_ms = (time.monotonic() - start_time) * 1000
                 error_body = {"error": {"message": f"All providers failed. Last error: {e}", "type": "server_error"}}
-                _log_routing_telemetry(
+                _log_telemetry(
                     telemetry, request, 502, error_body, latency_ms,
-                    current_provider, routing_decision=_build_routing_decision(
-                        tier_used, current_provider.name, reason, fallback_depth, error=str(e),
-                    ),
+                    current_provider,
                     request_body=original_body, log_body=config.log_request_body,
-                    client_format=client_format,
+                    source_format=client_format,
+                    extra_headers={"x-routing-decision": json.dumps(
+                        _build_routing_decision(tier_used, current_provider.name, reason, fallback_depth, error=str(e))
+                    )},
                 )
                 return JSONResponse(error_body, status_code=502)
 
             current_provider = available[0]
             reason = f"fallback_from_{current_provider.name}"
-            url = _build_upstream_url(current_provider)
-            headers = _build_request_headers(current_provider)
+            url = build_upstream_url(current_provider)
+            headers = build_request_headers(current_provider)
             upstream_body = _prepare_request_body(body, current_provider, client_format)
 
     latency_ms = (time.monotonic() - start_time) * 1000
     error_body = {"error": {"message": "Max fallback depth exceeded", "type": "server_error"}}
-    _log_routing_telemetry(
+    _log_telemetry(
         telemetry, request, 502, error_body, latency_ms,
-        current_provider, routing_decision=_build_routing_decision(
-            tier_used, current_provider.name, reason, fallback_depth, error="max_fallbacks_exceeded",
-        ),
+        current_provider,
         request_body=original_body, log_body=config.log_request_body,
-        client_format=client_format,
+        source_format=client_format,
+        extra_headers={"x-routing-decision": json.dumps(
+            _build_routing_decision(tier_used, current_provider.name, reason, fallback_depth, error="max_fallbacks_exceeded")
+        )},
     )
     return JSONResponse(error_body, status_code=502)
 
@@ -353,11 +284,12 @@ async def _handle_non_streaming_auto(
             routing_headers["X-Routed-Fallback-Depth"] = str(routing_decision["fallback_depth"])
 
     # Log telemetry with routing metadata
-    _log_routing_telemetry(
+    _log_telemetry(
         telemetry, request, resp.status_code, resp_body, latency_ms,
-        provider, routing_decision=routing_decision or {},
+        provider,
         request_body=request_body, resp_headers=dict(resp.headers),
-        log_body=log_body, client_format=source_format,
+        log_body=log_body, source_format=source_format,
+        extra_headers={"x-routing-decision": json.dumps(routing_decision or {})},
     )
 
     # Add routing headers to response
@@ -386,7 +318,7 @@ async def _handle_streaming_auto(
     """Handle a streaming auto-mode request. Raises on connection errors."""
 
     async def stream_generator():
-        collected_text = ""
+        collected_chunks: list[str] = []
         resp_headers: dict[str, str] = {}
         stream_status = 200
         last_valid_usage: dict | None = None
@@ -429,7 +361,7 @@ async def _handle_streaming_auto(
                         if model_name is None:
                             model_name = chunk_data.get("model")
 
-                        collected_text += json.dumps(chunk_data)
+                        collected_chunks.append(json.dumps(chunk_data))
                         chunk_usage = normalize_usage(chunk_data)
                         if chunk_usage["total_tokens"] is not None:
                             last_valid_usage = chunk_usage
@@ -449,18 +381,19 @@ async def _handle_streaming_auto(
             yield f"data: {error_msg}\n\n".encode()
         finally:
             latency_ms = (time.monotonic() - start_time) * 1000
-            resp_body: dict = {"streamed": True, "preview": collected_text, "model": model_name}
+            resp_body: dict = {"streamed": True, "preview": "".join(collected_chunks), "model": model_name}
             if last_valid_usage is not None:
                 resp_body["usage"] = {
                     "input_tokens": last_valid_usage["input_tokens"],
                     "output_tokens": last_valid_usage["output_tokens"],
                     "total_tokens": last_valid_usage["total_tokens"],
                 }
-            _log_routing_telemetry(
+            _log_telemetry(
                 telemetry, request, stream_status, resp_body, latency_ms,
-                provider, routing_decision=routing_decision or {},
+                provider,
                 request_body=request_body, resp_headers=resp_headers,
-                log_body=log_body, client_format=source_format,
+                log_body=log_body, source_format=source_format,
+                extra_headers={"x-routing-decision": json.dumps(routing_decision or {})},
             )
 
     return StreamingResponse(stream_generator(), media_type="text/event-stream")

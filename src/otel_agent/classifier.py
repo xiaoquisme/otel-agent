@@ -36,71 +36,25 @@ SIMPLE_KEYWORDS = re.compile(
 )
 
 
-def _estimate_tokens(messages: list[dict]) -> int:
-    """Rough token estimate from message content (chars / 4)."""
-    total_chars = 0
-    for msg in messages:
-        content = msg.get("content", "")
-        if isinstance(content, str):
-            total_chars += len(content)
-        elif isinstance(content, list):
-            # Multi-part content (e.g., Anthropic format)
-            for part in content:
-                if isinstance(part, dict) and "text" in part:
-                    total_chars += len(part["text"])
-    return total_chars // 4
-
-
-def _has_code_blocks(messages: list[dict]) -> bool:
-    """Check if messages contain code fences."""
-    for msg in messages:
-        content = msg.get("content", "")
-        if isinstance(content, str) and CODE_BLOCK_PATTERN.search(content):
-            return True
-    return False
-
-
-def _has_tool_definitions(messages: list[dict]) -> bool:
-    """Check if messages contain tool/function definitions."""
-    for msg in messages:
-        content = msg.get("content", "")
-        if isinstance(content, str) and TOOL_DEFINITIONS_PATTERN.search(content):
-            return True
-        # Check message-level tools field
-        if msg.get("tools") or msg.get("tool_choice"):
-            return True
-    return False
-
-
-def _has_reasoning_keywords(messages: list[dict]) -> bool:
-    """Check if messages contain reasoning prompts."""
-    for msg in messages:
-        content = msg.get("content", "")
-        if isinstance(content, str) and REASONING_KEYWORDS.search(content):
-            return True
-    return False
-
-
-def _is_simple_query(messages: list[dict]) -> bool:
-    """Check if this is a short, simple query."""
-    if len(messages) > 3:
-        return False
-    if not messages:
-        return True
-    # Check last user message
-    for msg in reversed(messages):
-        if msg.get("role") == "user":
-            content = msg.get("content", "")
-            if isinstance(content, str) and len(content) < 200:
-                return bool(SIMPLE_KEYWORDS.match(content.strip()))
-    return False
+def _extract_text_content(content: str | list) -> str:
+    """Extract text from message content (string or multi-part list)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and "text" in part:
+                parts.append(part["text"])
+        return "".join(parts)
+    return ""
 
 
 def classify_task(messages: list[dict]) -> str:
     """Classify a request into a complexity tier.
 
-    Uses zero-cost heuristic signals: token count, code blocks,
-    tool definitions, message count, and reasoning keywords.
+    Uses a single pass over messages to collect all heuristic signals:
+    token count, code blocks, tool definitions, reasoning keywords,
+    and simple-query patterns.
 
     Args:
         messages: The messages array from the chat completion request.
@@ -111,12 +65,38 @@ def classify_task(messages: list[dict]) -> str:
     if not messages:
         return SIMPLE
 
-    token_est = _estimate_tokens(messages)
+    total_chars = 0
+    has_code = False
+    has_tools = False
+    has_reasoning = False
+    last_user_content = ""
+
+    for msg in messages:
+        content = msg.get("content", "")
+        text = _extract_text_content(content)
+        total_chars += len(text)
+
+        if not has_code and CODE_BLOCK_PATTERN.search(text):
+            has_code = True
+        if not has_reasoning and REASONING_KEYWORDS.search(text):
+            has_reasoning = True
+        if msg.get("tools") or msg.get("tool_choice"):
+            has_tools = True
+        if not has_tools and TOOL_DEFINITIONS_PATTERN.search(text):
+            has_tools = True
+
+        if msg.get("role") == "user":
+            last_user_content = text
+
+    token_est = total_chars // 4
     message_count = len(messages)
-    has_code = _has_code_blocks(messages)
-    has_tools = _has_tool_definitions(messages)
-    has_reasoning = _has_reasoning_keywords(messages)
-    is_simple = _is_simple_query(messages)
+
+    # Check simple-query pattern once (only needs last user message)
+    is_simple = (
+        message_count <= 3
+        and len(last_user_content) < 200
+        and bool(SIMPLE_KEYWORDS.match(last_user_content.strip()))
+    ) if last_user_content else message_count == 0
 
     # Reasoning tier — highest priority signals
     if has_reasoning and token_est > 1000:
@@ -137,7 +117,7 @@ def classify_task(messages: list[dict]) -> str:
         return MEDIUM
     if token_est > 1000:
         return MEDIUM
-    if has_code or has_tools:
+    if has_tools:
         return MEDIUM
 
     # Simple tier — short Q&A, single turn, small context
