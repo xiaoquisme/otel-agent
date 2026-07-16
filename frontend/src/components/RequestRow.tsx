@@ -49,6 +49,9 @@ export default function RequestRow({ request, onClick }: RequestRowProps) {
       <td className="px-3 py-2.5 border-b border-[#21262d] text-sm">
         {request.latency_ms != null ? `${request.latency_ms.toFixed(0)}ms` : '0ms'}
       </td>
+      <td className="px-3 py-2.5 border-b border-[#21262d] text-sm text-[#8b949e] max-w-[150px] overflow-hidden text-ellipsis whitespace-nowrap">
+        {request.model_name ?? '—'}
+      </td>
     </tr>
   )
 }

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ideation: Auto-Model Routing for otel-agent</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --text-muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --yellow: #d29922; --red: #f85149;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 2rem; max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
+  .meta { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 2rem; }
+  h2 { font-size: 1.3rem; margin: 2rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: var(--accent); }
+  .axes { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
+  .axis-tag { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.25rem 0.75rem; font-size: 0.85rem; }
+  .idea-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  .idea-card h3 { margin-top: 0; }
+  .field { margin: 0.5rem 0; }
+  .field-label { color: var(--text-muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600; }
+  .badge-high { background: rgba(63,185,80,0.2); color: var(--green); }
+  .badge-med { background: rgba(210,153,34,0.2); color: var(--yellow); }
+  .badge-low { background: rgba(248,81,73,0.2); color: var(--red); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-muted); text-transform: uppercase; font-size: 0.8rem; }
+  .jump-list { margin: 1rem 0; }
+  .jump-list a { color: var(--accent); text-decoration: none; display: block; padding: 0.25rem 0; }
+  .jump-list a:hover { text-decoration: underline; }
+  code { background: var(--bg); padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.9em; }
+  .grounding { background: var(--bg); border-left: 3px solid var(--accent); padding: 1rem; margin: 1rem 0; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<h1>🧠 Ideation: Auto-Model Routing for otel-agent</h1>
+<div class="meta">
+  <div>Date: 2026-07-14</div>
+  <div>Topic: auto-model-routing</div>
+  <div>Focus: Client sends model="auto" → agent assigns LLM based on task</div>
+  <div>Mode: repo-grounded</div>
+</div>
+
+<h2>Grounding Context</h2>
+<div class="grounding">
+  <p><strong>Project:</strong> otel-agent — FastAPI LLM API gateway with model-name-based routing.</p>
+  <p><strong>Current state:</strong> Client must specify exact model (e.g. <code>openai/gpt-4o</code>). No auto mode, no task detection, no cost awareness, no fallback. Routing is pure prefix-based: <code>parse_model()</code> splits on <code>/</code>, <code>resolve_provider()</code> looks up the provider. Provider dataclass has 4 fields: name, base_url, api_key, api_format — no costs, no tiers, no capabilities.</p>
+  <p><strong>External patterns:</strong> LiteLLM auto_router (heuristic/LLM/keyword classification, tier system SIMPLE→REASONING, Thompson sampling, fallback chains). OpenRouter auto (NotDiamond ML routing, session stickiness, model aliases).</p>
+  <p><strong>Key files:</strong> <code>router.py</code> (40 lines), <code>config.py</code> (154 lines), <code>server.py</code> (441 lines), <code>models.py</code> (112 lines), <code>logger.py</code> (captures latency/usage per request).</p>
+</div>
+
+<h2>Topic Axes</h2>
+<div class="axes">
+  <span class="axis-tag">routing-strategy</span>
+  <span class="axis-tag">configuration-schema</span>
+  <span class="axis-tag">task-classification</span>
+  <span class="axis-tag">fallback-resilience</span>
+  <span class="axis-tag">observability-feedback</span>
+</div>
+
+<h2>Ranked Ideas</h2>
+<div class="jump-list">
+  <a href="#idea1">1. Auto Mode Entry Point</a>
+  <a href="#idea2">2. Heuristic Task Classifier</a>
+  <a href="#idea3">3. Provider Capability Registry</a>
+  <a href="#idea4">4. Cost-Optimized Routing with Thompson Sampling</a>
+  <a href="#idea5">5. Cascade Fallback Chains with Circuit Breaking</a>
+  <a href="#idea6">6. Session-Sticky Routing with Tier Escalation</a>
+  <a href="#idea7">7. Routing Decision Audit Trail</a>
+</div>
+
+<div class="idea-card" id="idea1">
+  <h3>1. Auto Mode Entry Point</h3>
+  <div class="field"><span class="field-label">Axis:</span> routing-strategy</div>
+  <div class="field"><span class="field-label">Confidence:</span> <span class="badge badge-high">High (90%)</span></div>
+  <div class="field"><span class="field-label">Complexity:</span> Low</div>
+  <div class="field">
+    <span class="field-label">Description:</span>
+    <p>Intercept <code>model="auto"</code> before <code>parse_model()</code> in server.py. When the client sends "auto", route through a task classifier instead of erroring out. Explicit model strings (<code>openai/gpt-4o</code>) continue to work as before — "auto" is the special case, not a replacement.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Basis:</span>
+    <p><code>direct:</code> <code>parse_model()</code> in router.py raises <code>ValueError</code> on any input without a slash. Every client must hardcode provider prefix — there's no graceful degradation.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Rationale:</span>
+    <p>This is the literal feature gate. Without it, nothing else exists. It's also the highest-friction entry point for new users.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Downsides:</span>
+    <p>Requires a classifier to be useful (idea #2). Without one, "auto" is just a default model picker.</p>
+  </div>
+</div>
+
+<div class="idea-card" id="idea2">
+  <h3>2. Heuristic Task Classifier</h3>
+  <div class="field"><span class="field-label">Axis:</span> task-classification</div>
+  <div class="field"><span class="field-label">Confidence:</span> <span class="badge badge-high">High (85%)</span></div>
+  <div class="field"><span class="field-label">Complexity:</span> Low</div>
+  <div class="field">
+    <span class="field-label">Description:</span>
+    <p>A zero-cost heuristic that classifies incoming requests into complexity tiers (SIMPLE / MEDIUM / COMPLEX / REASONING) using structural signals: token count estimate, presence of code blocks, tool/function definitions, message chain length, reasoning keywords. Runs in &lt;1ms with no LLM call. Placed in a new <code>classifier.py</code> module.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Basis:</span>
+    <p><code>external:</code> LiteLLM's auto_router uses heuristic classification as the default strategy — zero API calls, sub-millisecond. The specific signals (code blocks = code gen → needs larger model; short single-turn = simple → cheap model) are well-established.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Rationale:</span>
+    <p>Without tiering, every request looks identical. You can't optimize cost or quality because you don't know if a request needs GPT-4-class reasoning or could be handled by a $0.01/1K token model.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Downsides:</span>
+    <p>Heuristic accuracy is ~80% — some requests will be misclassified. A fallback mechanism (idea #5) mitigates this.</p>
+  </div>
+</div>
+
+<div class="idea-card" id="idea3">
+  <h3>3. Provider Capability Registry</h3>
+  <div class="field"><span class="field-label">Axis:</span> configuration-schema</div>
+  <div class="field"><span class="field-label">Confidence:</span> <span class="badge badge-high">High (90%)</span></div>
+  <div class="field"><span class="field-label">Complexity:</span> Low</div>
+  <div class="field">
+    <span class="field-label">Description:</span>
+    <p>Extend the <code>Provider</code> dataclass with routing metadata: <code>cost_per_1k_input</code>, <code>cost_per_1k_output</code>, <code>max_context</code>, <code>rate_limit_rpm</code>, and a <code>tiers</code> field mapping each model to SIMPLE/MEDIUM/COMPLEX/REASONING. Config becomes the single source of truth for routing decisions.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Basis:</span>
+    <p><code>direct:</code> Current Provider dataclass (config.py:47) has zero routing-relevant fields. LiteLLM's model_prices_and_context_window.json is a massive external file that should be user-declarative instead.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Rationale:</span>
+    <p>Without provider capabilities declared in config, any auto-routing must hardcode cost tables (fragile) or call external APIs (slow). This is the prerequisite that makes all other routing ideas possible.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Downsides:</span>
+    <p>Users must keep cost data current. Could auto-populate from provider APIs as a fallback.</p>
+  </div>
+</div>
+
+<div class="idea-card" id="idea4">
+  <h3>4. Cost-Optimized Routing with Thompson Sampling</h3>
+  <div class="field"><span class="field-label">Axis:</span> routing-strategy</div>
+  <div class="field"><span class="field-label">Confidence:</span> <span class="badge badge-med">Medium (75%)</span></div>
+  <div class="field"><span class="field-label">Complexity:</span> Medium</div>
+  <div class="field">
+    <span class="field-label">Description:</span>
+    <p>Within each complexity tier, maintain a running score per provider using Thompson Sampling — a Bayesian bandit algorithm. Each request samples a provider based on historical success/failure rates, weighted by declared cost. Cheaper + reliable providers get sampled more. New/cheap providers explored occasionally. Replaces static cost tables with adaptive, observed behavior.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Basis:</span>
+    <p><code>external:</code> LiteLLM uses Thompson sampling for pool selection within tiers. The algorithm is well-understood (Netflix thumbnails, Microsoft ad serving). Each "pull" is a request that succeeds or fails — binary reward with continuous cost dimension.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Rationale:</span>
+    <p>Static cost tables become stale the day a provider changes pricing or a new model drops. Thompson Sampling adapts automatically — if xiaomi/mimo-v2.5 is cheap and reliable, the router discovers this organically.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Downsides:</span>
+    <p>Requires idea #2 (classifier) and #3 (capability registry) as prerequisites. Cold start is noisy — first ~100 requests per tier are exploratory.</p>
+  </div>
+</div>
+
+<div class="idea-card" id="idea5">
+  <h3>5. Cascade Fallback Chains with Circuit Breaking</h3>
+  <div class="field"><span class="field-label">Axis:</span> fallback-resilience</div>
+  <div class="field"><span class="field-label">Confidence:</span> <span class="badge badge-high">High (85%)</span></div>
+  <div class="field"><span class="field-label">Complexity:</span> Medium</div>
+  <div class="field">
+    <span class="field-label">Description:</span>
+    <p>Define ordered fallback chains in config (e.g., <code>auto.primary: [openai/gpt-4o, openrouter/claude-3.5]</code> → <code>auto.fallback: [xiaomi/mimo-v2.5]</code>). On 502/504/rate-limit, retry with next provider. Track failure counts per provider — "open the circuit" after N consecutive failures, half-open probe after cooldown. Battle-tested SMTP MX preference pattern.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Basis:</span>
+    <p><code>external:</code> SMTP MX preference chains (RFC 5321) — 40-year-old solved problem. <code>direct:</code> server.py catches ConnectError/TimeoutException but returns immediately — no retry, no fallback.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Rationale:</span>
+    <p>Provider outages are the #1 reliability issue in multi-provider setups. A cascade chain means zero-downtime for the client even when one provider is down.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Downsides:</span>
+    <p>Fallback adds latency on provider failures. Circuit breaker thresholds need tuning.</p>
+  </div>
+</div>
+
+<div class="idea-card" id="idea6">
+  <h3>6. Session-Sticky Routing with Tier Escalation</h3>
+  <div class="field"><span class="field-label">Axis:</span> routing-strategy</div>
+  <div class="field"><span class="field-label">Confidence:</span> <span class="badge badge-high">High (80%)</span></div>
+  <div class="field"><span class="field-label">Complexity:</span> Low</div>
+  <div class="field">
+    <span class="field-label">Description:</span>
+    <p>Detect multi-turn conversations (messages array with 3+ turns or client-provided <code>X-Session-ID</code> header) and pin to same provider for duration. First request goes through auto-routing; subsequent requests bypass classification and use cached decision. If quality signals degrade within tier, escalate to next tier up. Prevents context-model mismatch.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Basis:</span>
+    <p><code>external:</code> OpenRouter explicitly supports session stickiness for auto-routing. <code>direct:</code> Current codebase has no session concept — every request independently routed.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Rationale:</span>
+    <p>Multi-turn is the dominant LLM use case. Routing each turn independently silently degrades quality — different formatting, different knowledge cutoffs, different personality. This is a correctness fix, not just an optimization.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Downsides:</span>
+    <p>Requires session state (in-memory cache with TTL). Cold start on new sessions always runs full classification.</p>
+  </div>
+</div>
+
+<div class="idea-card" id="idea7">
+  <h3>7. Routing Decision Audit Trail</h3>
+  <div class="field"><span class="field-label">Axis:</span> observability-feedback</div>
+  <div class="field"><span class="field-label">Confidence:</span> <span class="badge badge-high">High (85%)</span></div>
+  <div class="field"><span class="field-label">Complexity:</span> Low</div>
+  <div class="field">
+    <span class="field-label">Description:</span>
+    <p>When auto-routing selects a provider/model, inject response headers (<code>X-Routed-Provider</code>, <code>X-Routed-Model</code>, <code>X-Routed-Tier</code>, <code>X-Routed-Reason</code>) so the client can see exactly why. Log the same to telemetry database. Like Cloudflare's <code>cf-ray</code> header — full provenance for every decision.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Basis:</span>
+    <p><code>direct:</code> Telemetry logger captures everything internally but clients see nothing. Server.py doesn't inject routing metadata into responses. The data exists; only the transparency layer is missing.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Rationale:</span>
+    <p>The #1 complaint about auto-routing systems is opacity. "Why did it pick GPT-3.5 for my complex task?" Without transparency, you can't debug, can't trust, and can't improve.</p>
+  </div>
+  <div class="field">
+    <span class="field-label">Downsides:</span>
+    <p>Minimal — additive to existing response handling. Slight increase in response header size.</p>
+  </div>
+</div>
+
+<h2>Rejection Summary</h2>
+<table>
+  <tr><th>#</th><th>Idea</th><th>Reason</th></tr>
+  <tr><td>8</td><td>Implicit Quality Signals from Response Telemetry</td><td>Overlaps with Audit Trail (#7); lower standalone value without Thompson Sampling</td></tr>
+  <tr><td>9</td><td>Budget-Aware Routing</td><td>Subsumed by Cost-Optimized Routing (#4) which already handles cost dimension</td></tr>
+  <tr><td>10</td><td>Soft Handoff / Speculative Cascade</td><td>Too complex for MVP — hedged requests require streaming splicing. Defer to v2.</td></tr>
+  <tr><td>11</td><td>Zero-Budget Gateway</td><td>Subsumed by Cost-Optimized Routing (#4) — free/local models are just low-cost providers</td></tr>
+  <tr><td>12</td><td>Auto-Calibrating Tier Boundaries (Shadow A/B)</td><td>Advanced meta-optimization — defer to v2 after classifier is proven</td></tr>
+  <tr><td>13</td><td>Cost-Curve Routing Profiles</td><td>Subsumed by Provider Capability Registry (#3) which already defines tiers</td></tr>
+  <tr><td>14</td><td>Circuit-Breaker Pools (standalone)</td><td>Merged into Cascade Fallback Chains (#5) — they're complementary, not separate</td></tr>
+</table>
+
+<p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 2rem;">
+  Composed by ce-ideate · 36 raw ideas across 5 frames → 14 deduplicated → 7 survivors<br>
+  Generated 2026-07-14 · otel-agent repo-grounded
+</p>
+
+</body>
+</html>

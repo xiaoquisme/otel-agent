@@ -8,7 +8,7 @@ import CodeBlock from '../components/ui/CodeBlock'
 
 function MetadataGrid({ detail }: { detail: RequestDetail }) {
   const items = [
-    { label: 'Model', value: detail.metadata?.model || '—', color: 'var(--color-accent-blue)' },
+    { label: 'Model', value: detail.model_name || detail.metadata?.model || '—', color: 'var(--color-accent-blue)' },
     { label: 'Finish Reason', value: detail.metadata?.finish_reason || '—', color: 'var(--color-accent-green)' },
     { label: 'Input Tokens', value: detail.metadata?.usage?.input_tokens?.toLocaleString() || '—', color: 'var(--color-text-primary)' },
     { label: 'Output Tokens', value: detail.metadata?.usage?.output_tokens?.toLocaleString() || '—', color: 'var(--color-text-primary)' },
