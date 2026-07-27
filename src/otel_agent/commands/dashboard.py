@@ -33,12 +33,35 @@ def handle_dashboard(args) -> None:
     set_dashboard_api(dashboard_api)
     app.include_router(dashboard_router)
 
+    # Serve React dashboard from frontend/dist/ (Vite build output)
+    frontend_dist = Path(__file__).parent.parent.parent.parent / "frontend" / "dist"
+    if (frontend_dist / "index.html").exists():
+        from fastapi.staticfiles import StaticFiles
+        assets_dir = frontend_dist / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="static-assets")
+        favicon = frontend_dist / "favicon.svg"
+        if favicon.exists():
+            @app.get("/favicon.svg", response_class=FileResponse)
+            async def serve_favicon():
+                return FileResponse(favicon, media_type="image/svg+xml")
+        icons = frontend_dist / "icons.svg"
+        if icons.exists():
+            @app.get("/icons.svg", response_class=FileResponse)
+            async def serve_icons():
+                return FileResponse(icons, media_type="image/svg+xml")
+
     @app.get("/", response_class=FileResponse)
     async def serve_dashboard():
         """Serve the dashboard index.html."""
-        html_path = Path(__file__).parent.parent / "dashboard" / "index.html"
+        # Serve React dashboard from frontend/dist/ (Vite build output)
+        html_path = frontend_dist / "index.html"
         if html_path.exists():
             return FileResponse(html_path, media_type="text/html")
+        # Fallback: serve old monolithic index.html (pre-React)
+        legacy_path = Path(__file__).parent.parent / "dashboard" / "index.html"
+        if legacy_path.exists():
+            return FileResponse(legacy_path, media_type="text/html")
         from fastapi.responses import HTMLResponse
         return HTMLResponse("<h1>Dashboard</h1><p>index.html not found</p>")
 
