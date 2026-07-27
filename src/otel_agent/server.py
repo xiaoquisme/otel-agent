@@ -59,9 +59,14 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     set_dashboard_api(dashboard_api)
     app.include_router(dashboard_router)
 
-    # Serve React dashboard from frontend/dist/
-    _frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
-    if (_frontend_dist / "index.html").exists():
+    # Serve React dashboard — check installed package first, then dev source
+    _pkg_dir = Path(__file__).parent  # .../otel_agent
+    _candidates = [
+        _pkg_dir / "dashboard" / "frontend_dist",         # installed wheel
+        _pkg_dir.parent.parent / "frontend" / "dist",     # dev: project root
+    ]
+    _frontend_dist = next((p for p in _candidates if (p / "index.html").exists()), None)
+    if _frontend_dist is not None:
         from fastapi.staticfiles import StaticFiles
         app.mount("/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="static")
 

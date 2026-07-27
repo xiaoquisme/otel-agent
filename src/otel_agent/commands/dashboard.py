@@ -18,6 +18,14 @@ def handle_dashboard(args) -> None:
     from otel_agent.dashboard.api import DashboardAPI
     from otel_agent.dashboard.routes import router as dashboard_router, set_api as set_dashboard_api
 
+    # Locate frontend assets: installed package (frontend_dist/) or dev source (frontend/dist/)
+    _pkg_dir = Path(__file__).parent  # .../otel_agent/commands
+    _candidates = [
+        _pkg_dir.parent / "dashboard" / "frontend_dist",  # installed wheel
+        _pkg_dir.parent.parent.parent / "frontend" / "dist",  # dev: project root
+    ]
+    frontend_dist = next((p for p in _candidates if (p / "index.html").exists()), None)
+
     db_path = Path(args.db).expanduser()
     port = args.port
 
@@ -33,9 +41,7 @@ def handle_dashboard(args) -> None:
     set_dashboard_api(dashboard_api)
     app.include_router(dashboard_router)
 
-    # Serve React dashboard from frontend/dist/ (Vite build output)
-    frontend_dist = Path(__file__).parent.parent.parent.parent / "frontend" / "dist"
-    if (frontend_dist / "index.html").exists():
+    if frontend_dist is not None:
         from fastapi.staticfiles import StaticFiles
         assets_dir = frontend_dist / "assets"
         if assets_dir.is_dir():
@@ -54,10 +60,9 @@ def handle_dashboard(args) -> None:
     @app.get("/", response_class=FileResponse)
     async def serve_dashboard():
         """Serve the dashboard index.html."""
-        # Serve React dashboard from frontend/dist/ (Vite build output)
-        html_path = frontend_dist / "index.html"
-        if html_path.exists():
-            return FileResponse(html_path, media_type="text/html")
+        if frontend_dist is not None:
+            html = frontend_dist / "index.html"
+            return FileResponse(html, media_type="text/html")
         # Fallback: serve old monolithic index.html (pre-React)
         legacy_path = Path(__file__).parent.parent / "dashboard" / "index.html"
         if legacy_path.exists():
