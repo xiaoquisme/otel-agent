@@ -1,7 +1,8 @@
 """Dashboard JSON API — reads from the storage backend directly.
 
-The dashboard now runs in the same process as the FastAPI proxy, so there
-is no need for proxy-fallback logic or multi-process lock workarounds.
+When proxy_port is set, queries route through the proxy's internal HTTP API
+to avoid DuckDB lock conflicts with a running proxy process.  Falls back to
+direct DuckDB access when the proxy is unreachable.
 """
 from __future__ import annotations
 
@@ -37,36 +38,102 @@ class CountCache:
 class DashboardAPI:
     """Query the requests table for the dashboard.
 
-    Now that the dashboard runs inside the same process as the proxy,
-    all queries go directly to the storage backend (no HTTP proxy loop).
+    When *proxy_port* is provided, queries are routed through the proxy's
+    internal HTTP API to avoid DuckDB lock conflicts.  Falls back to direct
+    DuckDB access when the proxy is unreachable.
     """
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, proxy_port: int | None = None):
         self.db_path = db_path
-        self._storage = create_storage("duckdb", db_path)
+        self._proxy_port = proxy_port
+        self._proxy_url_cache: str | None = None
+        self._proxy_url_cache_time: float = 0
+        self._storage = create_storage("duckdb", db_path, read_only=True)
         self._count_cache = CountCache(ttl=5.0)
+
+    # ------------------------------------------------------------------
+    # Proxy routing helpers
+    # ------------------------------------------------------------------
+
+    def _proxy_url(self) -> str | None:
+        """Return cached proxy base URL if reachable, else None."""
+        if self._proxy_port is None:
+            return None
+
+        now = time.monotonic()
+        # Use cached URL if fresh (< 30s)
+        if self._proxy_url_cache is not None and now - self._proxy_url_cache_time < 30:
+            return self._proxy_url_cache
+
+        import httpx
+        url = f"http://127.0.0.1:{self._proxy_port}"
+        try:
+            r = httpx.get(f"{url}/health", timeout=2.0)
+            if r.status_code == 200:
+                self._proxy_url_cache = url
+                self._proxy_url_cache_time = now
+                return url
+        except Exception:
+            pass
+
+        # If previously cached, keep using it for up to 60s
+        if self._proxy_url_cache is not None and now - self._proxy_url_cache_time < 60:
+            return self._proxy_url_cache
+        return None
+
+    def _http_get(self, path: str, params: dict | None = None) -> Any:
+        """Fetch JSON from the proxy's internal API. Returns None on failure."""
+        base = self._proxy_url()
+        if base is None:
+            return None
+        import httpx
+        try:
+            r = httpx.get(f"{base}{path}", params=params, timeout=5.0)
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            pass
+        return None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def get_requests(self, search: str = "", method: str = "", status: int = 0,
                      cursor: int = 0, limit: int = 50) -> dict:
         """Get paginated requests using cursor-based pagination."""
+        params = {"search": search, "method": method, "status": status, "cursor": cursor, "limit": limit}
+        result = self._http_get("/api/requests", params)
+        if result is not None:
+            return result
+        # Fallback to direct DB
         if not self.db_path.exists():
             return {"data": [], "total": 0, "cursor": cursor, "next_cursor": 0, "has_more": False}
         return self._storage.get_requests(search, method, status, cursor, limit)
 
     def get_request(self, request_id: int) -> dict | None:
         """Get full details for a single request."""
+        result = self._http_get(f"/api/requests/{request_id}")
+        if result is not None:
+            return result
         if not self.db_path.exists():
             return None
         return self._storage.get_request(request_id)
 
     def get_all_filtered(self, search: str = "", method: str = "", status: int = 0) -> list[dict]:
         """Get all filtered requests (for export, no pagination)."""
+        result = self._http_get("/api/export", {"format": "json", "search": search, "method": method, "status": status})
+        if result is not None:
+            return result if isinstance(result, list) else []
         if not self.db_path.exists():
             return []
         return self._storage.get_all_filtered(search, method, status)
 
     def get_usage_summary(self, start: str, end: str) -> dict:
         """Return usage summary for the requested UTC range."""
+        result = self._http_get("/api/usage", {"start": start, "end": end})
+        if result is not None:
+            return result
         if not self.db_path.exists():
             return {"start": start, "end": end, "total_tokens": 0, "input_tokens": 0,
                     "output_tokens": 0, "eligible_request_count": 0, "excluded_request_count": 0, "models": []}
