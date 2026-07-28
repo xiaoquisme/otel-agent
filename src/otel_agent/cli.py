@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # proxy start (default)
     start_p = proxy_sub.add_parser("start", help="Start proxy (default)")
-    start_p.add_argument("-p", "--port", type=int, default=8080, help="Listen port (default: 8080)")
+    start_p.add_argument("-p", "--port", type=int, default=45638, help="Listen port (default: 45638)")
     start_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.duckdb", help="Telemetry database path")
     start_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
     start_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
@@ -45,14 +45,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     # proxy restart
     restart_p = proxy_sub.add_parser("restart", help="Restart the proxy")
-    restart_p.add_argument("-p", "--port", type=int, default=8080, help="Listen port (default: 8080)")
+    restart_p.add_argument("-p", "--port", type=int, default=45638, help="Listen port (default: 45638)")
     restart_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.duckdb", help="Telemetry database path")
     restart_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
     restart_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
 
     # proxy status
     status_p = proxy_sub.add_parser("status", help="Check proxy status")
-    status_p.add_argument("-p", "--port", type=int, default=8080, help="Expected port")
+    status_p.add_argument("-p", "--port", type=int, default=45638, help="Expected port")
     status_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
 
     # proxy logs
@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     logs_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
 
     # Also support `otel-agent proxy` with no subcommand (default to start)
-    proxy_p.add_argument("-p", "--port", type=int, default=8080, help="Listen port (default: 8080)")
+    proxy_p.add_argument("-p", "--port", type=int, default=45638, help="Listen port (default: 45638)")
     proxy_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.duckdb", help="Telemetry database path")
     proxy_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
     proxy_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
@@ -82,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     # --- doctor ---
     doctor_p = sub.add_parser("doctor", help="Check installation health")
     doctor_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
-    doctor_p.add_argument("-p", "--port", type=int, default=8080, help="Port to check (default: 8080)")
+    doctor_p.add_argument("-p", "--port", type=int, default=45638, help="Port to check (default: 45638)")
 
     # --- routes ---
     routes_p = sub.add_parser("routes", help="Display routing table")

@@ -62,7 +62,7 @@ def _make_provider(name: str = "openai", base_url: str = "https://api.openai.com
     return p
 
 
-def _make_request(method: str = "POST", url: str = "http://localhost:8080/v1/chat/completions") -> MagicMock:
+def _make_request(method: str = "POST", url: str = "http://localhost:45638/v1/chat/completions") -> MagicMock:
     r = MagicMock()
     r.method = method
     r.url = url
