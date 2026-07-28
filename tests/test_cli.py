@@ -8,7 +8,7 @@ from otel_agent.cli import build_parser
 def test_parser_defaults():
     parser = build_parser()
     args = parser.parse_args(["proxy"])
-    assert args.port == 8080
+    assert args.port == 45638
     assert args.db == "~/.otel-agent/telemetry.duckdb"
     assert args.config == "~/.otel-agent/config.yaml"
 
@@ -64,7 +64,7 @@ def test_parser_doctor_subcommand():
     args = parser.parse_args(["doctor"])
     assert args.command == "doctor"
     assert args.config == "~/.otel-agent/config.yaml"
-    assert args.port == 8080
+    assert args.port == 45638
 
 
 def test_version_flag(capsys):

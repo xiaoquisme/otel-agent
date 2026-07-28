@@ -69,7 +69,7 @@ def handle_doctor(args) -> None:
         print("    → Run: otel-agent init")
 
     # Port
-    port = getattr(args, 'port', 8080)
+    port = getattr(args, 'port', 45638)
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(('', port))

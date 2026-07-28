@@ -51,7 +51,7 @@ def get_proxy_status() -> dict | None:
     if not is_running(pid):
         cleanup_pid()
         return None
-    port = 8080
+    port = 45638
     if PORT_FILE.exists():
         try:
             port = int(PORT_FILE.read_text().strip())
