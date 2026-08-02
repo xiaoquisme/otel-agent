@@ -136,8 +136,5 @@ def usage_summary(
     if end_dt <= start_dt:
         return JSONResponse({"error": "end must be after start"}, status_code=400)
 
-    if (end_dt - start_dt).total_seconds() > 48 * 3600:
-        return JSONResponse({"error": "Range must not exceed 48 hours"}, status_code=400)
-
     result = api.get_usage_summary(start, end)
     return JSONResponse(result)

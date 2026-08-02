@@ -532,15 +532,18 @@ def test_route_usage_end_before_start(tmp_path):
     api.close()
 
 
-def test_route_usage_range_too_long(tmp_path):
+def test_route_usage_wide_range_accepted(tmp_path):
+    """Ranges wider than 48 hours should now be accepted (week/month/all-time)."""
     db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     client, api = _make_client(db)
     start = "2026-01-01T00:00:00Z"
-    end = "2026-01-04T00:00:00Z"  # 3 days > 48h
+    end = "2026-01-04T00:00:00Z"  # 3 days — previously blocked, now allowed
     resp = client.get(f"/api/usage?start={start}&end={end}")
-    assert resp.status_code == 400
-    assert "48 hours" in resp.json()["error"]
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "total_tokens" in body
+    assert "models" in body
     api.close()
 
 
@@ -571,4 +574,18 @@ def test_route_usage_yesterday_empty(tmp_path):
     assert resp.status_code == 200
     body = resp.json()
     assert body["total_tokens"] == 0
+    api.close()
+
+
+def test_route_usage_wide_range(tmp_path):
+    """Usage endpoint should accept ranges wider than 48 hours (week/month/all-time)."""
+    db = tmp_path / "test.sqlite"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    # Use a 30-day range — previously blocked by 48h limit
+    resp = client.get("/api/usage?start=2026-01-01T00:00:00Z&end=2026-02-01T00:00:00Z")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "total_tokens" in body
+    assert "models" in body
     api.close()
