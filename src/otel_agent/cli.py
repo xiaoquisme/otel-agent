@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     # proxy start (default)
     start_p = proxy_sub.add_parser("start", help="Start proxy (default)")
     start_p.add_argument("-p", "--port", type=int, default=45638, help="Listen port (default: 45638)")
-    start_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.duckdb", help="Telemetry database path")
+    start_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.sqlite", help="Telemetry database path")
     start_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
     start_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
 
@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     # proxy restart
     restart_p = proxy_sub.add_parser("restart", help="Restart the proxy")
     restart_p.add_argument("-p", "--port", type=int, default=45638, help="Listen port (default: 45638)")
-    restart_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.duckdb", help="Telemetry database path")
+    restart_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.sqlite", help="Telemetry database path")
     restart_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
     restart_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
 
@@ -63,13 +63,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Also support `otel-agent proxy` with no subcommand (default to start)
     proxy_p.add_argument("-p", "--port", type=int, default=45638, help="Listen port (default: 45638)")
-    proxy_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.duckdb", help="Telemetry database path")
+    proxy_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.sqlite", help="Telemetry database path")
     proxy_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
     proxy_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
 
     # --- view ---
     view_p = sub.add_parser("view", help="View logged requests")
-    view_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.duckdb", help="Telemetry database path")
+    view_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.sqlite", help="Telemetry database path")
     view_p.add_argument("-f", "--filter", type=str, default="", help="Filter by upstream (substring match)")
     view_p.add_argument("-n", "--limit", type=int, default=20, help="Max rows to display (default: 20)")
 
@@ -91,8 +91,8 @@ def build_parser() -> argparse.ArgumentParser:
     # --- dashboard ---
     dash_p = sub.add_parser("dashboard", help="Start web dashboard")
     dash_p.add_argument("-p", "--port", type=int, default=9090, help="Dashboard port (default: 9090)")
-    dash_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.duckdb", help="Telemetry database path")
-    dash_p.add_argument("--proxy", type=int, default=None, help="Proxy port for DB queries (required when proxy is running to avoid DuckDB lock conflict)")
+    dash_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.sqlite", help="Telemetry database path")
+    dash_p.add_argument("--proxy", type=int, default=None, help="Proxy port for DB queries (required when proxy is running)")
 
     return parser
 

@@ -93,7 +93,7 @@ class Config:
         self._mtime: float = 0
         self._providers: dict[str, Provider] = {}
         self._log_request_body: bool = True
-        self._storage: str = "duckdb"
+        self._storage: str = "sqlite"
         self._auto_routing: dict = {}
         self._reload()
 
@@ -152,7 +152,7 @@ class Config:
 
         self._providers = providers
         self._log_request_body = bool(data.get("log_request_body", True))
-        self._storage = str(data.get("storage", "duckdb")).strip()
+        self._storage = str(data.get("storage", "sqlite")).strip()
         self._auto_routing = data.get("auto_routing") or {}
         self._validate()
 
