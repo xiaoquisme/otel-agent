@@ -4,6 +4,10 @@ import { fetchUsage } from '../api/client'
 
 export type UsagePeriod = 'today' | 'week' | 'month' | 'all'
 
+function toUTC(d: Date): string {
+  return d.toISOString().replace(/\.\\d{3}Z$/, 'Z')
+}
+
 function getRange(period: UsagePeriod): { start: string; end: string } {
   const now = new Date()
 
@@ -11,10 +15,7 @@ function getRange(period: UsagePeriod): { start: string; end: string } {
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const end = new Date(start)
     end.setDate(end.getDate() + 1)
-    return {
-      start: start.toISOString().replace(/\.\\d{3}Z$/, 'Z'),
-      end: end.toISOString().replace(/\.\\d{3}Z$/, 'Z'),
-    }
+    return { start: toUTC(start), end: toUTC(end) }
   }
 
   if (period === 'week') {
@@ -24,26 +25,17 @@ function getRange(period: UsagePeriod): { start: string; end: string } {
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - diff)
     const end = new Date(start)
     end.setDate(end.getDate() + 7)
-    return {
-      start: start.toISOString().replace(/\.\\d{3}Z$/, 'Z'),
-      end: end.toISOString().replace(/\.\\d{3}Z$/, 'Z'),
-    }
+    return { start: toUTC(start), end: toUTC(end) }
   }
 
   if (period === 'month') {
     const start = new Date(now.getFullYear(), now.getMonth(), 1)
     const end = new Date(now.getFullYear(), now.getMonth() + 1, 1)
-    return {
-      start: start.toISOString().replace(/\.\\d{3}Z$/, 'Z'),
-      end: end.toISOString().replace(/\.\\d{3}Z$/, 'Z'),
-    }
+    return { start: toUTC(start), end: toUTC(end) }
   }
 
   // all time
-  return {
-    start: '2000-01-01T00:00:00Z',
-    end: now.toISOString().replace(/\.\\d{3}Z$/, 'Z'),
-  }
+  return { start: '2000-01-01T00:00:00Z', end: toUTC(now) }
 }
 
 export function useUsage(period: UsagePeriod = 'today') {
