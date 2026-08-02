@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import subprocess
 import time
@@ -9,59 +10,92 @@ import requests
 import duckdb
 
 
+def _surge_active() -> bool:
+    """Check if Surge proxy is active (intercepts localhost traffic)."""
+    try:
+        r = requests.get("http://127.0.0.1:1", timeout=1)
+        return "Surge" in r.text
+    except Exception:
+        return False
+
+
 @pytest.mark.integration
 def test_proxy_logs_request():
-    """Start proxy, send a request through it, check it was logged."""
+    """Start proxy, send an LLM request through it, check it was logged."""
+    if _surge_active():
+        pytest.skip("Surge proxy intercepts localhost traffic")
+
     with tempfile.TemporaryDirectory() as td:
         db_path = Path(td) / "test.duckdb"
+        src_dir = str(Path(__file__).resolve().parent.parent / "src")
         proc = subprocess.Popen(
-            ["uv", "run", "otel-proxy", "proxy", "-p", "18765", "-d", str(db_path)],
+            ["uv", "run", "otel-agent", "proxy", "-p", "18765", "-d", str(db_path),
+             "-c", str(Path.home() / ".otel-agent" / "config.yaml")],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env={**os.environ, "PYTHONPATH": src_dir},
         )
         time.sleep(3)
 
         try:
-            requests.get(
-                "https://httpbin.org/get",
-                proxies={
-                    "https": "http://127.0.0.1:18765",
-                    "http": "http://127.0.0.1:18765",
-                },
-                timeout=15,
-                verify=False,
+            # Send an OpenAI-format request to the proxy's chat completions endpoint
+            # trust_env=False bypasses system proxy (Surge) on macOS
+            session = requests.Session()
+            session.trust_env = False
+            resp = session.post(
+                "http://127.0.0.1:18765/v1/chat/completions",
+                json={"model": "chatgpt/gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                timeout=10,
             )
-            assert False, "Expected external-network blocked in this environment"
+            # The request should be logged regardless of upstream response
+            # (success, 4xx from upstream, or 5xx from upstream)
+            assert resp.status_code in (200, 400, 404, 502, 504)
         finally:
             proc.terminate()
             proc.wait()
+
+        # Wait for DuckDB file lock to be released by the proxy process
+        time.sleep(2)
+        conn = duckdb.connect(str(db_path), read_only=True)
+        rows = conn.execute("SELECT * FROM requests").fetchall()
+        conn.close()
+        assert len(rows) >= 1
 
 
 @pytest.mark.integration
 def test_proxy_startup_logs_local_request():
     """Start proxy, send a local request through it, check it was logged."""
+    if _surge_active():
+        pytest.skip("Surge proxy intercepts localhost traffic")
+
     with tempfile.TemporaryDirectory() as td:
         db_path = Path(td) / "test.duckdb"
+        src_dir = str(Path(__file__).resolve().parent.parent / "src")
         proc = subprocess.Popen(
-            ["uv", "run", "otel-proxy", "proxy", "-p", "18765", "-d", str(db_path)],
+            ["uv", "run", "otel-agent", "proxy", "-p", "18765", "-d", str(db_path),
+             "-c", str(Path.home() / ".otel-agent" / "config.yaml")],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env={**os.environ, "PYTHONPATH": src_dir},
         )
         time.sleep(3)
 
         try:
-            requests.get(
-                "https://127.0.0.1:18765/get",
-                proxies={
-                    "https": "http://127.0.0.1:18765",
-                    "http": "http://127.0.0.1:18765",
-                },
-                timeout=15,
-                verify=False,
+            # Send an OpenAI-format request to the proxy
+            session = requests.Session()
+            session.trust_env = False
+            resp = session.post(
+                "http://127.0.0.1:18765/v1/chat/completions",
+                json={"model": "chatgpt/gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                timeout=10,
             )
+            assert resp.status_code in (200, 400, 404, 502, 504)
         finally:
             proc.terminate()
             proc.wait()
+
+        # Wait for DuckDB file lock to be released
+        time.sleep(2)
 
         time.sleep(1)
         conn = duckdb.connect(str(db_path), read_only=True)
