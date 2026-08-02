@@ -40,6 +40,10 @@ class SQLiteStorage(StorageBackend):
             self._conn.row_factory = sqlite3.Row
             if not self.read_only:
                 self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA busy_timeout=5000")
+                self._conn.execute("PRAGMA synchronous=NORMAL")
+                self._conn.execute("PRAGMA wal_autocheckpoint=1000")
+                self._conn.execute("PRAGMA cache_size=-64000")
         return self._conn
 
     # ------------------------------------------------------------------

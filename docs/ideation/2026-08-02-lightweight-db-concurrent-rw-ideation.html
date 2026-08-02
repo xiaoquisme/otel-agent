@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ideation: 轻量级并发读写数据库选型</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface-2: #232736;
+    --border: #2e3348;
+    --text: #e4e6f0;
+    --text-muted: #8b8fa8;
+    --accent: #6c8cff;
+    --accent-soft: rgba(108,140,255,0.12);
+    --green: #4ade80;
+    --green-soft: rgba(74,222,128,0.12);
+    --yellow: #fbbf24;
+    --yellow-soft: rgba(251,191,36,0.12);
+    --red: #f87171;
+    --red-soft: rgba(248,113,113,0.12);
+    --purple: #a78bfa;
+    --purple-soft: rgba(167,139,250,0.12);
+    --cyan: #22d3ee;
+    --cyan-soft: rgba(34,211,238,0.12);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+    padding: 2rem 1rem;
+  }
+  .container { max-width: 900px; margin: 0 auto; }
+
+  /* Header */
+  .header { margin-bottom: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 1.5rem; }
+  .header h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.5rem; }
+  .meta { display: flex; gap: 1.5rem; flex-wrap: wrap; color: var(--text-muted); font-size: 0.85rem; }
+  .meta span { display: inline-flex; align-items: center; gap: 0.35rem; }
+
+  /* Stats strip */
+  .stats { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1.5rem 0; }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+  .stat strong { color: var(--text); font-weight: 600; }
+
+  /* Sections */
+  section { margin-bottom: 2rem; }
+  section h2 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.8rem;
+  }
+
+  /* Jump list */
+  .jump-list { list-style: none; display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem; }
+  .jump-list a {
+    display: inline-block;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: border-color 0.15s;
+  }
+  .jump-list a:hover { border-color: var(--accent); color: var(--text); }
+
+  /* Idea cards */
+  .idea {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1rem;
+    position: relative;
+  }
+  .idea h3 { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.4rem; }
+  .idea .axis-tag {
+    display: inline-block;
+    font-size: 0.7rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+    font-weight: 500;
+  }
+  .idea .desc { color: var(--text); font-size: 0.92rem; margin-bottom: 0.6rem; }
+  .idea .basis {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    border-left: 2px solid var(--accent);
+    padding-left: 0.75rem;
+    margin: 0.6rem 0;
+  }
+  .idea .basis strong { color: var(--accent); }
+  .idea .rationale { font-size: 0.88rem; margin: 0.5rem 0; }
+  .idea .downsides { font-size: 0.82rem; color: var(--text-muted); margin-top: 0.4rem; }
+  .badge {
+    display: inline-block;
+    font-size: 0.7rem;
+    padding: 0.12rem 0.45rem;
+    border-radius: 4px;
+    font-weight: 600;
+    margin-right: 0.4rem;
+  }
+  .badge.conf-high { background: var(--green-soft); color: var(--green); }
+  .badge.conf-med { background: var(--yellow-soft); color: var(--yellow); }
+  .badge.cx-low { background: var(--cyan-soft); color: var(--cyan); }
+  .badge.cx-med { background: var(--purple-soft); color: var(--purple); }
+  .badge.cx-high { background: var(--red-soft); color: var(--red); }
+
+  /* Rejection table */
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th { text-align: left; color: var(--text-muted); font-weight: 500; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+  td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+
+  /* Code */
+  code { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85em; background: var(--surface-2); padding: 0.1rem 0.35rem; border-radius: 3px; }
+
+  /* Footer */
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  /* Architecture diagram */
+  .diagram {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1rem 0;
+    overflow-x: auto;
+  }
+  .diagram svg { display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="header">
+  <h1>Ideation: 轻量级并发读写数据库选型</h1>
+  <div class="meta">
+    <span>2026-08-02</span>
+    <span>Topic: lightweight-db-concurrent-rw</span>
+    <span>Focus: 并发读写数据库替代方案</span>
+    <span>Mode: repo-grounded</span>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat"><strong>5</strong> ranked ideas</div>
+  <div class="stat"><strong>36</strong> raw candidates</div>
+  <div class="stat"><strong>31</strong> cut</div>
+  <div class="stat"><strong>4</strong> axes covered</div>
+</div>
+
+<!-- Grounding Context -->
+<section>
+  <h2>Grounding Context</h2>
+  <div style="font-size:0.88rem; color: var(--text-muted);">
+    <p><strong>项目:</strong> otel-agent — Python FastAPI LLM API 网关，使用 DuckDB 存储遥测数据（请求日志、token 用量聚合）。</p>
+    <p style="margin-top:0.5rem;"><strong>核心问题:</strong> DuckDB 使用 OS 级文件锁，阻止多进程并发访问。代理进程写入 + Dashboard 进程读取会触发 <code>IO Error: Could not set lock on file</code>。</p>
+    <p style="margin-top:0.5rem;"><strong>当前方案:</strong> 单写者架构 — 代理进程独占 DuckDB 写连接，Dashboard 通过代理 HTTP API 查询。Dashboard 独立运行时回退到空数据。</p>
+    <p style="margin-top:0.5rem;"><strong>存储抽象:</strong> <code>StorageBackend</code> 基类，已有 <code>DuckDBStorage</code> 和 <code>SQLiteStorage</code> 实现。WAL 模式已启用。</p>
+    <p style="margin-top:0.5rem;"><strong>查询需求:</strong> 分页查询、全文搜索、按时间范围聚合 token 用量（SUM/COUNT/GROUP BY）、模型排名。</p>
+    <p style="margin-top:0.5rem;"><strong>相关文档:</strong> <code>docs/solutions/concurrency/duckdb-multi-process-concurrency.md</code> — 详细记录了 DuckDB 并发限制和单写者架构方案。</p>
+  </div>
+</section>
+
+<!-- Topic Axes -->
+<section>
+  <h2>Topic Axes</h2>
+  <ul style="font-size:0.88rem; color: var(--text-muted); list-style: disc; padding-left: 1.5rem;">
+    <li><strong>并发模型</strong> — 数据库的多进程读写支持方式</li>
+    <li><strong>分析查询能力</strong> — 聚合、分组、时间范围查询性能</li>
+    <li><strong>部署复杂度</strong> — 嵌入式 vs 服务器模式，运维负担</li>
+    <li><strong>迁移成本</strong> — 从 DuckDB 迁移的工作量和风险</li>
+  </ul>
+</section>
+
+<!-- Ranked Ideas -->
+<section>
+  <h2>Ranked Ideas</h2>
+
+  <ul class="jump-list">
+    <li><a href="#idea1">1. PostgreSQL</a></li>
+    <li><a href="#idea2">2. SQLite WAL 模式优化</a></li>
+    <li><a href="#idea3">3. 单进程架构</a></li>
+    <li><a href="#idea4">4. DuckDB HTTP Server</a></li>
+    <li><a href="#idea5">5. 消息队列 + 只读副本</a></li>
+  </ul>
+
+  <!-- Idea 1 -->
+  <article class="idea" id="idea1">
+    <span class="axis-tag">并发模型</span>
+    <span class="axis-tag">分析查询能力</span>
+    <h3>1. PostgreSQL — 真正的多进程并发读写</h3>
+    <span class="badge conf-high">Conf 90%</span>
+    <span class="badge cx-med">Cx Medium</span>
+    <div class="desc">
+      替换 DuckDB 为 PostgreSQL。PostgreSQL 原生支持多进程并发读写，MVCC 架构允许多个读者同时不阻塞写者。Python 生态有成熟的 <code>psycopg2</code>（同步）和 <code>asyncpg</code>（异步）驱动。聚合查询（SUM/COUNT/GROUP BY）性能优秀，且支持窗口函数用于模型排名。
+    </div>
+    <div class="basis">
+      <strong>external:</strong> Grafana、Prometheus、Datadog 等遥测/可观测性工具均使用 PostgreSQL 或兼容数据库存储指标数据。PostgreSQL 是业界标准的轻量级关系型数据库，支持真正的并发访问。
+    </div>
+    <div class="rationale">
+      这是最直接解决并发问题的方案。当前 DuckDB 的单写者架构是 workaround；PostgreSQL 从根本上消除文件锁限制。Dashboard 可以直接读取数据库，无需绕道代理 HTTP API。存储抽象层（<code>StorageBackend</code>）已经存在，新增一个 <code>PostgresStorage</code> 实现工作量可控。
+    </div>
+    <div class="downsides">
+      需要运行一个独立的 PostgreSQL 服务进程。对于个人/小团队项目，这增加了部署复杂度（需要 <code>brew install postgresql</code> 或 Docker）。但 SQLite 作为嵌入式备选仍然可用。
+    </div>
+  </article>
+
+  <!-- Idea 2 -->
+  <article class="idea" id="idea2">
+    <span class="axis-tag">并发模型</span>
+    <span class="axis-tag">迁移成本</span>
+    <h3>2. SQLite WAL 模式优化 — 在现有架构内最大化并发</h3>
+    <span class="badge conf-high">Conf 85%</span>
+    <span class="badge cx-low">Cx Low</span>
+    <div class="desc">
+      深度优化 SQLite 的 WAL（Write-Ahead Logging）模式。SQLite WAL 支持多进程并发读 + 单写者，且读操作不阻塞写操作。通过调整 <code>PRAGMA wal_autocheckpoint</code>、<code>PRAGMA busy_timeout</code>、<code>PRAGMA synchronous=NORMAL</code> 等参数，可以在保持单写者架构的同时大幅提升并发读性能。
+    </div>
+    <div class="basis">
+      <strong>direct:</strong> 项目已有 <code>SQLiteStorage</code> 实现（<code>src/otel_agent/storage/sqlite.py:42</code>），且已启用 WAL 模式（<code>PRAGMA journal_mode=WAL</code>）。当前 DuckDB 的单写者架构实际上和 SQLite WAL 的并发模型一致 — 问题不在模型本身，而在于 DuckDB 的文件锁过于严格。
+    </div>
+    <div class="rationale">
+      这是最低成本的改进路径。不需要引入新依赖，不需要运行额外服务。SQLite WAL 的并发模型（多读者 + 单写者）恰好匹配当前的单写者架构。优化 WAL 参数可以让 Dashboard 直接读取 SQLite 数据库（无需绕道代理），同时代理继续写入。
+    </div>
+    <div class="downsides">
+      SQLite 仍然只有一个写者。如果未来需要多进程写入，这条路走不通。聚合查询性能不如 DuckDB/PostgreSQL（但对当前数据量足够）。WAL 文件需要定期 checkpoint 以避免无限增长。
+    </div>
+  </article>
+
+  <!-- Idea 3 -->
+  <article class="idea" id="idea3">
+    <span class="axis-tag">部署复杂度</span>
+    <span class="axis-tag">并发模型</span>
+    <h3>3. 单进程架构 — 从根源消除并发问题</h3>
+    <span class="badge conf-med">Conf 75%</span>
+    <span class="badge cx-low">Cx Low</span>
+    <div class="desc">
+      将 Dashboard 完全合并到代理进程中（已经是部分实现），消除多进程访问数据库的需求。Dashboard 的 API 端点直接使用代理的 <code>TelemetryLogger.storage</code> 连接，无需 HTTP 代理路由。独立 Dashboard 命令保留为离线分析工具，但在代理运行时完全绕过。
+    </div>
+    <div class="basis">
+      <strong>direct:</strong> 项目已在 <code>src/otel_agent/server.py:62</code> 实现了共享存储：<code>dashboard_api = DashboardAPI(telemetry.db_path, storage=telemetry.storage)</code>。文档记录（<code>docs/solutions/concurrency/duckdb-multi-process-concurrency.md</code>）明确指出这是当前推荐方案。
+    </div>
+    <div class="rationale">
+      这是已验证的方案，无需额外工作。消除了 DuckDB 锁冲突的根本原因 — 没有多进程，就没有文件锁问题。Dashboard 在代理进程内运行，共享同一个数据库连接。
+    </div>
+    <div class="downsides">
+      Dashboard 无法独立于代理运行。如果代理崩溃，Dashboard 也随之不可用。对于需要独立部署 Dashboard 的场景（如远程监控），这不是长期方案。但这已经是你当前的架构 — 所以这个 idea 的价值在于确认：如果你的使用场景接受单进程，就不需要换数据库。
+    </div>
+  </article>
+
+  <!-- Idea 4 -->
+  <article class="idea" id="idea4">
+    <span class="axis-tag">部署复杂度</span>
+    <span class="axis-tag">分析查询能力</span>
+    <h3>4. DuckDB HTTP Server 模式 — 保持引擎，改变访问方式</h3>
+    <span class="badge conf-med">Conf 65%</span>
+    <span class="badge cx-high">Cx High</span>
+    <div class="desc">
+      使用 DuckDB 的 <code>duckdb_server</code> 或 <code>motherduck</code> 模式，将 DuckDB 作为 HTTP 服务暴露。多个客户端通过 HTTP 查询同一个 DuckDB 实例，由服务端管理并发。这保持了 DuckDB 的分析查询能力，同时避免了文件级锁问题。
+    </div>
+    <div class="basis">
+      <strong>reasoned:</strong> DuckDB 的并发限制来自文件级锁，而非查询引擎本身。如果通过一个中间服务层串行化所有数据库操作，多进程客户端就可以共享同一个 DuckDB 实例。这类似于 PostgreSQL 的连接池模式，但保持了 DuckDB 的嵌入式特性。
+    </div>
+    <div class="rationale">
+      如果你特别看重 DuckDB 的分析查询性能（OLAP 优化、列式存储），这个方案保留了引擎优势。Dashboard 和代理都作为 DuckDB HTTP 客户端，由服务端协调并发。
+    </div>
+    <div class="downsides">
+      DuckDB 官方的 HTTP server 模式仍处于实验阶段，生产稳定性未经验证。引入了额外的服务进程（和 PostgreSQL 方案一样需要运维），但生态成熟度远不如 PostgreSQL。实际上增加了复杂度而没有获得 PostgreSQL 的生态优势。
+    </div>
+  </article>
+
+  <!-- Idea 5 -->
+  <article class="idea" id="idea5">
+    <span class="axis-tag">并发模型</span>
+    <span class="axis-tag">迁移成本</span>
+    <h3>5. 消息队列 + 只读副本 — 写入与查询解耦</h3>
+    <span class="badge conf-med">Conf 60%</span>
+    <span class="badge cx-high">Cx High</span>
+    <div class="desc">
+      代理将遥测事件写入轻量消息队列（如 Redis List 或文件追加日志），后台进程从队列消费并写入数据库。Dashboard 从数据库读取，与写入完全解耦。写入路径无锁竞争，读取路径可以使用任意数据库。
+    </div>
+    <div class="basis">
+      <strong>external:</strong> ELK Stack（Elasticsearch + Logstash + Kibana）采用类似架构：Logstash 收集日志，Elasticsearch 存储和索引，Kibana 查询。生产级遥测系统（如 Jaeger、Zipkin）也使用队列解耦写入和查询。
+    </div>
+    <div class="rationale">
+      彻底分离写入和读取路径，两者的并发模型独立演进。写入端可以使用任何追加结构（文件、Redis、Kafka），读取端可以用 DuckDB（分析查询）或 PostgreSQL（并发访问）。
+    </div>
+    <div class="downsides">
+      对于个人项目的遥测代理来说过度工程化。引入了额外组件（队列 + 消费者进程），增加了运维复杂度。数据一致性变为最终一致性，查询可能有延迟。当前数据量（单用户 LLM 网关）不需要这种架构。
+    </div>
+  </article>
+</section>
+
+<!-- Rejection Summary -->
+<section>
+  <h2>Rejection Summary</h2>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>CockroachDB / TiDB</td><td>分布式数据库，对个人项目来说是大炮打蚊子</td></tr>
+      <tr><td>2</td><td>ClickHouse</td><td>OLAP 专用，部署复杂，不适合嵌入式场景</td></tr>
+      <tr><td>3</td><td>Redis（纯 KV）</td><td>不支持 SQL 聚合查询，无法满足 token 用量统计需求</td></tr>
+      <tr><td>4</td><td>FoundationDB + SQL 层</td><td>需要额外的 SQL 翻译层，生态不成熟</td></tr>
+      <tr><td>5</td><td>LMDB</td><td>嵌入式 KV，不支持 SQL，分析查询能力为零</td></tr>
+      <tr><td>6</td><td>BoltDB / BadgerDB</td><td>Go 生态为主，Python 支持弱</td></tr>
+      <tr><td>7</td><td>Parquet + DuckDB（文件格式）</td><td>只读场景适用，不支持并发写入</td></tr>
+      <tr><td>8</td><td>Periodic snapshot 导出</td><td>牺牲实时性，不适合需要即时查询的 Dashboard</td></tr>
+      <tr><td>9</td><td>内存数据库（如 <code>:memory:</code>）</td><td>重启丢数据，不适合持久化遥测</td></tr>
+      <tr><td>10</td><td>CSV / JSON 文件存储</td><td>无索引，聚合查询性能差，不适合 10K+ 记录</td></tr>
+      <tr><td>11</td><td>Apache Druid</td><td>部署复杂度远超项目需求</td></tr>
+      <tr><td>12</td><td>InfluxDB</td><td>时序数据库，对关系型查询支持有限</td></tr>
+      <tr><td>13</td><td>QuestDB</td><td>时序优化，非通用关系型</td></tr>
+      <tr><td>14</td><td>SQLite + 读写分离（多 DB 文件）</td><td>数据同步复杂，违背单一数据源原则</td></tr>
+      <tr><td>15</td><td>File-based append log + MapReduce</td><td>查询延迟高，不适合交互式 Dashboard</td></tr>
+      <tr><td>16-31</td><td>（其他变体）</td><td>与上述拒绝理由重叠，或不符合"轻量级"约束</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer class="composition-signal">
+  Composed 2026-08-02 by ce-ideate from <code>otel-agent</code> codebase context
+</footer>
+
+</div>
+</body>
+</html>

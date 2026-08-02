@@ -81,7 +81,7 @@ def _smart_mock_post(responses=None, error=None):
 @pytest.mark.anyio
 async def test_auto_mode_basic_routing():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config = _make_config_with_providers(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -110,7 +110,7 @@ async def test_auto_mode_basic_routing():
 @pytest.mark.anyio
 async def test_auto_mode_complex_task():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config = _make_config_with_providers(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -140,7 +140,7 @@ async def test_auto_mode_complex_task():
 @pytest.mark.anyio
 async def test_auto_mode_provider_fallback():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config = _make_config_with_providers(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -179,7 +179,7 @@ async def test_auto_mode_provider_fallback():
 @pytest.mark.anyio
 async def test_auto_mode_session_sticky():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config = _make_config_with_providers(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -209,7 +209,7 @@ async def test_auto_mode_session_sticky():
 @pytest.mark.anyio
 async def test_explicit_model_bypasses_auto():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config = _make_config_with_providers(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -237,7 +237,7 @@ async def test_auto_mode_no_providers_returns_503():
         config_path = Path(td) / "config.yaml"
         config_path.write_text("providers: []\n")
         config = Config(config_path)
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
 
@@ -261,7 +261,7 @@ async def test_auto_mode_no_providers_returns_503():
 async def test_auto_mode_all_providers_fail_returns_502():
     with tempfile.TemporaryDirectory() as td:
         config = _make_config_with_providers(td)
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
 
@@ -291,7 +291,7 @@ async def test_auto_mode_all_providers_fail_returns_502():
 @pytest.mark.anyio
 async def test_auto_mode_routing_decision_in_telemetry():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config = _make_config_with_providers(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -306,8 +306,8 @@ async def test_auto_mode_routing_decision_in_telemetry():
 
         telemetry.close()
 
-        import duckdb
-        conn = duckdb.connect(str(db_path), read_only=True)
+        import sqlite3
+        conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT request_headers FROM requests").fetchone()
         conn.close()
 

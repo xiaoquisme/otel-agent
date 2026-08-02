@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from otel_agent.migration import migrate_sqlite_to_duckdb, needs_migration
 from otel_agent.storage import create_storage
 
 SENSITIVE_HEADERS = frozenset({"authorization", "x-api-key", "set-cookie"})
@@ -19,15 +18,9 @@ def redact_sensitive_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 class TelemetryLogger:
-    def __init__(self, db_path: Path, backend: str = "duckdb"):
+    def __init__(self, db_path: Path, backend: str = "sqlite"):
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Auto-migrate existing SQLite database to DuckDB
-        if needs_migration(db_path):
-            duckdb_path = db_path.with_suffix(".duckdb")
-            if migrate_sqlite_to_duckdb(db_path, duckdb_path):
-                self.db_path = duckdb_path
 
         self.storage = create_storage(backend, self.db_path)
         self.storage.initialize()

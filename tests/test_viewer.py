@@ -1,4 +1,4 @@
-"""Tests for CLI viewer with DuckDB backend."""
+"""Tests for CLI viewer with SQLite backend."""
 
 import tempfile
 from pathlib import Path
@@ -9,7 +9,7 @@ from otel_agent.viewer import query_requests, format_request
 
 def test_query_returns_all():
     with tempfile.TemporaryDirectory() as td:
-        db = Path(td) / "test.duckdb"
+        db = Path(td) / "test.sqlite"
         logger = TelemetryLogger(db)
         logger.log_request("POST", "https://api.openai.com/v1/chat/completions",
                            {}, '{"model":"gpt-4"}', 200, {}, '{"choices":[]}',
@@ -25,7 +25,7 @@ def test_query_returns_all():
 
 def test_query_filters_by_upstream():
     with tempfile.TemporaryDirectory() as td:
-        db = Path(td) / "test.duckdb"
+        db = Path(td) / "test.sqlite"
         logger = TelemetryLogger(db)
         logger.log_request("POST", "https://api.openai.com/v1/chat/completions",
                            {}, '{}', 200, {}, '{}', 100.0, "https://api.openai.com")

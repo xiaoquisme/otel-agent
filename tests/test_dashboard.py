@@ -4,7 +4,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import duckdb
+import sqlite3
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from otel_agent.dashboard.api import DashboardAPI, CountCache
@@ -41,8 +41,8 @@ def _seed_usage_record(
     total_tokens: int | None = None,
     response_status: int = 200,
 ) -> None:
-    """Insert one request record with analytics fields into an existing DuckDB."""
-    conn = duckdb.connect(str(db_path))
+    """Insert one request record with analytics fields into an existing SQLite."""
+    conn = sqlite3.connect(str(db_path))
     if timestamp is None:
         timestamp = datetime.now(timezone.utc).isoformat()
     conn.execute(
@@ -55,15 +55,15 @@ def _seed_usage_record(
         (timestamp, response_status, model_name, input_tokens, output_tokens, total_tokens),
     )
     conn.commit()
+    conn.commit()
     conn.close()
 
 def _create_usage_db(db_path: Path, records: list[dict]) -> None:
-    """Create a DuckDB with the standard schema and seed multiple usage records."""
-    conn = duckdb.connect(str(db_path))
-    conn.execute("CREATE SEQUENCE IF NOT EXISTS requests_id_seq START 1")
+    """Create a SQLite with the standard schema and seed multiple usage records."""
+    conn = sqlite3.connect(str(db_path))
     conn.execute("""
         CREATE TABLE IF NOT EXISTS requests (
-            id INTEGER DEFAULT nextval('requests_id_seq') PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
             method TEXT NOT NULL,
             url TEXT NOT NULL,
@@ -73,11 +73,11 @@ def _create_usage_db(db_path: Path, records: list[dict]) -> None:
             response_status INTEGER,
             response_headers TEXT,
             response_body TEXT,
-            latency_ms DOUBLE,
+            latency_ms REAL,
             model_name TEXT,
-            input_tokens BIGINT,
-            output_tokens BIGINT,
-            total_tokens BIGINT
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            total_tokens INTEGER
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)")
@@ -101,16 +101,16 @@ def _create_usage_db(db_path: Path, records: list[dict]) -> None:
             ),
         )
     conn.commit()
+    conn.commit()
     conn.close()
 
 
 def _create_test_db(db_path: Path, n: int = 5) -> None:
     """Create a test database with n requests."""
-    conn = duckdb.connect(str(db_path))
-    conn.execute("CREATE SEQUENCE IF NOT EXISTS requests_id_seq START 1")
+    conn = sqlite3.connect(str(db_path))
     conn.execute("""
         CREATE TABLE IF NOT EXISTS requests (
-            id INTEGER DEFAULT nextval('requests_id_seq') PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
             method TEXT NOT NULL,
             url TEXT NOT NULL,
@@ -120,11 +120,11 @@ def _create_test_db(db_path: Path, n: int = 5) -> None:
             response_status INTEGER,
             response_headers TEXT,
             response_body TEXT,
-            latency_ms DOUBLE,
+            latency_ms REAL,
             model_name TEXT,
-            input_tokens BIGINT,
-            output_tokens BIGINT,
-            total_tokens BIGINT
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            total_tokens INTEGER
         )
     """)
     for i in range(1, n + 1):
@@ -145,6 +145,7 @@ def _create_test_db(db_path: Path, n: int = 5) -> None:
                 100.0 * i,
             ),
         )
+    conn.commit()
     conn.close()
 
 
@@ -153,7 +154,7 @@ def _create_test_db(db_path: Path, n: int = 5) -> None:
 # ------------------------------------------------------------------
 
 def test_get_requests_empty(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     api = DashboardAPI(db)
     result = api.get_requests()
     assert result == {"data": [], "total": 0, "cursor": 0, "next_cursor": 0, "has_more": False}
@@ -161,7 +162,7 @@ def test_get_requests_empty(tmp_path):
 
 
 def test_get_requests_with_data(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_requests()
@@ -173,7 +174,7 @@ def test_get_requests_with_data(tmp_path):
 
 
 def test_get_requests_cursor_pagination(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 10)
     api = DashboardAPI(db)
     result = api.get_requests(limit=3)
@@ -189,7 +190,7 @@ def test_get_requests_cursor_pagination(tmp_path):
 
 
 def test_get_requests_search(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_requests(search="completions/3")
@@ -199,7 +200,7 @@ def test_get_requests_search(tmp_path):
 
 
 def test_get_requests_filter_method(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_requests(method="POST")
@@ -210,7 +211,7 @@ def test_get_requests_filter_method(tmp_path):
 
 
 def test_get_requests_filter_status(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_requests(status=500)
@@ -221,7 +222,7 @@ def test_get_requests_filter_status(tmp_path):
 
 
 def test_get_request_detail(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     api = DashboardAPI(db)
     result = api.get_request(2)
@@ -233,7 +234,7 @@ def test_get_request_detail(tmp_path):
 
 
 def test_get_request_not_found(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     api = DashboardAPI(db)
     assert api.get_request(999) is None
@@ -241,7 +242,7 @@ def test_get_request_not_found(tmp_path):
 
 
 def test_get_all_filtered(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     result = api.get_all_filtered(method="POST")
@@ -252,7 +253,7 @@ def test_get_all_filtered(tmp_path):
 
 def test_count_cache():
     cache = CountCache(ttl=5.0)
-    conn = duckdb.connect(":memory:")
+    conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE t (id INTEGER)")
     for i in range(10):
         conn.execute("INSERT INTO t VALUES (?)", (i,))
@@ -270,11 +271,12 @@ def test_count_cache():
     cache.clear()
     result3 = cache.get("test", conn, "SELECT COUNT(*) FROM t", [])
     assert result3 == 11
+    conn.commit()
     conn.close()
 
 
 def test_persistent_connection(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     api = DashboardAPI(db)
     r1 = api.get_requests()
@@ -288,7 +290,7 @@ def test_persistent_connection(tmp_path):
 
 def test_historical_requests_visible(tmp_path):
     """All requests in DB are returned on first call, not just new ones."""
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 10)
     api = DashboardAPI(db)
     result = api.get_requests(limit=50)
@@ -299,7 +301,7 @@ def test_historical_requests_visible(tmp_path):
 
 def test_historical_requests_after_new_data(tmp_path):
     """Historical + new requests are all visible."""
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     api = DashboardAPI(db)
     r1 = api.get_requests(limit=50)
@@ -307,7 +309,7 @@ def test_historical_requests_after_new_data(tmp_path):
     api.close()
 
     # Add more requests directly to DB
-    conn = duckdb.connect(str(db))
+    conn = sqlite3.connect(str(db))
     for i in range(6, 9):
         conn.execute(
             "INSERT INTO requests (timestamp, method, url, upstream, request_headers, "
@@ -316,6 +318,7 @@ def test_historical_requests_after_new_data(tmp_path):
             (f"2026-06-27T10:00:{i:02d}Z", "GET", f"/test/{i}", f"https://test.com/{i}",
              "{}", "{}", 200, "{}", "{}", 50.0),
         )
+    conn.commit()
     conn.close()
 
     api.clear_cache()
@@ -327,7 +330,7 @@ def test_historical_requests_after_new_data(tmp_path):
 
 def test_empty_database_no_crash(tmp_path):
     """Non-existent database returns empty result without error."""
-    db = tmp_path / "nonexistent" / "test.duckdb"
+    db = tmp_path / "nonexistent" / "test.sqlite"
     api = DashboardAPI(db)
     result = api.get_requests()
     assert result == {"data": [], "total": 0, "cursor": 0, "next_cursor": 0, "has_more": False}
@@ -351,7 +354,7 @@ def _make_client(db_path: Path) -> TestClient:
 
 def test_route_events_removed(tmp_path):
     """GET /api/events returns 404 after SSE removal."""
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     client, api = _make_client(db)
     resp = client.get("/api/events")
     assert resp.status_code == 404
@@ -359,7 +362,7 @@ def test_route_events_removed(tmp_path):
 
 
 def test_route_requests_empty(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     client, api = _make_client(db)
     resp = client.get("/api/requests")
     assert resp.status_code == 200
@@ -370,7 +373,7 @@ def test_route_requests_empty(tmp_path):
 
 
 def test_route_requests_with_data(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     client, api = _make_client(db)
     resp = client.get("/api/requests")
@@ -382,7 +385,7 @@ def test_route_requests_with_data(tmp_path):
 
 
 def test_route_requests_pagination(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 10)
     client, api = _make_client(db)
     resp = client.get("/api/requests?limit=3")
@@ -399,7 +402,7 @@ def test_route_requests_pagination(tmp_path):
 
 
 def test_route_requests_search(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     client, api = _make_client(db)
     resp = client.get("/api/requests?search=completions/3")
@@ -410,7 +413,7 @@ def test_route_requests_search(tmp_path):
 
 
 def test_route_requests_filter_method(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     client, api = _make_client(db)
     resp = client.get("/api/requests?method=POST")
@@ -422,7 +425,7 @@ def test_route_requests_filter_method(tmp_path):
 
 
 def test_route_requests_filter_status(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     client, api = _make_client(db)
     resp = client.get("/api/requests?status=500")
@@ -434,7 +437,7 @@ def test_route_requests_filter_status(tmp_path):
 
 
 def test_route_request_detail(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     client, api = _make_client(db)
     resp = client.get("/api/requests/2")
@@ -446,7 +449,7 @@ def test_route_request_detail(tmp_path):
 
 
 def test_route_request_not_found(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     client, api = _make_client(db)
     resp = client.get("/api/requests/999")
@@ -455,7 +458,7 @@ def test_route_request_not_found(tmp_path):
 
 
 def test_route_request_invalid_id(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     client, api = _make_client(db)
     resp = client.get("/api/requests/abc")
@@ -464,7 +467,7 @@ def test_route_request_invalid_id(tmp_path):
 
 
 def test_route_export_csv(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     client, api = _make_client(db)
     resp = client.get("/api/export?format=csv")
@@ -475,7 +478,7 @@ def test_route_export_csv(tmp_path):
 
 
 def test_route_export_json(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)
     client, api = _make_client(db)
     resp = client.get("/api/export?format=json")
@@ -487,7 +490,7 @@ def test_route_export_json(tmp_path):
 
 
 def test_route_cache_clear(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     client, api = _make_client(db)
     resp = client.get("/api/cache/clear")
@@ -497,7 +500,7 @@ def test_route_cache_clear(tmp_path):
 
 
 def test_route_usage_missing_params(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     client, api = _make_client(db)
     resp = client.get("/api/usage")
@@ -506,7 +509,7 @@ def test_route_usage_missing_params(tmp_path):
 
 
 def test_route_usage_invalid_format(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     client, api = _make_client(db)
     resp = client.get("/api/usage?start=not-a-date&end=also-not")
@@ -516,7 +519,7 @@ def test_route_usage_invalid_format(tmp_path):
 
 
 def test_route_usage_end_before_start(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     client, api = _make_client(db)
     # Use Z suffix to avoid URL encoding issues with +00:00
@@ -530,7 +533,7 @@ def test_route_usage_end_before_start(tmp_path):
 
 
 def test_route_usage_range_too_long(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     client, api = _make_client(db)
     start = "2026-01-01T00:00:00Z"
@@ -542,7 +545,7 @@ def test_route_usage_range_too_long(tmp_path):
 
 
 def test_route_usage_valid_range(tmp_path):
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     client, api = _make_client(db)
     start, end = _current_day_utc_range()
@@ -558,7 +561,7 @@ def test_route_usage_valid_range(tmp_path):
 
 def test_route_usage_yesterday_empty(tmp_path):
     """Yesterday's range should return zero usage for today-only data."""
-    db = tmp_path / "test.duckdb"
+    db = tmp_path / "test.sqlite"
     _create_test_db(db, 3)
     client, api = _make_client(db)
     start, end = _day_ago_utc_range()
