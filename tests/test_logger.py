@@ -1,18 +1,19 @@
-"""Tests for TelemetryLogger with DuckDB backend."""
+"""Tests for TelemetryLogger with SQLite backend."""
 import json
+import sqlite3
 import tempfile
 from pathlib import Path
-import duckdb
 from otel_agent.logger import TelemetryLogger, redact_sensitive_headers
+
 
 def test_creates_db_and_tables():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         logger = TelemetryLogger(db_path)
         logger.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         tables = [r[0] for r in conn.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()]
         conn.close()
         assert "requests" in tables
@@ -20,7 +21,7 @@ def test_creates_db_and_tables():
 
 def test_log_request_inserts_row():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         logger = TelemetryLogger(db_path)
         logger.log_request(
             method="POST",
@@ -34,7 +35,7 @@ def test_log_request_inserts_row():
             upstream="https://api.openai.com",
         )
         logger.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT method, url, upstream, latency_ms FROM requests").fetchone()
         conn.close()
         assert row[0] == "POST"
@@ -45,7 +46,7 @@ def test_log_request_inserts_row():
 
 def test_log_preserves_full_payload():
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         logger = TelemetryLogger(db_path)
         body = json.dumps({"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]})
         logger.log_request(
@@ -56,7 +57,7 @@ def test_log_preserves_full_payload():
             upstream="https://api.openai.com",
         )
         logger.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT request_body FROM requests").fetchone()
         conn.close()
         parsed = json.loads(row[0])
@@ -89,13 +90,12 @@ def test_redact_preserves_non_sensitive():
 # T004: Legacy-schema upgrade and analytics-column persistence
 # ------------------------------------------------------------------
 
-def _create_legacy_duckdb(db_path):
-    """Create a DuckDB with the old schema (no analytics columns)."""
-    conn = duckdb.connect(str(db_path))
-    conn.execute("CREATE SEQUENCE IF NOT EXISTS requests_id_seq START 1")
+def _create_legacy_sqlite(db_path):
+    """Create a SQLite DB with the old schema (no analytics columns)."""
+    conn = sqlite3.connect(str(db_path))
     conn.execute("""
         CREATE TABLE IF NOT EXISTS requests (
-            id INTEGER DEFAULT nextval('requests_id_seq') PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT NOT NULL,
             method TEXT NOT NULL,
             url TEXT NOT NULL,
@@ -105,7 +105,7 @@ def _create_legacy_duckdb(db_path):
             response_status INTEGER,
             response_headers TEXT,
             response_body TEXT,
-            latency_ms DOUBLE
+            latency_ms REAL
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)")
@@ -114,14 +114,14 @@ def _create_legacy_duckdb(db_path):
     conn.close()
 
 
-def test_duckdb_legacy_schema_upgrade(tmp_path):
+def test_sqlite_legacy_schema_upgrade(tmp_path):
     """Calling TelemetryLogger.initialize() on a legacy DB adds analytics columns."""
-    db_path = tmp_path / "legacy.duckdb"
-    _create_legacy_duckdb(db_path)
+    db_path = tmp_path / "legacy.sqlite"
+    _create_legacy_sqlite(db_path)
     logger = TelemetryLogger(db_path)
     logger.close()
-    conn = duckdb.connect(str(db_path), read_only=True)
-    columns = [r[0] for r in conn.execute("DESCRIBE requests").fetchall()]
+    conn = sqlite3.connect(str(db_path))
+    columns = [r[1] for r in conn.execute("PRAGMA table_info(requests)").fetchall()]
     conn.close()
     assert "model_name" in columns
     assert "input_tokens" in columns
@@ -129,9 +129,9 @@ def test_duckdb_legacy_schema_upgrade(tmp_path):
     assert "total_tokens" in columns
 
 
-def test_duckdb_analytics_columns_persist(tmp_path):
+def test_sqlite_analytics_columns_persist(tmp_path):
     """Records written with analytics fields are retrievable."""
-    db_path = tmp_path / "analytics.duckdb"
+    db_path = tmp_path / "analytics.sqlite"
     logger = TelemetryLogger(db_path)
     logger.log_request(
         method="POST", url="http://test.com",
@@ -143,7 +143,7 @@ def test_duckdb_analytics_columns_persist(tmp_path):
         input_tokens=100, output_tokens=50, total_tokens=150,
     )
     logger.close()
-    conn = duckdb.connect(str(db_path), read_only=True)
+    conn = sqlite3.connect(str(db_path))
     row = conn.execute("SELECT model_name, input_tokens, output_tokens, total_tokens FROM requests").fetchone()
     conn.close()
     assert row[0] == "openai/gpt-4o"
@@ -152,9 +152,9 @@ def test_duckdb_analytics_columns_persist(tmp_path):
     assert row[3] == 150
 
 
-def test_duckdb_null_analytics_fields(tmp_path):
+def test_sqlite_null_analytics_fields(tmp_path):
     """Records without analytics fields have NULL analytics values."""
-    db_path = tmp_path / "null_analytics.duckdb"
+    db_path = tmp_path / "null_analytics.sqlite"
     logger = TelemetryLogger(db_path)
     logger.log_request(
         method="GET", url="http://test.com",
@@ -164,7 +164,7 @@ def test_duckdb_null_analytics_fields(tmp_path):
         upstream="http://test.com",
     )
     logger.close()
-    conn = duckdb.connect(str(db_path), read_only=True)
+    conn = sqlite3.connect(str(db_path))
     row = conn.execute("SELECT model_name, input_tokens, output_tokens, total_tokens FROM requests").fetchone()
     conn.close()
     assert row[0] is None

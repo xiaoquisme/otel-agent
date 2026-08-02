@@ -39,7 +39,7 @@ def test_normalize_usage_rejects_invalid_values_without_inventing_tokens() -> No
 
 
 def test_usage_summary_uses_current_range_and_groups_models(tmp_path) -> None:
-    db_path = tmp_path / "usage.duckdb"
+    db_path = tmp_path / "usage.sqlite"
     logger = TelemetryLogger(db_path)
     timestamp = datetime.now(timezone.utc).isoformat()
     logger.log_request(
@@ -78,7 +78,7 @@ def test_usage_summary_uses_current_range_and_groups_models(tmp_path) -> None:
 
 
 def test_usage_summary_counts_completed_records_without_usage_as_excluded(tmp_path) -> None:
-    db_path = tmp_path / "excluded.duckdb"
+    db_path = tmp_path / "excluded.sqlite"
     logger = TelemetryLogger(db_path)
     logger.log_request(
         method="POST",

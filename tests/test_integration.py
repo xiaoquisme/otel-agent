@@ -1,5 +1,5 @@
 import json
-import os
+import sqlite3
 import tempfile
 import subprocess
 import time
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import requests
 
-import duckdb
+
 
 
 def _surge_active() -> bool:
@@ -26,8 +26,7 @@ def test_proxy_logs_request():
         pytest.skip("Surge proxy intercepts localhost traffic")
 
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
-        src_dir = str(Path(__file__).resolve().parent.parent / "src")
+        db_path = Path(td) / "test.sqlite"
         proc = subprocess.Popen(
             ["uv", "run", "otel-agent", "proxy", "-p", "18765", "-d", str(db_path),
              "-c", str(Path.home() / ".otel-agent" / "config.yaml")],
@@ -69,8 +68,7 @@ def test_proxy_startup_logs_local_request():
         pytest.skip("Surge proxy intercepts localhost traffic")
 
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
-        src_dir = str(Path(__file__).resolve().parent.parent / "src")
+        db_path = Path(td) / "test.sqlite"
         proc = subprocess.Popen(
             ["uv", "run", "otel-agent", "proxy", "-p", "18765", "-d", str(db_path),
              "-c", str(Path.home() / ".otel-agent" / "config.yaml")],
@@ -98,7 +96,7 @@ def test_proxy_startup_logs_local_request():
         time.sleep(2)
 
         time.sleep(1)
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         rows = conn.execute("SELECT * FROM requests").fetchall()
         conn.close()
         assert len(rows) >= 1
@@ -114,7 +112,7 @@ async def test_request_body_and_response_headers_logged():
     from otel_agent.server import create_app
 
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config_path = Path(td) / "config.yaml"
         config_path.write_text(
             "providers:\n"
@@ -134,7 +132,7 @@ async def test_request_body_and_response_headers_logged():
             )
         # Response may be 502 if upstream unreachable, but telemetry is still logged
         telemetry.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         rows = conn.execute("SELECT request_body, response_headers, response_status FROM requests").fetchall()
         conn.close()
 
@@ -158,7 +156,7 @@ async def test_sensitive_headers_redacted_in_db():
     from otel_agent.server import create_app
 
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config_path = Path(td) / "config.yaml"
         config_path.write_text(
             "providers:\n"
@@ -178,7 +176,7 @@ async def test_sensitive_headers_redacted_in_db():
             )
 
         telemetry.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         rows = conn.execute("SELECT response_headers FROM requests").fetchall()
         conn.close()
 
@@ -198,7 +196,7 @@ async def test_log_request_body_false_suppresses_body():
     from otel_agent.server import create_app
 
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config_path = Path(td) / "config.yaml"
         config_path.write_text(
             "providers:\n"
@@ -219,7 +217,7 @@ async def test_log_request_body_false_suppresses_body():
             )
 
         telemetry.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         rows = conn.execute("SELECT request_body, response_headers FROM requests").fetchall()
         conn.close()
 
@@ -240,7 +238,7 @@ async def test_proxy_internal_dashboard_api():
     """Verify proxy dashboard API endpoints return correct data.
 
     This is the foundation for BUG-001 fix: dashboard queries route through
-    the proxy's internal API instead of opening a separate DuckDB connection.
+    the proxy's internal API instead of opening a separate SQLite connection.
     """
     import httpx
     from otel_agent.config import Config
@@ -248,7 +246,7 @@ async def test_proxy_internal_dashboard_api():
     from otel_agent.server import create_app
 
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config_path = Path(td) / "config.yaml"
         config_path.write_text(
             "providers:\n"
@@ -306,7 +304,7 @@ async def test_dashboard_api_routes_through_proxy():
     """Verify DashboardAPI routes queries through proxy internal API when available.
 
     BUG-001: When the proxy is running, DashboardAPI should use HTTP calls
-    to the proxy's internal API instead of opening its own DuckDB connection.
+    to the proxy's internal API instead of opening its own SQLite connection.
     """
     import httpx
     from otel_agent.config import Config
@@ -315,7 +313,7 @@ async def test_dashboard_api_routes_through_proxy():
     from otel_agent.dashboard.api import DashboardAPI
 
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config_path = Path(td) / "config.yaml"
         config_path.write_text(
             "providers:\n"

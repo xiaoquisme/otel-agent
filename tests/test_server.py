@@ -1,11 +1,12 @@
 """Tests for _log_telemetry and request/response body logging."""
+import sqlite3
 import json
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import duckdb
+
 import httpx
 import pytest
 
@@ -72,7 +73,7 @@ def _make_request(method: str = "POST", url: str = "http://localhost:45638/v1/ch
 
 def test_log_telemetry_stores_request_body():
     with tempfile.TemporaryDirectory() as td:
-        db = Path(td) / "test.duckdb"
+        db = Path(td) / "test.sqlite"
         telemetry = TelemetryLogger(db)
         body_str = json.dumps({"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]})
         _log_telemetry(
@@ -80,7 +81,7 @@ def test_log_telemetry_stores_request_body():
             _make_provider(), request_body=body_str,
         )
         telemetry.close()
-        conn = duckdb.connect(str(db), read_only=True)
+        conn = sqlite3.connect(str(db))
         row = conn.execute("SELECT request_body FROM requests").fetchone()
         conn.close()
         parsed = json.loads(row[0])
@@ -89,7 +90,7 @@ def test_log_telemetry_stores_request_body():
 
 def test_log_telemetry_stores_response_headers():
     with tempfile.TemporaryDirectory() as td:
-        db = Path(td) / "test.duckdb"
+        db = Path(td) / "test.sqlite"
         telemetry = TelemetryLogger(db)
         headers = {"content-type": "application/json", "x-request-id": "abc-123"}
         _log_telemetry(
@@ -97,7 +98,7 @@ def test_log_telemetry_stores_response_headers():
             _make_provider(), resp_headers=headers,
         )
         telemetry.close()
-        conn = duckdb.connect(str(db), read_only=True)
+        conn = sqlite3.connect(str(db))
         row = conn.execute("SELECT response_headers FROM requests").fetchone()
         conn.close()
         parsed = json.loads(row[0])
@@ -106,7 +107,7 @@ def test_log_telemetry_stores_response_headers():
 
 def test_log_telemetry_redacts_sensitive_headers():
     with tempfile.TemporaryDirectory() as td:
-        db = Path(td) / "test.duckdb"
+        db = Path(td) / "test.sqlite"
         telemetry = TelemetryLogger(db)
         headers = {"authorization": "Bearer sk-secret", "content-type": "application/json"}
         _log_telemetry(
@@ -114,7 +115,7 @@ def test_log_telemetry_redacts_sensitive_headers():
             _make_provider(), resp_headers=headers,
         )
         telemetry.close()
-        conn = duckdb.connect(str(db), read_only=True)
+        conn = sqlite3.connect(str(db))
         row = conn.execute("SELECT response_headers FROM requests").fetchone()
         conn.close()
         parsed = json.loads(row[0])
@@ -124,14 +125,14 @@ def test_log_telemetry_redacts_sensitive_headers():
 
 def test_log_telemetry_empty_body_when_log_body_false():
     with tempfile.TemporaryDirectory() as td:
-        db = Path(td) / "test.duckdb"
+        db = Path(td) / "test.sqlite"
         telemetry = TelemetryLogger(db)
         _log_telemetry(
             telemetry, _make_request(), 200, {}, 100.0,
             _make_provider(), request_body="should not be stored", log_body=False,
         )
         telemetry.close()
-        conn = duckdb.connect(str(db), read_only=True)
+        conn = sqlite3.connect(str(db))
         row = conn.execute("SELECT request_body FROM requests").fetchone()
         conn.close()
         assert row[0] == ""
@@ -139,7 +140,7 @@ def test_log_telemetry_empty_body_when_log_body_false():
 
 def test_log_telemetry_truncates_long_body():
     with tempfile.TemporaryDirectory() as td:
-        db = Path(td) / "test.duckdb"
+        db = Path(td) / "test.sqlite"
         telemetry = TelemetryLogger(db)
         long_body = "x" * 550_000
         _log_telemetry(
@@ -147,7 +148,7 @@ def test_log_telemetry_truncates_long_body():
             _make_provider(), request_body=long_body,
         )
         telemetry.close()
-        conn = duckdb.connect(str(db), read_only=True)
+        conn = sqlite3.connect(str(db))
         row = conn.execute("SELECT request_body FROM requests").fetchone()
         conn.close()
         assert len(row[0]) == 500_000
@@ -215,7 +216,7 @@ async def test_streaming_telemetry_logged():
     may not execute reliably.
     """
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config = _make_test_config(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -238,7 +239,7 @@ async def test_streaming_telemetry_logged():
 
         telemetry.close()
 
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT response_body FROM requests").fetchone()
         conn.close()
         assert row is not None, "No telemetry record found — streaming request was NOT logged"
@@ -255,7 +256,7 @@ async def test_streaming_client_disconnect():
     Simulates client reading only part of the stream then disconnecting.
     """
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config = _make_test_config(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -284,7 +285,7 @@ async def test_streaming_client_disconnect():
 
         telemetry.close()
 
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         rows = conn.execute("SELECT response_body FROM requests").fetchall()
         conn.close()
 
@@ -301,7 +302,7 @@ async def test_nonstreaming_after_streaming():
     Uses _log_telemetry directly to avoid complex mock chains.
     """
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         telemetry = TelemetryLogger(db_path)
 
         # 1) Simulate a streaming request being logged (via _log_telemetry)
@@ -320,7 +321,7 @@ async def test_nonstreaming_after_streaming():
 
         telemetry.close()
 
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         rows = conn.execute("SELECT response_body FROM requests ORDER BY id").fetchall()
         conn.close()
 
@@ -399,7 +400,7 @@ def test_normalize_usage_string_response():
 def test_log_telemetry_stores_model_name():
     """_log_telemetry extracts model from response body."""
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "model_name.duckdb"
+        db_path = Path(td) / "model_name.sqlite"
         telemetry = TelemetryLogger(db_path)
         _log_telemetry(
             telemetry, _make_request(), 200,
@@ -407,7 +408,7 @@ def test_log_telemetry_stores_model_name():
             100.0, _make_provider(),
         )
         telemetry.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT model_name, input_tokens, output_tokens, total_tokens FROM requests").fetchone()
         conn.close()
         assert row[0] == "openai/openai/gpt-4o"
@@ -419,7 +420,7 @@ def test_log_telemetry_stores_model_name():
 def test_log_telemetry_no_model_name():
     """_log_telemetry stores NULL model_name when response has none."""
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "no_model.duckdb"
+        db_path = Path(td) / "no_model.sqlite"
         telemetry = TelemetryLogger(db_path)
         _log_telemetry(
             telemetry, _make_request(), 200,
@@ -427,7 +428,7 @@ def test_log_telemetry_no_model_name():
             100.0, _make_provider(),
         )
         telemetry.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT model_name FROM requests").fetchone()
         conn.close()
         assert row[0] is None
@@ -436,7 +437,7 @@ def test_log_telemetry_no_model_name():
 def test_log_telemetry_log_body_false_no_usage():
     """When log_body=False and no usage, analytics are all NULL."""
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "no_log.duckdb"
+        db_path = Path(td) / "no_log.sqlite"
         telemetry = TelemetryLogger(db_path)
         _log_telemetry(
             telemetry, _make_request(), 200,
@@ -444,7 +445,7 @@ def test_log_telemetry_log_body_false_no_usage():
             100.0, _make_provider(), log_body=False,
         )
         telemetry.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT request_body, model_name, input_tokens FROM requests").fetchone()
         conn.close()
         assert row[0] == ""
@@ -460,7 +461,7 @@ def test_log_telemetry_log_body_false_no_usage():
 async def test_streaming_captures_terminal_usage():
     """Streaming chunks with usage data are captured and persisted."""
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "stream_usage.duckdb"
+        db_path = Path(td) / "stream_usage.sqlite"
         config = _make_test_config(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -481,7 +482,7 @@ async def test_streaming_captures_terminal_usage():
                 await resp.aread()
 
         telemetry.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT input_tokens, output_tokens, total_tokens FROM requests").fetchone()
         conn.close()
         assert row is not None, "No telemetry record found"
@@ -494,7 +495,7 @@ async def test_streaming_captures_terminal_usage():
 async def test_streaming_no_usage_all_null():
     """Streaming without usage data produces NULL analytics."""
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "stream_null.duckdb"
+        db_path = Path(td) / "stream_null.sqlite"
         config = _make_test_config(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -514,7 +515,7 @@ async def test_streaming_no_usage_all_null():
                 await resp.aread()
 
         telemetry.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT input_tokens, output_tokens, total_tokens FROM requests").fetchone()
         conn.close()
         assert row[0] is None
@@ -531,7 +532,7 @@ async def test_streaming_sends_done_when_upstream_does_not():
     synthesize it so the client knows the stream is complete.
     """
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "test.duckdb"
+        db_path = Path(td) / "test.sqlite"
         config = _make_test_config(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -553,7 +554,7 @@ async def test_streaming_sends_done_when_upstream_does_not():
                 assert last_line == "data: [DONE]"
 
         telemetry.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT response_body FROM requests").fetchone()
         conn.close()
         assert row is not None
@@ -575,7 +576,7 @@ async def test_streaming_model_name_prefix_in_db():
     be prefixed with the provider config name (e.g. 'openai/gpt-4').
     """
     with tempfile.TemporaryDirectory() as td:
-        db_path = Path(td) / "stream_model_prefix.duckdb"
+        db_path = Path(td) / "stream_model_prefix.sqlite"
         config = _make_test_config(td)
         telemetry = TelemetryLogger(db_path)
         app = create_app(config, telemetry)
@@ -596,7 +597,7 @@ async def test_streaming_model_name_prefix_in_db():
                 await resp.aread()
 
         telemetry.close()
-        conn = duckdb.connect(str(db_path), read_only=True)
+        conn = sqlite3.connect(str(db_path))
         row = conn.execute("SELECT model_name FROM requests").fetchone()
         conn.close()
         assert row is not None, "No telemetry record found"

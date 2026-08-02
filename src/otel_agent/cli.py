@@ -92,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     dash_p = sub.add_parser("dashboard", help="Start web dashboard")
     dash_p.add_argument("-p", "--port", type=int, default=9090, help="Dashboard port (default: 9090)")
     dash_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.sqlite", help="Telemetry database path")
-    dash_p.add_argument("--proxy", type=int, default=None, help="Proxy port for DB queries (required when proxy is running)")
+    dash_p.add_argument("--proxy", type=int, default=None, help="Proxy port for DB queries (SQLite WAL concurrent reads)")
 
     return parser
 

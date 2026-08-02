@@ -1,12 +1,7 @@
 """Dashboard JSON API — reads from the storage backend.
 
-DuckDB uses file-level locking that prevents concurrent access from multiple
-processes.  When the proxy is running, queries route through the proxy's
-HTTP API to avoid lock conflicts.  When the proxy is not running, queries
-go directly to DuckDB (single-process mode).
-
-When the proxy creates a DashboardAPI internally, it passes its own storage
-backend to avoid opening a second DuckDB connection.
+When proxy_port is set, queries route through the proxy's internal HTTP API.
+Falls back to direct database access when the proxy is unreachable.
 """
 from __future__ import annotations
 
@@ -44,8 +39,8 @@ class DashboardAPI:
     """Query the requests table for the dashboard.
 
     When *proxy_port* is provided, queries are routed through the proxy's
-    HTTP API to avoid DuckDB lock conflicts.  Falls back to direct DuckDB
-    access when the proxy is unreachable and no proxy_port was specified.
+    internal HTTP API.  Falls back to direct database access when the
+    proxy is unreachable.
 
     When *storage* is provided (e.g., from the proxy's TelemetryLogger),
     uses that storage backend directly instead of opening a new connection.
@@ -106,9 +101,9 @@ class DashboardAPI:
         return None
 
     def _get_storage(self):
-        """Return (and lazily create) the DuckDB storage connection."""
+        """Return (and lazily create) the storage connection."""
         if self._storage is None:
-            self._storage = create_storage("duckdb", self.db_path, read_only=True)
+            self._storage = create_storage("sqlite", self.db_path, read_only=True)
             self._owns_storage = True
         return self._storage
 

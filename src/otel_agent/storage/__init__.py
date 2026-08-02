@@ -2,13 +2,13 @@
 
 Provides a pluggable backend interface for persisting and querying
 telemetry request records.  Backends are selected via the ``storage``
-field in ``config.yaml`` (default: ``"duckdb"``).
+field in ``config.yaml`` (default: ``"sqlite"``).
 
 Example::
 
     from otel_agent.storage import create_storage
 
-    storage = create_storage("duckdb", Path("~/.otel-agent/requests.duckdb"))
+    storage = create_storage("sqlite", Path("~/.otel-agent/requests.sqlite"))
     storage.initialize()
     storage.log_request(method="POST", url="...", ...)
     results = storage.get_requests()
@@ -24,13 +24,12 @@ if TYPE_CHECKING:
     from otel_agent.storage.base import StorageBackend
 
 BACKENDS: dict[str, str] = {
-    "duckdb": "otel_agent.storage.duckdb.DuckDBStorage",
     "sqlite": "otel_agent.storage.sqlite.SQLiteStorage",
 }
 
 
 def create_storage(
-    backend: str = "duckdb",
+    backend: str = "sqlite",
     db_path: Path | str | None = None,
     read_only: bool = False,
 ) -> "StorageBackend":
@@ -40,7 +39,7 @@ def create_storage(
     ----------
     backend:
         Backend name — one of the keys in :data:`BACKENDS`
-        (``"duckdb"`` or ``"sqlite"``).
+        (``"sqlite"``).
     db_path:
         Path to the database file.
     read_only:

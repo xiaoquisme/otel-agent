@@ -8,7 +8,7 @@ from otel_agent.storage import create_storage
 
 
 def query_requests(db_path: Path, upstream_filter: str = "", limit: int = 50) -> list:
-    storage = create_storage("duckdb", db_path, read_only=True)
+    storage = create_storage("sqlite", db_path, read_only=True)
     try:
         if upstream_filter:
             results = storage.get_all_filtered(search=upstream_filter)

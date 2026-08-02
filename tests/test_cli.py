@@ -114,7 +114,7 @@ def test_handle_view_no_requests(tmp_path, capsys):
     from otel_agent.logger import TelemetryLogger
     import argparse
 
-    db_path = tmp_path / "test.duckdb"
+    db_path = tmp_path / "test.sqlite"
     logger = TelemetryLogger(db_path)
     logger.close()
 
