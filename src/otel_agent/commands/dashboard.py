@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 def handle_dashboard(args) -> None:
     """Start the web dashboard server."""
     from fastapi import FastAPI
@@ -37,7 +36,8 @@ def handle_dashboard(args) -> None:
     # Create a minimal FastAPI app with just the dashboard routes
     app = FastAPI(title="otel-agent-dashboard", version="0.1.0")
 
-    dashboard_api = DashboardAPI(db_path)
+    proxy_port = getattr(args, "proxy", None)
+    dashboard_api = DashboardAPI(db_path, proxy_port=proxy_port)
     set_dashboard_api(dashboard_api)
     app.include_router(dashboard_router)
 
@@ -76,5 +76,10 @@ def handle_dashboard(args) -> None:
 
     print(f"Dashboard running at http://localhost:{port}")
     print(f"Database: {db_path}")
+    if proxy_port:
+        print(f"Proxy: http://127.0.0.1:{proxy_port}")
+    else:
+        print("Note: No --proxy specified. Direct DuckDB access used.")
+        print("If proxy is running, use --proxy <port> to avoid lock conflicts.")
     print("Ctrl+C to stop\n")
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")

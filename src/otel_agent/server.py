@@ -55,7 +55,11 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     # ------------------------------------------------------------------
     # Dashboard (merged into proxy process)
     # ------------------------------------------------------------------
-    dashboard_api = DashboardAPI(telemetry.db_path)
+    # Pass the TelemetryLogger's storage to DashboardAPI so it shares
+    # the same DuckDB connection instead of opening a second one.
+    # DuckDB uses file-level locking that prevents concurrent access
+    # from multiple processes (see docs/solutions/ for details).
+    dashboard_api = DashboardAPI(telemetry.db_path, storage=telemetry.storage)
     set_dashboard_api(dashboard_api)
     app.include_router(dashboard_router)
 
