@@ -11,19 +11,18 @@ from pathlib import Path
 def handle_dashboard(args) -> None:
     """Start the web dashboard server."""
     from fastapi import FastAPI
-    from fastapi.responses import FileResponse
     import uvicorn
 
     from otel_agent.dashboard.api import DashboardAPI
     from otel_agent.dashboard.routes import router as dashboard_router, set_api as set_dashboard_api
+    from otel_agent.dashboard.spa import find_frontend_dist, register_frontend, register_legacy_index
 
     # Locate frontend assets: installed package (frontend_dist/) or dev source (frontend/dist/)
     _pkg_dir = Path(__file__).parent  # .../otel_agent/commands
-    _candidates = [
+    frontend_dist = find_frontend_dist(
         _pkg_dir.parent / "dashboard" / "frontend_dist",  # installed wheel
         _pkg_dir.parent.parent.parent / "frontend" / "dist",  # dev: project root
-    ]
-    frontend_dist = next((p for p in _candidates if (p / "index.html").exists()), None)
+    )
 
     db_path = Path(args.db).expanduser()
     port = args.port
@@ -40,35 +39,9 @@ def handle_dashboard(args) -> None:
     dashboard_api = DashboardAPI(db_path, proxy_port=proxy_port)
     set_dashboard_api(dashboard_api)
     app.include_router(dashboard_router)
-
-    if frontend_dist is not None:
-        from fastapi.staticfiles import StaticFiles
-        assets_dir = frontend_dist / "assets"
-        if assets_dir.is_dir():
-            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="static-assets")
-        favicon = frontend_dist / "favicon.svg"
-        if favicon.exists():
-            @app.get("/favicon.svg", response_class=FileResponse)
-            async def serve_favicon():
-                return FileResponse(favicon, media_type="image/svg+xml")
-        icons = frontend_dist / "icons.svg"
-        if icons.exists():
-            @app.get("/icons.svg", response_class=FileResponse)
-            async def serve_icons():
-                return FileResponse(icons, media_type="image/svg+xml")
-
-    @app.get("/", response_class=FileResponse)
-    async def serve_dashboard():
-        """Serve the dashboard index.html."""
-        if frontend_dist is not None:
-            html = frontend_dist / "index.html"
-            return FileResponse(html, media_type="text/html")
-        # Fallback: serve old monolithic index.html (pre-React)
-        legacy_path = Path(__file__).parent.parent / "dashboard" / "index.html"
-        if legacy_path.exists():
-            return FileResponse(legacy_path, media_type="text/html")
-        from fastapi.responses import HTMLResponse
-        return HTMLResponse("<h1>Dashboard</h1><p>index.html not found</p>")
+    register_frontend(app, frontend_dist)
+    if frontend_dist is None:
+        register_legacy_index(app, Path(__file__).parent.parent / "dashboard" / "index.html")
 
     @app.on_event("shutdown")
     async def shutdown() -> None:

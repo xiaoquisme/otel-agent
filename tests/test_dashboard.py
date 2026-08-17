@@ -589,3 +589,46 @@ def test_route_usage_wide_range(tmp_path):
     assert "total_tokens" in body
     assert "models" in body
     api.close()
+
+
+# ------------------------------------------------------------------
+# SPA fallback — deep links like /request/:id must serve index.html
+# ------------------------------------------------------------------
+
+def _spa_client(tmp_path: Path) -> TestClient:
+    from otel_agent.dashboard.spa import register_frontend
+
+    dist = tmp_path / "frontend_dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><html><body>SPA</body></html>", encoding="utf-8")
+    app = FastAPI()
+    app.include_router(dashboard_router)
+    register_frontend(app, dist)
+    return TestClient(app)
+
+
+def test_spa_serves_index_for_request_detail_path(tmp_path):
+    """Hard navigation to /request/:id must return the SPA shell, not 404."""
+    client = _spa_client(tmp_path)
+    resp = client.get("/request/10879")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "SPA" in resp.text
+
+
+def test_spa_serves_index_for_usage_path(tmp_path):
+    client = _spa_client(tmp_path)
+    resp = client.get("/usage")
+    assert resp.status_code == 200
+    assert "SPA" in resp.text
+
+
+def test_spa_does_not_shadow_api_routes(tmp_path):
+    db = tmp_path / "test.sqlite"
+    api = DashboardAPI(db)
+    set_dashboard_api(api)
+    client = _spa_client(tmp_path)
+    resp = client.get("/api/requests")
+    assert resp.status_code == 200
+    assert resp.json()["data"] == []
+    api.close()
