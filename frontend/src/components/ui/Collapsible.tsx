@@ -113,13 +113,14 @@ export function CollapsibleTrigger({
   disabled: buttonDisabled,
   ...rest
 }: CollapsibleTriggerProps) {
-  const { open, onToggle, disabled: ctxDisabled } = useCollapsibleContext('CollapsibleTrigger')
+  const { open, onToggle, disabled: ctxDisabled, contentId } = useCollapsibleContext('CollapsibleTrigger')
   const disabled = ctxDisabled || buttonDisabled
 
   return (
     <button
       type="button"
       aria-expanded={open}
+      aria-controls={contentId}
       disabled={disabled}
       onClick={onToggle}
       className={className}

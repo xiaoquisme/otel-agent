@@ -1,5 +1,17 @@
 import { useState, useCallback } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, NavLink } from 'react-router-dom'
+import { ClockIcon } from '../components/ui'
+
+const navLinkStyle = ({ isActive }: { isActive: boolean }): React.CSSProperties => ({
+  fontSize: 'var(--text-xs)',
+  fontWeight: isActive ? 'var(--font-semibold)' : 'var(--font-normal)',
+  color: isActive ? 'var(--color-text-primary)' : 'var(--color-text-secondary)',
+  textDecoration: 'none',
+  padding: 'var(--space-1) var(--space-2)',
+  borderRadius: 'var(--radius-sm)',
+  background: isActive ? 'var(--color-bg-overlay)' : 'transparent',
+  transition: 'background var(--transition-fast), color var(--transition-fast)',
+})
 
 export default function DashboardLayout() {
   const [detailPanelWidth, setDetailPanelWidth] = useState(40)
@@ -52,22 +64,15 @@ export default function DashboardLayout() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <circle cx="8" cy="8" r="6" />
-            <path d="M8 5v3l2 2" />
-          </svg>
-          <h1 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)' }}>
+          <ClockIcon size={16} />
+          <h1 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', margin: 0 }}>
             otel-agent
           </h1>
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-            trajectory
-          </span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
-            ?
-          </span>
-        </div>
+        <nav style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }} aria-label="Main navigation">
+          <NavLink to="/" end style={navLinkStyle}>Requests</NavLink>
+          <NavLink to="/usage" style={navLinkStyle}>Usage</NavLink>
+        </nav>
       </header>
 
       {/* Main content - split pane */}

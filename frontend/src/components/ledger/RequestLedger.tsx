@@ -1,5 +1,6 @@
 import { useRef, useCallback } from 'react'
 import type { RequestItem } from '../../api/types'
+import { Skeleton } from '../ui'
 
 interface RequestLedgerProps {
   requests: RequestItem[]
@@ -98,6 +99,9 @@ export default function RequestLedger({
       ref={containerRef}
       tabIndex={0}
       onKeyDown={handleKeyDown}
+      role="listbox"
+      aria-label="Request list"
+      aria-activedescendant={selectedId ? `request-row-${selectedId}` : undefined}
       style={{
         flex: 1,
         overflow: 'auto',
@@ -151,17 +155,31 @@ export default function RequestLedger({
         </div>
       )}
 
-      {/* Loading */}
+      {/* Loading skeleton */}
       {loading && requests.length === 0 && (
-        <div
-          style={{
-            padding: 'var(--space-8)',
-            textAlign: 'center',
-            fontSize: 'var(--text-xs)',
-            color: 'var(--color-text-muted)',
-          }}
-        >
-          Loading...
+        <div style={{ padding: '0 var(--space-3)' }}>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div
+              key={i}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '36px 60px 50px 56px 1fr 60px 60px 100px',
+                gap: '0',
+                height: '30px',
+                alignItems: 'center',
+                borderBottom: '1px solid var(--color-border-muted)',
+              }}
+            >
+              <Skeleton width="20px" height="10px" />
+              <Skeleton width="48px" height="10px" />
+              <Skeleton width="36px" height="14px" />
+              <Skeleton width="28px" height="10px" />
+              <Skeleton width="80%" height="10px" />
+              <Skeleton width="40px" height="10px" />
+              <Skeleton width="30px" height="10px" />
+              <Skeleton width="70px" height="10px" />
+            </div>
+          ))}
         </div>
       )}
 
@@ -189,13 +207,16 @@ export default function RequestLedger({
         return (
           <div
             key={req.id}
+            id={`request-row-${req.id}`}
+            role="option"
+            aria-selected={isSelected}
             onClick={() => onSelect(req.id)}
             style={{
               display: 'grid',
               gridTemplateColumns: '36px 60px 50px 56px 1fr 60px 60px 100px',
               gap: '0',
               padding: '0 var(--space-3)',
-              height: '30px',
+              height: '36px',
               alignItems: 'center',
               borderBottom: '1px solid var(--color-border-muted)',
               background: isSelected ? 'var(--color-accent-blue-muted)' : 'transparent',
