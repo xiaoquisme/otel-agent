@@ -30,6 +30,7 @@ export function buildTrajectoryCells(messages: StructuredMessage[]): TrajectoryC
 
   for (let i = 0; i < messages.length; i++) {
     const message = messages[i]
+    const before = cells.length
     if (message.reasoning_content) {
       cells.push({
         id: `${i}-reasoning`,
@@ -64,8 +65,7 @@ export function buildTrajectoryCells(messages: StructuredMessage[]): TrajectoryC
       }
     }
 
-    const emitted = cells.some((c) => c.id.startsWith(`${i}-`))
-    if (!emitted) {
+    if (cells.length === before) {
       cells.push({
         id: `${i}-${message.role}`,
         index: index++,
