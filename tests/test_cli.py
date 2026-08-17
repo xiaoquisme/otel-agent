@@ -2,6 +2,9 @@
 
 import tempfile
 from pathlib import Path
+
+import pytest
+
 from otel_agent.cli import build_parser
 
 
@@ -222,8 +225,166 @@ def test_handle_dashboard_startup_note_says_sqlite_not_duckdb(tmp_path, capsys, 
     db_path.write_bytes(b"")
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
 
-    args = argparse.Namespace(db=str(db_path), port=9090, proxy=None)
+    args = argparse.Namespace(
+        db=str(db_path), port=9090, proxy=None, foreground=True, dashboard_action=None,
+    )
     handle_dashboard(args)
     captured = capsys.readouterr()
     assert "DuckDB" not in captured.out
     assert "Direct SQLite access used." in captured.out
+
+
+def test_dashboard_default_is_not_foreground():
+    from otel_agent.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["dashboard"])
+    assert args.foreground is False
+    assert args.dashboard_action is None
+
+
+def test_dashboard_foreground_flag():
+    from otel_agent.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["dashboard", "-f"])
+    assert args.foreground is True
+
+
+def test_dashboard_stop_action():
+    from otel_agent.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["dashboard", "stop"])
+    assert args.dashboard_action == "stop"
+
+
+def test_dashboard_flags_still_parse_with_port():
+    from otel_agent.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["dashboard", "-p", "3000"])
+    assert args.port == 3000
+    assert args.foreground is False
+
+
+def test_handle_dashboard_background_prints_url_and_pid(tmp_path, capsys, monkeypatch):
+    import argparse
+    from types import SimpleNamespace
+
+    from otel_agent.commands import dashboard as dash_mod
+
+    db_path = tmp_path / "telemetry.sqlite"
+    db_path.write_bytes(b"")
+    log_file = tmp_path / "dashboard.log"
+    port_file = tmp_path / "dashboard.port"
+    written = {}
+
+    monkeypatch.setattr(dash_mod, "DASHBOARD_LOG_FILE", log_file)
+    monkeypatch.setattr(dash_mod, "DASHBOARD_PORT_FILE", port_file)
+    monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: None)
+    monkeypatch.setattr(dash_mod, "_is_port_in_use", lambda port: False)
+    monkeypatch.setattr(dash_mod, "ensure_agent_dir", lambda: tmp_path)
+    monkeypatch.setattr(dash_mod, "write_dashboard_pid", lambda pid: written.setdefault("pid", pid))
+    monkeypatch.setattr(dash_mod, "time", SimpleNamespace(sleep=lambda _s: None))
+
+    class FakeProc:
+        pid = 4242
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(dash_mod.subprocess, "Popen", lambda *a, **k: FakeProc())
+
+    args = argparse.Namespace(
+        db=str(db_path), port=9090, proxy=None, foreground=False, dashboard_action=None,
+    )
+    dash_mod.handle_dashboard(args)
+    captured = capsys.readouterr()
+    assert "http://localhost:9090" in captured.out
+    assert "4242" in captured.out
+    assert written["pid"] == 4242
+    assert port_file.read_text() == "9090"
+
+
+def test_handle_dashboard_missing_db_does_not_spawn(tmp_path, capsys, monkeypatch):
+    import argparse
+
+    from otel_agent.commands import dashboard as dash_mod
+
+    called = {"popen": False}
+    monkeypatch.setattr(
+        dash_mod.subprocess, "Popen", lambda *a, **k: called.__setitem__("popen", True)
+    )
+
+    args = argparse.Namespace(
+        db=str(tmp_path / "missing.sqlite"),
+        port=9090,
+        proxy=None,
+        foreground=False,
+        dashboard_action=None,
+    )
+    dash_mod.handle_dashboard(args)
+    captured = capsys.readouterr()
+    assert "Start the proxy first" in captured.out
+    assert called["popen"] is False
+
+
+def test_handle_dashboard_already_running_exits(tmp_path, capsys, monkeypatch):
+    import argparse
+
+    from otel_agent.commands import dashboard as dash_mod
+
+    db_path = tmp_path / "telemetry.sqlite"
+    db_path.write_bytes(b"")
+    monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: {"pid": 99, "port": 9090})
+    called = {"popen": False}
+    monkeypatch.setattr(
+        dash_mod.subprocess, "Popen", lambda *a, **k: called.__setitem__("popen", True)
+    )
+
+    args = argparse.Namespace(
+        db=str(db_path), port=9090, proxy=None, foreground=False, dashboard_action=None,
+    )
+    with pytest.raises(SystemExit) as exc:
+        dash_mod.handle_dashboard(args)
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "dashboard stop" in captured.out
+    assert called["popen"] is False
+
+
+def test_handle_dashboard_port_in_use_exits(tmp_path, capsys, monkeypatch):
+    import argparse
+
+    from otel_agent.commands import dashboard as dash_mod
+
+    db_path = tmp_path / "telemetry.sqlite"
+    db_path.write_bytes(b"")
+    monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: None)
+    monkeypatch.setattr(dash_mod, "_is_port_in_use", lambda port: True)
+    called = {"popen": False}
+    monkeypatch.setattr(
+        dash_mod.subprocess, "Popen", lambda *a, **k: called.__setitem__("popen", True)
+    )
+
+    args = argparse.Namespace(
+        db=str(db_path), port=9090, proxy=None, foreground=False, dashboard_action=None,
+    )
+    with pytest.raises(SystemExit) as exc:
+        dash_mod.handle_dashboard(args)
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "-p" in captured.out
+    assert called["popen"] is False
+
+
+def test_handle_dashboard_stop_invokes_helper(capsys, monkeypatch):
+    import argparse
+
+    from otel_agent.commands import dashboard as dash_mod
+
+    called = {"stop": False}
+    monkeypatch.setattr(dash_mod, "stop_dashboard", lambda: called.__setitem__("stop", True) or True)
+
+    args = argparse.Namespace(dashboard_action="stop")
+    dash_mod.handle_dashboard(args)
+    captured = capsys.readouterr()
+    assert called["stop"] is True
+    assert "Dashboard stopped." in captured.out
