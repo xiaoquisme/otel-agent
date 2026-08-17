@@ -10,11 +10,12 @@ from typing import AsyncIterator
 
 import httpx
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from otel_agent.config import Config, Provider
 from otel_agent.dashboard.api import DashboardAPI
 from otel_agent.dashboard.routes import router as dashboard_router, set_api as set_dashboard_api
+from otel_agent.dashboard.spa import find_frontend_dist, register_frontend, register_legacy_index
 from otel_agent.converter import (
     anthropic_to_openai_request,
     anthropic_to_openai_response,
@@ -63,32 +64,14 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     set_dashboard_api(dashboard_api)
     app.include_router(dashboard_router)
 
-    # Serve React dashboard — check installed package first, then dev source
     _pkg_dir = Path(__file__).parent  # .../otel_agent
-    _candidates = [
-        _pkg_dir / "dashboard" / "frontend_dist",         # installed wheel
-        _pkg_dir.parent.parent / "frontend" / "dist",     # dev: project root
-    ]
-    _frontend_dist = next((p for p in _candidates if (p / "index.html").exists()), None)
-    if _frontend_dist is not None:
-        from fastapi.staticfiles import StaticFiles
-        app.mount("/assets", StaticFiles(directory=str(_frontend_dist / "assets")), name="static")
-
-        @app.get("/", response_class=FileResponse)
-        async def serve_dashboard():
-            """Serve the React dashboard."""
-            return FileResponse(_frontend_dist / "index.html", media_type="text/html")
-    else:
-        # Fallback: serve old index.html
-        html_path = Path(__file__).parent / "dashboard" / "index.html"
-
-        @app.get("/", response_class=FileResponse)
-        async def serve_dashboard():
-            """Serve the dashboard index.html."""
-            if html_path.exists():
-                return FileResponse(html_path, media_type="text/html")
-            from fastapi.responses import HTMLResponse
-            return HTMLResponse("<h1>Dashboard</h1><p>index.html not found</p>")
+    frontend_dist = find_frontend_dist(
+        _pkg_dir / "dashboard" / "frontend_dist",
+        _pkg_dir.parent.parent / "frontend" / "dist",
+    )
+    register_frontend(app, frontend_dist)
+    if frontend_dist is None:
+        register_legacy_index(app, Path(__file__).parent / "dashboard" / "index.html")
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
