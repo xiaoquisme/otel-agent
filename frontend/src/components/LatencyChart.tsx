@@ -26,7 +26,7 @@ export default function LatencyChart({ requests }: LatencyChartProps) {
           label: 'Latency (ms)',
           data: [],
           borderColor: 'var(--color-accent-blue)',
-          backgroundColor: 'rgba(88, 166, 255, 0.1)',
+          backgroundColor: 'color-mix(in srgb, var(--color-accent-blue) 12%, transparent)',
           fill: true,
           tension: 0.3,
         }],

@@ -3,40 +3,42 @@
 
 :root {
   /* ── Colors: Background ── */
-  --color-bg-base: #1a1d24;
-  --color-bg-surface: #22262e;
-  --color-bg-elevated: #2a2f38;
-  --color-bg-overlay: #333842;
-  --color-bg-muted: #3d4450;
+  --color-bg-base: #f6f8fa;
+  --color-bg-surface: #ffffff;
+  --color-bg-elevated: #ffffff;
+  --color-bg-overlay: #f3f4f6;
+  --color-bg-muted: #eaeef2;
 
   /* ── Colors: Border ── */
-  --color-border-default: #3d4450;
-  --color-border-muted: #2a2f38;
-  --color-border-emphasis: #545d68;
+  --color-border-default: #d0d7de;
+  --color-border-muted: #eaeef2;
+  --color-border-emphasis: #8c959f;
 
   /* ── Colors: Text ── */
-  --color-text-primary: #edf0f4;
-  --color-text-secondary: #9ba3b0;
-  --color-text-muted: #7a8290;
-  --color-text-inverse: #1a1d24;
+  --color-text-primary: #1f2328;
+  --color-text-secondary: #656d76;
+  --color-text-muted: #8b949e;
+  --color-text-inverse: #ffffff;
 
   /* ── Colors: Accent ── */
-  --color-accent-blue: #6cb4ff;
-  --color-accent-blue-muted: #1f3a5c;
-  --color-accent-green: #4fd17a;
-  --color-accent-green-muted: #1f3a2e;
-  --color-accent-red: #ff6b63;
-  --color-accent-red-muted: #3a1f1f;
-  --color-accent-yellow: #e0a830;
-  --color-accent-yellow-muted: #3a2a1f;
-  --color-accent-purple: #b88aff;
-  --color-accent-purple-muted: #2a1f3a;
+  --color-accent-blue: #0969da;
+  --color-accent-blue-muted: #ddf4ff;
+  --color-accent-blue-hover: #0550ae;
+  --color-accent-green: #1a7f37;
+  --color-accent-green-muted: #dafbe1;
+  --color-accent-red: #cf222e;
+  --color-accent-red-muted: #ffebe9;
+  --color-accent-red-hover: #a40e26;
+  --color-accent-yellow: #9a6700;
+  --color-accent-yellow-muted: #fff8c5;
+  --color-accent-purple: #8250df;
+  --color-accent-purple-muted: #fbefff;
 
   /* ── Colors: Semantic ── */
-  --color-success: #4fd17a;
-  --color-warning: #e0a830;
-  --color-error: #ff6b63;
-  --color-info: #6cb4ff;
+  --color-success: #1a7f37;
+  --color-warning: #9a6700;
+  --color-error: #cf222e;
+  --color-info: #0969da;
 
   /* ── Spacing ── */
   --space-0: 0;
@@ -78,10 +80,10 @@
   --radius-full: 9999px;
 
   /* ── Shadows ── */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.4);
-  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.08);
+  --shadow-md: 0 4px 6px rgba(31, 35, 40, 0.08);
+  --shadow-lg: 0 10px 15px rgba(31, 35, 40, 0.1);
+  --shadow-xl: 0 20px 25px rgba(31, 35, 40, 0.12);
 
   /* ── Transitions ── */
   --transition-fast: 100ms ease;

@@ -34,10 +34,10 @@ const variantStyles: Record<ButtonVariant, Record<string, string>> = {
 }
 
 const variantHoverStyles: Record<ButtonVariant, string> = {
-  primary: 'var(--color-accent-blue-muted)',
+  primary: 'var(--color-accent-blue-hover)',
   secondary: 'var(--color-bg-muted)',
   ghost: 'var(--color-bg-muted)',
-  danger: 'var(--color-accent-red-muted)',
+  danger: 'var(--color-accent-red-hover)',
 }
 
 const sizeStyles: Record<ButtonSize, Record<string, string>> = {
