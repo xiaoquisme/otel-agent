@@ -3,40 +3,40 @@
 
 :root {
   /* ── Colors: Background ── */
-  --color-bg-base: #0f1117;
-  --color-bg-surface: #161b22;
-  --color-bg-elevated: #1c2128;
-  --color-bg-overlay: #21262d;
-  --color-bg-muted: #30363d;
+  --color-bg-base: #1a1d24;
+  --color-bg-surface: #22262e;
+  --color-bg-elevated: #2a2f38;
+  --color-bg-overlay: #333842;
+  --color-bg-muted: #3d4450;
 
   /* ── Colors: Border ── */
-  --color-border-default: #30363d;
-  --color-border-muted: #21262d;
-  --color-border-emphasis: #484f58;
+  --color-border-default: #3d4450;
+  --color-border-muted: #2a2f38;
+  --color-border-emphasis: #545d68;
 
   /* ── Colors: Text ── */
-  --color-text-primary: #e1e4e8;
-  --color-text-secondary: #8b949e;
-  --color-text-muted: #6e7681;
-  --color-text-inverse: #0f1117;
+  --color-text-primary: #edf0f4;
+  --color-text-secondary: #9ba3b0;
+  --color-text-muted: #7a8290;
+  --color-text-inverse: #1a1d24;
 
   /* ── Colors: Accent ── */
-  --color-accent-blue: #58a6ff;
+  --color-accent-blue: #6cb4ff;
   --color-accent-blue-muted: #1f3a5c;
-  --color-accent-green: #3fb950;
+  --color-accent-green: #4fd17a;
   --color-accent-green-muted: #1f3a2e;
-  --color-accent-red: #f85149;
+  --color-accent-red: #ff6b63;
   --color-accent-red-muted: #3a1f1f;
-  --color-accent-yellow: #d29922;
+  --color-accent-yellow: #e0a830;
   --color-accent-yellow-muted: #3a2a1f;
-  --color-accent-purple: #a371f7;
+  --color-accent-purple: #b88aff;
   --color-accent-purple-muted: #2a1f3a;
 
   /* ── Colors: Semantic ── */
-  --color-success: #3fb950;
-  --color-warning: #d29922;
-  --color-error: #f85149;
-  --color-info: #58a6ff;
+  --color-success: #4fd17a;
+  --color-warning: #e0a830;
+  --color-error: #ff6b63;
+  --color-info: #6cb4ff;
 
   /* ── Spacing ── */
   --space-0: 0;
@@ -78,10 +78,10 @@
   --radius-full: 9999px;
 
   /* ── Shadows ── */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.3);
-  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 20px 25px rgba(0, 0, 0, 0.5);
 
   /* ── Transitions ── */
   --transition-fast: 100ms ease;
