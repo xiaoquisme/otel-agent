@@ -2,11 +2,16 @@
 @import "./styles/tokens.css";
 @import "./styles/responsive.css";
 
+html {
+  color-scheme: light;
+}
+
 body {
   font-family: var(--font-sans);
   background: var(--color-bg-base);
   color: var(--color-text-primary);
   line-height: var(--leading-normal);
+  color-scheme: light;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

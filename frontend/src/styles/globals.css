@@ -1,6 +1,6 @@
 /* JSON Viewer — Syntax Highlighting */
 .json-key { color: var(--color-accent-blue); }
-.json-string { color: var(--color-accent-blue-muted); }
+.json-string { color: var(--color-accent-green); }
 .json-number { color: var(--color-accent-purple); }
 .json-boolean { color: var(--color-accent-blue); }
 .json-null { color: var(--color-text-secondary); font-style: italic; }
