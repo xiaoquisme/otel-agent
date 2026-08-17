@@ -224,6 +224,9 @@ def test_handle_dashboard_startup_note_says_sqlite_not_duckdb(tmp_path, capsys, 
     db_path = tmp_path / "telemetry.sqlite"
     db_path.write_bytes(b"")
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+    from otel_agent.commands import dashboard as dash_mod
+    monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: None)
+    monkeypatch.setattr(dash_mod, "_is_port_in_use", lambda port: False)
 
     args = argparse.Namespace(
         db=str(db_path), port=9090, proxy=None, foreground=True, dashboard_action=None,
@@ -324,6 +327,28 @@ def test_handle_dashboard_missing_db_does_not_spawn(tmp_path, capsys, monkeypatc
     captured = capsys.readouterr()
     assert "Start the proxy first" in captured.out
     assert called["popen"] is False
+
+
+def test_handle_dashboard_foreground_already_running_exits(tmp_path, capsys, monkeypatch):
+    import argparse
+
+    from otel_agent.commands import dashboard as dash_mod
+
+    db_path = tmp_path / "telemetry.sqlite"
+    db_path.write_bytes(b"")
+    monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: {"pid": 99, "port": 9090})
+    called = {"uvicorn": False}
+    monkeypatch.setattr(dash_mod, "_run_foreground", lambda args: called.__setitem__("uvicorn", True))
+
+    args = argparse.Namespace(
+        db=str(db_path), port=9090, proxy=None, foreground=True, dashboard_action=None,
+    )
+    with pytest.raises(SystemExit) as exc:
+        dash_mod.handle_dashboard(args)
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "dashboard stop" in captured.out
+    assert called["uvicorn"] is False
 
 
 def test_handle_dashboard_already_running_exits(tmp_path, capsys, monkeypatch):

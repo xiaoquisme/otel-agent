@@ -44,10 +44,6 @@ def _is_port_in_use(port: int) -> bool:
 
 def handle_dashboard_start(args) -> None:
     """Start the dashboard (background or foreground)."""
-    if getattr(args, "foreground", False):
-        _run_foreground(args)
-        return
-
     db_path = Path(args.db).expanduser()
     if not db_path.exists():
         print(f"Database not found: {db_path}")
@@ -63,6 +59,10 @@ def handle_dashboard_start(args) -> None:
     if _is_port_in_use(args.port):
         print(f"Port {args.port} is already in use. Try: otel-agent dashboard -p 9091")
         sys.exit(1)
+
+    if getattr(args, "foreground", False):
+        _run_foreground(args)
+        return
 
     ensure_agent_dir()
     log_fd = open(DASHBOARD_LOG_FILE, "a")
