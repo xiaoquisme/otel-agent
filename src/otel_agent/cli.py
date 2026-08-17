@@ -89,10 +89,19 @@ def build_parser() -> argparse.ArgumentParser:
     routes_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
 
     # --- dashboard ---
-    dash_p = sub.add_parser("dashboard", help="Start web dashboard")
+    dash_p = sub.add_parser("dashboard", help="Manage the web dashboard")
+    dash_sub = dash_p.add_subparsers(dest="dashboard_action", help="Dashboard actions")
+
     dash_p.add_argument("-p", "--port", type=int, default=9090, help="Dashboard port (default: 9090)")
     dash_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.sqlite", help="Telemetry database path")
     dash_p.add_argument("--proxy", type=int, default=None, help="Proxy port for DB queries (SQLite WAL concurrent reads)")
+    dash_p.add_argument("-f", "--foreground", action="store_true", help="Run in foreground (blocking)")
+
+    dash_sub.add_parser("stop", help="Stop the running dashboard")
+    dash_sub.add_parser("status", help="Check dashboard status")
+    logs_p = dash_sub.add_parser("logs", help="View dashboard logs")
+    logs_p.add_argument("-F", "--follow", action="store_true", help="Stream logs in real-time")
+    logs_p.add_argument("-n", "--lines", type=int, default=50, help="Number of recent lines (default: 50)")
 
     return parser
 
