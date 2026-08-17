@@ -293,6 +293,10 @@ async def _handle_non_streaming_auto(
     )
 
     # Add routing headers to response
+    if isinstance(resp_body, dict):
+        from otel_agent.xai_errors import is_xai_provider, rewrite_xai_error
+        if is_xai_provider(provider):
+            resp_body = rewrite_xai_error(resp.status_code, resp_body)
     response = JSONResponse(resp_body, status_code=resp.status_code)
     for k, v in routing_headers.items():
         response.headers[k] = v

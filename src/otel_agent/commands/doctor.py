@@ -59,7 +59,8 @@ def handle_doctor(args) -> None:
             providers = config.providers
             print(f"  Config valid  ✅ ({len(providers)} provider(s))")
             for name, provider in providers.items():
-                print(f"    {name:<16} {provider.api_format:<10} {provider.base_url}")
+                extra = f"  auth={provider.auth}" if provider.auth else ""
+                print(f"    {name:<16} {provider.api_format:<10} {provider.base_url}{extra}")
         except Exception as e:
             all_ok = False
             print("  Config invalid  ❌")
@@ -67,6 +68,13 @@ def handle_doctor(args) -> None:
     else:
         print("  Config missing  ⚠️")
         print("    → Run: otel-agent init")
+
+    from otel_agent.auth_vault import get_status
+    xai = get_status("xai")
+    if xai["logged_in"]:
+        print(f"  xAI OAuth  ✅ logged in ({xai.get('imported_from') or 'vault'})")
+    else:
+        print("  xAI OAuth  — not imported (otel-agent auth import-xai)")
 
     # Port
     port = getattr(args, 'port', 45638)

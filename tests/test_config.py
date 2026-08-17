@@ -126,6 +126,37 @@ providers:
         assert "must have an api_key" in str(e)
 
 
+def test_xai_oauth_allows_empty_api_key(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  - name: xai
+    base_url: https://api.x.ai/v1
+    auth: xai-oauth
+    api_format: openai
+""")
+    cfg = Config(config_file)
+    provider = cfg.get_provider("xai")
+    assert provider is not None
+    assert provider.auth == "xai-oauth"
+    assert provider.api_key == ""
+
+
+def test_unknown_auth_rejected(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  - name: xai
+    base_url: https://api.x.ai/v1
+    auth: mystery
+""")
+    try:
+        Config(config_file)
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "invalid auth" in str(e)
+
+
 def test_invalid_api_format_rejected(tmp_path):
     config_file = tmp_path / "config.yaml"
     config_file.write_text("""

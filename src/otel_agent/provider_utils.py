@@ -19,7 +19,10 @@ def build_upstream_url(provider: Provider) -> str:
 
 def build_request_headers(provider: Provider) -> dict[str, str]:
     """Build auth + content-type headers for a provider."""
-    headers = AUTH_HEADERS[provider.api_format](provider.api_key)
+    from otel_agent.auth_vault import resolve_bearer
+
+    key = resolve_bearer(provider)
+    headers = AUTH_HEADERS[provider.api_format](key)
     headers["Content-Type"] = "application/json"
     return headers
 

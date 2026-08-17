@@ -44,6 +44,14 @@ providers:
   #   api_key: YOUR_ANTHROPIC_KEY
   #   api_format: anthropic
 
+  # SuperGrok / xAI OAuth — no api_key. Import a grant first:
+  #   otel-agent auth import-xai
+  # Then call model xai/grok-4.6. Tokens live in ~/.otel-agent/auth.json.
+  # - name: xai
+  #   base_url: https://api.x.ai/v1
+  #   auth: xai-oauth
+  #   api_format: openai
+
 # Auto-routing configuration (optional)
 # auto_routing:
 #   circuit_breaker_threshold: 5
@@ -53,6 +61,8 @@ providers:
 
 VALID_API_FORMATS = ("openai", "anthropic")
 VALID_TIERS = ("simple", "medium", "complex", "reasoning")
+AUTH_XAI_OAUTH = "xai-oauth"
+VALID_AUTH_MODES = ("", AUTH_XAI_OAUTH)
 
 
 @dataclass
@@ -63,6 +73,7 @@ class Provider:
     base_url: str
     api_key: str
     api_format: str = "openai"
+    auth: str = ""
     # Auto-routing capability fields
     cost_per_1k_input: float = 0.0
     cost_per_1k_output: float = 0.0
@@ -148,6 +159,7 @@ class Config:
                 rate_limit_rpm=int(item.get("rate_limit_rpm", 0)),
                 tiers=tiers,
                 default_model=str(item.get("default_model", "")),
+                auth=str(item.get("auth", "")).strip(),
             )
 
         self._providers = providers
@@ -163,7 +175,12 @@ class Config:
                     f"Provider '{name}' must have a base_url. "
                     f"Add a valid URL to the provider config."
                 )
-            if not provider.api_key:
+            if provider.auth not in VALID_AUTH_MODES:
+                raise ValueError(
+                    f"Provider '{name}' has invalid auth '{provider.auth}'. "
+                    f"Must be one of: {', '.join(repr(v) for v in VALID_AUTH_MODES if v) or 'empty'}."
+                )
+            if not provider.api_key and provider.auth != AUTH_XAI_OAUTH:
                 raise ValueError(
                     f"Provider '{name}' must have an api_key. "
                     f"Add a valid API key to the provider config."
@@ -214,3 +231,32 @@ class Config:
     def storage(self) -> str:
         self._reload()
         return self._storage
+
+
+def upsert_provider(path: Path, fields: dict) -> None:
+    """Insert or update a provider row in a YAML config file."""
+    data: dict = {}
+    if path.exists():
+        with open(path) as f:
+            loaded = yaml.safe_load(f) or {}
+        if isinstance(loaded, dict):
+            data = loaded
+    raw = data.get("providers")
+    providers = raw if isinstance(raw, list) else []
+    name = str(fields.get("name", "")).strip()
+    updated = False
+    new_list = []
+    for item in providers:
+        if isinstance(item, dict) and str(item.get("name", "")).strip() == name:
+            merged = dict(item)
+            merged.update(fields)
+            new_list.append(merged)
+            updated = True
+        else:
+            new_list.append(item)
+    if not updated:
+        new_list.append(dict(fields))
+    data["providers"] = new_list
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)

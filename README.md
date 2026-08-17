@@ -66,6 +66,7 @@ otel-agent dashboard logs     View dashboard log output
 otel-agent dashboard --foreground  Run dashboard in foreground (blocking)
 otel-agent view               View logged requests (CLI)
 otel-agent config path|show|edit  Manage configuration
+otel-agent auth status|import-xai  SuperGrok / xAI OAuth grant
 otel-agent doctor             Check installation health
 ```
 
@@ -133,8 +134,21 @@ providers:
 Each provider needs:
 - `name`: routing key (used as model name prefix)
 - `base_url`: upstream API base URL
-- `api_key`: authentication key
+- `api_key`: authentication key (omit when using `auth: xai-oauth`)
 - `api_format`: `openai` or `anthropic` (default: `openai`)
+- `auth`: optional. `xai-oauth` spends a SuperGrok grant imported via `otel-agent auth import-xai`
+
+### SuperGrok / xAI subscription
+
+If you already signed in with Hermes (`hermes auth add xai-oauth`) or `grok login`:
+
+```bash
+otel-agent auth import-xai
+```
+
+This copies the grant into `~/.otel-agent/auth.json` (mode 0600) and adds a provider named `xai`. Clients keep using `xai/grok-4.6`. Hermes' `auth.json` is not written during refresh.
+
+The proxy still binds `0.0.0.0` — a SuperGrok token is a personal subscription. Do not expose the proxy on a shared network.
 
 ## Client Usage
 
