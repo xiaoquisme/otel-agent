@@ -1,5 +1,6 @@
 import { useRef, useCallback } from 'react'
 import type { RequestItem } from '../../api/types'
+import { Skeleton } from '../ui'
 
 interface RequestLedgerProps {
   requests: RequestItem[]
@@ -151,17 +152,31 @@ export default function RequestLedger({
         </div>
       )}
 
-      {/* Loading */}
+      {/* Loading skeleton */}
       {loading && requests.length === 0 && (
-        <div
-          style={{
-            padding: 'var(--space-8)',
-            textAlign: 'center',
-            fontSize: 'var(--text-xs)',
-            color: 'var(--color-text-muted)',
-          }}
-        >
-          Loading...
+        <div style={{ padding: '0 var(--space-3)' }}>
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div
+              key={i}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '36px 60px 50px 56px 1fr 60px 60px 100px',
+                gap: '0',
+                height: '30px',
+                alignItems: 'center',
+                borderBottom: '1px solid var(--color-border-muted)',
+              }}
+            >
+              <Skeleton width="20px" height="10px" />
+              <Skeleton width="48px" height="10px" />
+              <Skeleton width="36px" height="14px" />
+              <Skeleton width="28px" height="10px" />
+              <Skeleton width="80%" height="10px" />
+              <Skeleton width="40px" height="10px" />
+              <Skeleton width="30px" height="10px" />
+              <Skeleton width="70px" height="10px" />
+            </div>
+          ))}
         </div>
       )}
 

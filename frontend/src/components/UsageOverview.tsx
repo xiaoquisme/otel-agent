@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useUsage, type UsagePeriod } from '../hooks/useUsage'
+import { Skeleton } from './ui'
 
 const PERIODS: { key: UsagePeriod; label: string }[] = [
   { key: 'today', label: 'Today' },
@@ -45,8 +46,15 @@ export default function UsageOverview() {
       </div>
 
       {loading ? (
-        <div style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)', padding: 'var(--space-4) 0', textAlign: 'center' }}>
-          Loading usage data...
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+          {[0, 1, 2].map((i) => (
+            <div key={i} style={{ background: 'var(--color-bg-surface)', border: '1px solid var(--color-border-default)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-4)' }}>
+              <Skeleton width="60%" height="10px" />
+              <div style={{ marginTop: 'var(--space-2)' }}>
+                <Skeleton width="80%" height="24px" />
+              </div>
+            </div>
+          ))}
         </div>
       ) : usage ? (
         <>

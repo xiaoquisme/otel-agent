@@ -4,7 +4,7 @@ import type { RequestDetail } from '../../api/types'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import { ZapIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon } from '../ui'
+import { ZapIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, Skeleton } from '../ui'
 
 interface DetailPanelProps {
   requestId: number | null
@@ -227,19 +227,17 @@ export default function DetailPanel({ requestId, onClose }: DetailPanelProps) {
         </button>
       </div>
 
-      {/* Loading */}
+      {/* Loading skeleton */}
       {loading && (
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--color-text-muted)',
-            fontSize: 'var(--text-xs)',
-          }}
-        >
-          Loading...
+        <div style={{ padding: 'var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+          <Skeleton width="100%" height="16px" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-2)' }}>
+            <Skeleton height="32px" />
+            <Skeleton height="32px" />
+            <Skeleton height="32px" />
+          </div>
+          <Skeleton width="100%" height="60px" />
+          <Skeleton width="100%" height="60px" />
         </div>
       )}
 

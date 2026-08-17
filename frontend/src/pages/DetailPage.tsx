@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { fetchRequestDetail } from '../api/client'
 import type { RequestDetail } from '../api/types'
-import { Card, Tabs, TabList, Tab, TabPanel, Collapsible, CollapsibleTrigger, CollapsibleContent, ArrowLeftIcon } from '../components/ui'
+import { Card, Tabs, TabList, Tab, TabPanel, Collapsible, CollapsibleTrigger, CollapsibleContent, ArrowLeftIcon, Skeleton } from '../components/ui'
 import MessageDisplay from '../components/MessageDisplay'
 import CodeBlock from '../components/ui/CodeBlock'
 
@@ -88,8 +88,26 @@ export default function DetailPage() {
 
   if (loading) {
     return (
-      <div style={{ textAlign: 'center', padding: 'var(--space-12)', color: 'var(--color-text-secondary)' }}>
-        Loading...
+      <div style={{ maxWidth: '1200px', margin: '0 auto', padding: 'var(--space-4)' }}>
+        <Skeleton width="100px" height="14px" />
+        <div style={{ marginTop: 'var(--space-4)' }}>
+          <Card padding="lg">
+            <Skeleton width="60%" height="20px" />
+            <div style={{ marginTop: 'var(--space-3)' }}>
+              <Skeleton width="100%" height="14px" />
+            </div>
+          </Card>
+        </div>
+        <div style={{ marginTop: 'var(--space-4)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 'var(--space-3)' }}>
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <div key={i} style={{ padding: 'var(--space-3)', background: 'var(--color-bg-elevated)', borderRadius: 'var(--radius-md)' }}>
+                <Skeleton width="60%" height="10px" />
+                <div style={{ marginTop: 'var(--space-1)' }}><Skeleton width="80%" height="14px" /></div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     )
   }
