@@ -10,6 +10,7 @@ interface RequestLedgerProps {
   canGoBack: boolean
   selectedId?: number | null
   onSelect: (id: number) => void
+  onOpen?: (id: number) => void
   onNextPage: () => void
   onPrevPage: () => void
 }
@@ -63,6 +64,7 @@ export default function RequestLedger({
   canGoBack,
   selectedId,
   onSelect,
+  onOpen,
   onNextPage,
   onPrevPage,
 }: RequestLedgerProps) {
@@ -89,10 +91,10 @@ export default function RequestLedger({
     } else if (e.key === 'Enter') {
       e.preventDefault()
       if (selectedId !== null && selectedId !== undefined) {
-        onSelect(selectedId)
+        (onOpen ?? onSelect)(selectedId)
       }
     }
-  }, [requests, selectedId, onSelect, hasMore, canGoBack, onNextPage, onPrevPage])
+  }, [requests, selectedId, onSelect, onOpen, hasMore, canGoBack, onNextPage, onPrevPage])
 
   return (
     <div
@@ -210,7 +212,10 @@ export default function RequestLedger({
             id={`request-row-${req.id}`}
             role="option"
             aria-selected={isSelected}
-            onClick={() => onSelect(req.id)}
+            onClick={() => {
+              onSelect(req.id)
+              onOpen?.(req.id)
+            }}
             style={{
               display: 'grid',
               gridTemplateColumns: '36px 60px 50px 56px 1fr 60px 60px 100px',
