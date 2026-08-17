@@ -2,6 +2,7 @@ import { createBrowserRouter } from 'react-router-dom'
 import DashboardLayout from './layouts/DashboardLayout'
 import ListPage from './pages/ListPage'
 import DetailPage from './pages/DetailPage'
+import UsagePage from './pages/UsagePage'
 
 const router = createBrowserRouter([
   {
@@ -10,6 +11,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <ListPage /> },
       { path: 'request/:id', element: <DetailPage /> },
+      { path: 'usage', element: <UsagePage /> },
     ],
   },
 ])
