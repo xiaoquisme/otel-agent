@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ZapIcon, ChevronDownIcon, ChevronRightIcon, CheckIcon, CopyIcon } from './ui'
 
 interface ToolCallBlockProps {
   id?: string
@@ -48,15 +49,15 @@ export default function ToolCallBlock({ id, name, arguments: args }: ToolCallBlo
         onMouseEnter={(e) => e.currentTarget.style.background = 'var(--color-bg-surface)'}
         onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
       >
-        <span style={{ color: 'var(--color-accent-yellow)', fontSize: 'var(--text-xs)' }}>⚡</span>
+        <span style={{ color: 'var(--color-accent-yellow)', display: 'inline-flex' }}><ZapIcon size={12} /></span>
         <span style={{ color: 'var(--color-text-primary)', fontSize: 'var(--text-sm)', fontFamily: 'var(--font-mono)' }}>{name}</span>
         {id && (
           <span style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', opacity: 0.7 }}>
             {id}
           </span>
         )}
-        <span style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-xs)', marginLeft: 'auto' }}>
-          {expanded ? '▾' : '▸'}
+        <span style={{ color: 'var(--color-text-secondary)', display: 'inline-flex', marginLeft: 'auto' }}>
+          {expanded ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
         </span>
       </button>
       {expanded && (
@@ -72,9 +73,12 @@ export default function ToolCallBlock({ id, name, arguments: args }: ToolCallBlo
                 borderRadius: 'var(--radius-sm)',
                 fontSize: 'var(--text-xs)',
                 cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 'var(--space-1)',
               }}
             >
-              {copied ? '✓ Copied' : 'Copy'}
+              {copied ? <><CheckIcon size={12} /> Copied</> : <><CopyIcon size={12} /> Copy</>}
             </button>
           </div>
           <pre style={{

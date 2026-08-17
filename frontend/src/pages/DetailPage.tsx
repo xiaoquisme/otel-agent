@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { fetchRequestDetail } from '../api/client'
 import type { RequestDetail } from '../api/types'
-import { Card, Tabs, TabList, Tab, TabPanel, Collapsible, CollapsibleTrigger, CollapsibleContent } from '../components/ui'
+import { Card, Tabs, TabList, Tab, TabPanel, Collapsible, CollapsibleTrigger, CollapsibleContent, ArrowLeftIcon } from '../components/ui'
 import MessageDisplay from '../components/MessageDisplay'
 import CodeBlock from '../components/ui/CodeBlock'
 
@@ -115,9 +115,12 @@ export default function DetailPage() {
           fontSize: 'var(--text-sm)',
           marginBottom: 'var(--space-4)',
           padding: 0,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--space-1)',
         }}
       >
-        ← Back to list
+        <ArrowLeftIcon size={14} /> Back to list
       </button>
 
       {/* Request Header */}

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import { Outlet } from 'react-router-dom'
+import { ClockIcon } from '../components/ui'
 
 export default function DashboardLayout() {
   const [detailPanelWidth, setDetailPanelWidth] = useState(40)
@@ -52,10 +53,7 @@ export default function DashboardLayout() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <circle cx="8" cy="8" r="6" />
-            <path d="M8 5v3l2 2" />
-          </svg>
+          <ClockIcon size={16} />
           <h1 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)' }}>
             otel-agent
           </h1>

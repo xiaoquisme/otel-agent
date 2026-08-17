@@ -1,4 +1,5 @@
 import { useRef, useCallback } from 'react'
+import { SearchIcon } from '../ui'
 
 interface FilterBarProps {
   search: string
@@ -42,24 +43,9 @@ export default function FilterBar({
     >
       {/* Search input */}
       <div style={{ position: 'relative', flex: '1 1 auto', maxWidth: '320px' }}>
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="var(--color-text-muted)"
-          strokeWidth="1.5"
-          style={{
-            position: 'absolute',
-            left: '8px',
-            top: '50%',
-            transform: 'translateY(-50%)',
-            pointerEvents: 'none',
-          }}
-        >
-          <circle cx="7" cy="7" r="5" />
-          <path d="M11 11l3.5 3.5" />
-        </svg>
+        <div style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--color-text-muted)' }}>
+          <SearchIcon size={14} />
+        </div>
         <input
           ref={searchRef}
           type="text"

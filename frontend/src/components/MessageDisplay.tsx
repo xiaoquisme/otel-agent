@@ -4,6 +4,7 @@ import rehypeHighlight from 'rehype-highlight'
 import type { StructuredMessage, MessageMetadata } from '../api/types'
 import ToolCallBlock from './ToolCallBlock'
 import ReasoningBlock from './ReasoningBlock'
+import { CheckIcon, CopyIcon } from './ui'
 
 interface MessageDisplayProps {
   messages: StructuredMessage[]
@@ -62,7 +63,7 @@ function MessageBubble({ message }: { message: StructuredMessage }) {
             padding: '2px 4px',
           }}
         >
-          {copied ? '✓ Copied' : 'Copy'}
+          {copied ? <><CheckIcon size={12} /> Copied</> : <><CopyIcon size={12} /> Copy</>}
         </button>
       </div>
 

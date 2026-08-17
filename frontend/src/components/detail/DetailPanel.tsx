@@ -4,6 +4,7 @@ import type { RequestDetail } from '../../api/types'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
+import { ZapIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon } from '../ui'
 
 interface DetailPanelProps {
   requestId: number | null
@@ -105,10 +106,10 @@ function ToolCallBlock({ name, arguments: args }: { name: string; arguments: str
           fontFamily: 'var(--font-mono)',
         }}
       >
-        <span style={{ color: 'var(--color-accent-yellow)' }}>⚡</span>
+        <span style={{ color: 'var(--color-accent-yellow)', display: 'inline-flex' }}><ZapIcon size={12} /></span>
         <span style={{ color: 'var(--color-text-primary)' }}>{name}</span>
-        <span style={{ color: 'var(--color-text-secondary)', marginLeft: 'auto' }}>
-          {expanded ? '▾' : '▸'}
+        <span style={{ color: 'var(--color-text-secondary)', display: 'inline-flex', marginLeft: 'auto' }}>
+          {expanded ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
         </span>
       </button>
       {expanded && (
@@ -219,9 +220,10 @@ export default function DetailPanel({ requestId, onClose }: DetailPanelProps) {
             cursor: 'pointer',
             fontSize: 'var(--text-sm)',
             padding: '2px 4px',
+            display: 'inline-flex',
           }}
         >
-          ×
+          <CloseIcon size={14} />
         </button>
       </div>
 
