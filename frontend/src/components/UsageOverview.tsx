@@ -21,11 +21,13 @@ export default function UsageOverview() {
   return (
     <div style={{ padding: 'var(--space-4) 0' }}>
       {/* Period tabs */}
-      <div style={{ display: 'flex', gap: 'var(--space-1)', marginBottom: 'var(--space-3)' }}>
+      <div style={{ display: 'flex', gap: 'var(--space-1)', marginBottom: 'var(--space-3)' }} role="tablist" aria-label="Usage time period">
         {PERIODS.map((p) => (
           <button
             key={p.key}
             onClick={() => setActivePeriod(p.key)}
+            role="tab"
+            aria-selected={activePeriod === p.key}
             style={{
               padding: 'var(--space-1) var(--space-3)',
               fontSize: 'var(--text-xs)',

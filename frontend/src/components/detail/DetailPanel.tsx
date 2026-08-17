@@ -213,14 +213,18 @@ export default function DetailPanel({ requestId, onClose }: DetailPanelProps) {
         </div>
         <button
           onClick={onClose}
+          aria-label="Close detail panel"
           style={{
             background: 'transparent',
             border: 'none',
             color: 'var(--color-text-secondary)',
             cursor: 'pointer',
-            fontSize: 'var(--text-sm)',
-            padding: '2px 4px',
+            padding: 'var(--space-1)',
             display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minWidth: '44px',
+            minHeight: '44px',
           }}
         >
           <CloseIcon size={14} />

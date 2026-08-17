@@ -132,7 +132,7 @@ export default function MessageDisplay({ messages, metadata }: MessageDisplayPro
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)' }} role="log" aria-label="Conversation messages">
       {metadata && <MetadataBar metadata={metadata} />}
       {messages.map((msg, i) => (
         <MessageBubble key={i} message={msg} />

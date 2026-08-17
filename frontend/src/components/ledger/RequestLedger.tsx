@@ -99,6 +99,9 @@ export default function RequestLedger({
       ref={containerRef}
       tabIndex={0}
       onKeyDown={handleKeyDown}
+      role="listbox"
+      aria-label="Request list"
+      aria-activedescendant={selectedId ? `request-row-${selectedId}` : undefined}
       style={{
         flex: 1,
         overflow: 'auto',
@@ -204,13 +207,16 @@ export default function RequestLedger({
         return (
           <div
             key={req.id}
+            id={`request-row-${req.id}`}
+            role="option"
+            aria-selected={isSelected}
             onClick={() => onSelect(req.id)}
             style={{
               display: 'grid',
               gridTemplateColumns: '36px 60px 50px 56px 1fr 60px 60px 100px',
               gap: '0',
               padding: '0 var(--space-3)',
-              height: '30px',
+              height: '36px',
               alignItems: 'center',
               borderBottom: '1px solid var(--color-border-muted)',
               background: isSelected ? 'var(--color-accent-blue-muted)' : 'transparent',

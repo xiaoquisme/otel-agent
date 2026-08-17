@@ -53,6 +53,7 @@ export default function FilterBar({
           onChange={(e) => onSearchChange(e.target.value)}
           onKeyDown={handleSearchKeyDown}
           placeholder="Search... ( / )"
+          aria-label="Search requests"
           style={{
             width: '100%',
             padding: '4px 8px 4px 28px',
@@ -71,6 +72,7 @@ export default function FilterBar({
       <select
         value={method}
         onChange={(e) => onMethodChange(e.target.value)}
+        aria-label="Filter by HTTP method"
         style={{
           padding: '4px 8px',
           fontSize: 'var(--text-xs)',
@@ -94,6 +96,7 @@ export default function FilterBar({
       <select
         value={status}
         onChange={(e) => onStatusChange(Number(e.target.value))}
+        aria-label="Filter by status code"
         style={{
           padding: '4px 8px',
           fontSize: 'var(--text-xs)',
