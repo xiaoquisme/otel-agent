@@ -209,3 +209,21 @@ def test_default_db_path_consistent_across_commands():
 
     assert proxy_args.db == dashboard_args.db == view_args.db, \
         f"Inconsistent default DB paths: proxy={proxy_args.db}, dashboard={dashboard_args.db}, view={view_args.db}"
+
+
+def test_handle_dashboard_startup_note_says_sqlite_not_duckdb(tmp_path, capsys, monkeypatch):
+    """Standalone dashboard without --proxy must not claim DuckDB access."""
+    import argparse
+    import uvicorn
+
+    from otel_agent.commands.dashboard import handle_dashboard
+
+    db_path = tmp_path / "telemetry.sqlite"
+    db_path.write_bytes(b"")
+    monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
+
+    args = argparse.Namespace(db=str(db_path), port=9090, proxy=None)
+    handle_dashboard(args)
+    captured = capsys.readouterr()
+    assert "DuckDB" not in captured.out
+    assert "Direct SQLite access used." in captured.out

@@ -79,7 +79,7 @@ def handle_dashboard(args) -> None:
     if proxy_port:
         print(f"Proxy: http://127.0.0.1:{proxy_port}")
     else:
-        print("Note: No --proxy specified. Direct DuckDB access used.")
+        print("Note: No --proxy specified. Direct SQLite access used.")
         print("If proxy is running, use --proxy <port> to avoid lock conflicts.")
     print("Ctrl+C to stop\n")
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
