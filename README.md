@@ -60,11 +60,11 @@ otel-agent proxy status       Check if gateway is running
 otel-agent proxy logs         View gateway log output
 otel-agent proxy --foreground Run in foreground (blocking)
 otel-agent routes             Display provider routing table
-otel-agent dashboard          Start web dashboard in background
-otel-agent dashboard stop     Stop the running dashboard
-otel-agent dashboard status   Check if dashboard is running
-otel-agent dashboard logs     View dashboard log output
-otel-agent dashboard --foreground  Run dashboard in foreground (blocking)
+otel-agent dashboard          Offline dashboard (only if proxy is stopped)
+otel-agent dashboard stop     Stop the standalone dashboard
+otel-agent dashboard status   Check if standalone dashboard is running
+otel-agent dashboard logs     View standalone dashboard logs
+otel-agent dashboard --foreground  Run standalone dashboard in foreground
 otel-agent view               View logged requests (CLI)
 otel-agent config path|show|edit  Manage configuration
 otel-agent auth login|status|import-xai  SuperGrok / xAI OAuth
@@ -73,16 +73,13 @@ otel-agent doctor             Check installation health
 
 ## Web Dashboard
 
+The gateway already serves the dashboard. After `otel-agent proxy`:
+
 ```bash
-otel-agent dashboard              # Start on :9090 in the background
-otel-agent dashboard -p 3000      # Custom port
-otel-agent dashboard -d logs.db   # Custom database
-otel-agent dashboard --foreground # Block in this terminal
-otel-agent dashboard stop         # Stop the background dashboard
-otel-agent dashboard status       # Show PID and port
+open http://localhost:45638
 ```
 
-Open `http://localhost:9090` in a browser.
+`otel-agent dashboard` starts a standalone viewer only when the proxy is stopped (historical / offline reads). If the proxy is running, the command prints the proxy URL and exits instead of occupying :9090.
 
 Features:
 - Request table with timestamp, method, URL, status, latency

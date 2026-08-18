@@ -19,6 +19,7 @@ from otel_agent.process import (
     cleanup_dashboard_pid,
     ensure_agent_dir,
     get_dashboard_status,
+    get_proxy_status,
     stop_dashboard,
     write_dashboard_pid,
 )
@@ -45,6 +46,12 @@ def _is_port_in_use(port: int) -> bool:
 
 def handle_dashboard_start(args) -> None:
     """Start the dashboard (background or foreground)."""
+    proxy = get_proxy_status()
+    if proxy is not None:
+        print(f"Dashboard is already served by the proxy at http://localhost:{proxy['port']}")
+        print("Standalone dashboard is only needed when the proxy is stopped.")
+        return
+
     db_path = Path(args.db).expanduser()
     if not db_path.exists():
         print(f"Database not found: {db_path}")
