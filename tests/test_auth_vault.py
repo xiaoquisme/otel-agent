@@ -92,7 +92,7 @@ def test_extract_hermes_pool_fallback():
 
 def test_missing_grant_raises(tmp_path):
     vault = tmp_path / "empty.json"
-    with pytest.raises(AuthError, match="import-xai"):
+    with pytest.raises(AuthError, match="auth login"):
         resolve_bearer(_oauth_provider(), path=vault)
 
 

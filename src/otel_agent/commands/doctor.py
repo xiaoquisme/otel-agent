@@ -74,7 +74,7 @@ def handle_doctor(args) -> None:
     if xai["logged_in"]:
         print(f"  xAI OAuth  ✅ logged in ({xai.get('imported_from') or 'vault'})")
     else:
-        print("  xAI OAuth  — not imported (otel-agent auth import-xai)")
+        print("  xAI OAuth  — not logged in (otel-agent auth login)")
 
     # Port
     port = getattr(args, 'port', 45638)

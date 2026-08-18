@@ -169,7 +169,7 @@ def _refresh(entry: dict[str, Any]) -> dict[str, Any]:
     tokens: dict[str, Any] = raw_tokens if isinstance(raw_tokens, dict) else {}
     refresh = str(tokens.get("refresh_token", "") or "").strip()
     if not refresh:
-        raise AuthError("xAI OAuth grant is missing refresh_token. Re-run: otel-agent auth import-xai")
+        raise AuthError("xAI OAuth grant is missing refresh_token. Re-run: otel-agent auth login")
     endpoint = _token_endpoint(entry)
     resp = httpx.post(
         endpoint,
@@ -183,7 +183,7 @@ def _refresh(entry: dict[str, Any]) -> dict[str, Any]:
     )
     if resp.status_code != 200:
         raise AuthError(
-            f"xAI OAuth refresh failed (HTTP {resp.status_code}). Re-run: otel-agent auth import-xai"
+            f"xAI OAuth refresh failed (HTTP {resp.status_code}). Re-run: otel-agent auth login"
         )
     payload = resp.json()
     access = str(payload.get("access_token", "") or "").strip()
@@ -219,7 +219,7 @@ def resolve_bearer(provider: Provider, *, path: Path | None = None) -> str:
             if provider.api_key:
                 return provider.api_key
             raise AuthError(
-                f"No xAI OAuth grant for '{provider.name}'. Run: otel-agent auth import-xai"
+                f"No xAI OAuth grant for '{provider.name}'. Run: otel-agent auth login"
             )
         raw_tokens = entry.get("tokens")
         tokens: dict[str, Any] = raw_tokens if isinstance(raw_tokens, dict) else {}

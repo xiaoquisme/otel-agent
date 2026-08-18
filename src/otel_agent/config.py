@@ -44,7 +44,9 @@ providers:
   #   api_key: YOUR_ANTHROPIC_KEY
   #   api_format: anthropic
 
-  # SuperGrok / xAI OAuth — no api_key. Import a grant first:
+  # SuperGrok / xAI OAuth — no api_key. Sign in first:
+  #   otel-agent auth login
+  # Or copy an existing Hermes/Grok grant:
   #   otel-agent auth import-xai
   # Then call model xai/grok-4.6. Tokens live in ~/.otel-agent/auth.json.
   # - name: xai
