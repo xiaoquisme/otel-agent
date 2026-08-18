@@ -43,6 +43,7 @@ The gateway routes requests based on the **model name prefix**:
 | `openrouter/openai/gpt-5.4` | OpenRouter provider (model: `openai/gpt-5.4`) |
 | `xiaomi/mimo-v-2.5` | Xiaomi provider |
 | `anthropic/claude-sonnet-4` | Anthropic provider |
+| `xai/grok-4.6` | xAI / SuperGrok |
 
 The first segment before `/` is always the **provider name** (looked up in config).
 Everything after the first `/` is the **upstream model name** forwarded to that provider.
@@ -136,27 +137,41 @@ Each provider needs:
 - `base_url`: upstream API base URL
 - `api_key`: authentication key (omit when using `auth: xai-oauth`)
 - `api_format`: `openai` or `anthropic` (default: `openai`)
-- `auth`: optional. `xai-oauth` spends a SuperGrok grant from `otel-agent auth login`
+- `auth`: optional. Use `xai-oauth` for SuperGrok (no API key)
 
-### SuperGrok / xAI subscription
+### SuperGrok / xAI
 
-Sign in without installing Hermes or Grok CLI:
+Use a SuperGrok subscription instead of an xAI API key. You need SuperGrok itself — X Premium+ is not enough.
 
 ```bash
+# Sign in (opens the browser; SSH sessions print a URL instead)
 otel-agent auth login
+
+# Already signed in with Hermes or `grok login`? Copy that grant once
+otel-agent auth import-xai
+
+# Check login
+otel-agent auth status
 ```
 
-This opens xAI's device-code page, then stores the grant in `~/.otel-agent/auth.json` (mode 0600) and adds a provider named `xai`. Clients use `xai/grok-4.6`.
-
-If you already signed in with Hermes (`hermes auth add xai-oauth`) or `grok login`:
+Then start the gateway and call Grok like any other provider:
 
 ```bash
-otel-agent auth import-xai
+otel-agent proxy
+
+curl http://localhost:45638/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"xai/grok-4.6","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-That copies the existing grant. Refresh never writes Hermes' `auth.json`.
+What this does:
 
-The proxy still binds `0.0.0.0` — a SuperGrok token is a personal subscription. Do not expose the proxy on a shared network.
+- Logs you into xAI in the browser (device-code). SSH / `--no-browser` just prints the URL and code.
+- Saves tokens in `~/.otel-agent/auth.json` and adds an `xai` provider to config. You do not paste an API key.
+- After login, use model `xai/grok-4.6`. Tokens refresh automatically while the proxy is running.
+- `import-xai` copies an existing Hermes / Grok CLI login. It does not change Hermes' files.
+
+Do not expose the proxy on a shared network — anyone who can reach it can spend your SuperGrok quota. If a request still 403s after a successful login, the account is not entitled (or is out of quota); see https://grok.com/?_s=usage. Re-login will not fix that.
 
 ## Client Usage
 
