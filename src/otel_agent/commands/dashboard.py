@@ -6,6 +6,7 @@ proxy's root URL — use ``otel-agent proxy`` instead.
 """
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 import sys
@@ -51,7 +52,7 @@ def handle_dashboard_start(args) -> None:
         return
 
     status = get_dashboard_status()
-    if status is not None:
+    if status is not None and status["pid"] != os.getpid():
         print(f"Dashboard already running (PID {status['pid']}).")
         print("Use 'otel-agent dashboard stop' to stop it first.")
         sys.exit(1)
