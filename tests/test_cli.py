@@ -366,6 +366,28 @@ def test_handle_dashboard_foreground_already_running_exits(tmp_path, capsys, mon
     assert called["uvicorn"] is False
 
 
+def test_handle_dashboard_foreground_ignores_own_pid(tmp_path, capsys, monkeypatch):
+    """Re-exec child must not treat the PID the parent just wrote as another instance."""
+    import argparse
+    import os
+
+    from otel_agent.commands import dashboard as dash_mod
+
+    db_path = tmp_path / "telemetry.sqlite"
+    db_path.write_bytes(b"")
+    monkeypatch.setattr(
+        dash_mod, "get_dashboard_status", lambda: {"pid": os.getpid(), "port": 9090}
+    )
+    called = {"uvicorn": False}
+    monkeypatch.setattr(dash_mod, "_run_foreground", lambda args: called.__setitem__("uvicorn", True))
+
+    args = argparse.Namespace(
+        db=str(db_path), port=9090, proxy=None, foreground=True, dashboard_action=None,
+    )
+    dash_mod.handle_dashboard(args)
+    assert called["uvicorn"] is True
+
+
 def test_handle_dashboard_already_running_exits(tmp_path, capsys, monkeypatch):
     import argparse
 
