@@ -604,3 +604,30 @@ async def test_streaming_model_name_prefix_in_db():
         assert row[0] == "openai/gpt-4", (
             f"Expected prefixed model_name 'openai/gpt-4', got {row[0]!r}"
         )
+
+
+def test_v1_models_is_json_not_spa_html(tmp_path):
+    """GET /v1/models must not be swallowed by the dashboard SPA fallback."""
+    from fastapi.testclient import TestClient
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "providers:\n"
+        "  - name: openai\n"
+        "    base_url: https://api.openai.com/v1\n"
+        "    api_key: test-key\n"
+        "    api_format: openai\n"
+    )
+    config = Config(config_path)
+    telemetry = TelemetryLogger(tmp_path / "t.sqlite")
+    app = create_app(config, telemetry)
+    with TestClient(app) as client:
+        models = client.get("/v1/models")
+        assert models.headers["content-type"].startswith("application/json"), models.text[:200]
+        body = models.json()
+        assert body["object"] == "list"
+        assert any(item.get("id") == "auto" for item in body["data"])
+
+        health = client.get("/health")
+        assert health.json() == {"status": "ok"}
+    telemetry.close()

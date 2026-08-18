@@ -64,15 +64,6 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     set_dashboard_api(dashboard_api)
     app.include_router(dashboard_router)
 
-    _pkg_dir = Path(__file__).parent  # .../otel_agent
-    frontend_dist = find_frontend_dist(
-        _pkg_dir / "dashboard" / "frontend_dist",
-        _pkg_dir.parent.parent / "frontend" / "dist",
-    )
-    register_frontend(app, frontend_dist)
-    if frontend_dist is None:
-        register_legacy_index(app, Path(__file__).parent / "dashboard" / "index.html")
-
     @app.on_event("shutdown")
     async def shutdown() -> None:
         await client.aclose()
@@ -231,6 +222,16 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     @app.get("/health")
     async def health() -> dict:
         return {"status": "ok"}
+
+    # SPA catch-all must be last so GET /v1/models and /health stay JSON.
+    _pkg_dir = Path(__file__).parent
+    frontend_dist = find_frontend_dist(
+        _pkg_dir / "dashboard" / "frontend_dist",
+        _pkg_dir.parent.parent / "frontend" / "dist",
+    )
+    register_frontend(app, frontend_dist)
+    if frontend_dist is None:
+        register_legacy_index(app, Path(__file__).parent / "dashboard" / "index.html")
 
     return app
 
