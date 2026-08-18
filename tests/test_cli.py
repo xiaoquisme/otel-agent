@@ -241,6 +241,7 @@ def test_handle_dashboard_startup_note_says_sqlite_not_duckdb(tmp_path, capsys, 
     monkeypatch.setattr(uvicorn, "run", lambda *a, **k: None)
     from otel_agent.commands import dashboard as dash_mod
     monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: None)
+    monkeypatch.setattr(dash_mod, "get_proxy_status", lambda: None)
     monkeypatch.setattr(dash_mod, "_is_port_in_use", lambda port: False)
 
     args = argparse.Namespace(
@@ -297,6 +298,7 @@ def test_handle_dashboard_background_prints_url_and_pid(tmp_path, capsys, monkey
     monkeypatch.setattr(dash_mod, "DASHBOARD_LOG_FILE", log_file)
     monkeypatch.setattr(dash_mod, "DASHBOARD_PORT_FILE", port_file)
     monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: None)
+    monkeypatch.setattr(dash_mod, "get_proxy_status", lambda: None)
     monkeypatch.setattr(dash_mod, "_is_port_in_use", lambda port: False)
     monkeypatch.setattr(dash_mod, "ensure_agent_dir", lambda: tmp_path)
     monkeypatch.setattr(dash_mod, "write_dashboard_pid", lambda pid: written.setdefault("pid", pid))
@@ -321,12 +323,64 @@ def test_handle_dashboard_background_prints_url_and_pid(tmp_path, capsys, monkey
     assert port_file.read_text() == "9090"
 
 
+def test_handle_dashboard_defers_to_running_proxy(tmp_path, capsys, monkeypatch):
+    """When the proxy already serves the SPA, do not occupy :9090."""
+    import argparse
+
+    from otel_agent.commands import dashboard as dash_mod
+
+    db_path = tmp_path / "telemetry.sqlite"
+    db_path.write_bytes(b"")
+    monkeypatch.setattr(dash_mod, "get_proxy_status", lambda: {"pid": 77, "port": 45638})
+    monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: None)
+    called = {"popen": False, "uvicorn": False}
+    monkeypatch.setattr(
+        dash_mod.subprocess, "Popen", lambda *a, **k: called.__setitem__("popen", True)
+    )
+    monkeypatch.setattr(
+        dash_mod, "_run_foreground", lambda args: called.__setitem__("uvicorn", True)
+    )
+
+    args = argparse.Namespace(
+        db=str(db_path), port=9090, proxy=None, foreground=False, dashboard_action=None,
+    )
+    dash_mod.handle_dashboard(args)
+    captured = capsys.readouterr()
+    assert "http://localhost:45638" in captured.out
+    assert called["popen"] is False
+    assert called["uvicorn"] is False
+
+
+def test_handle_dashboard_foreground_defers_to_running_proxy(tmp_path, capsys, monkeypatch):
+    import argparse
+
+    from otel_agent.commands import dashboard as dash_mod
+
+    db_path = tmp_path / "telemetry.sqlite"
+    db_path.write_bytes(b"")
+    monkeypatch.setattr(dash_mod, "get_proxy_status", lambda: {"pid": 77, "port": 45638})
+    monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: None)
+    called = {"uvicorn": False}
+    monkeypatch.setattr(
+        dash_mod, "_run_foreground", lambda args: called.__setitem__("uvicorn", True)
+    )
+
+    args = argparse.Namespace(
+        db=str(db_path), port=9090, proxy=None, foreground=True, dashboard_action=None,
+    )
+    dash_mod.handle_dashboard(args)
+    captured = capsys.readouterr()
+    assert "http://localhost:45638" in captured.out
+    assert called["uvicorn"] is False
+
+
 def test_handle_dashboard_missing_db_does_not_spawn(tmp_path, capsys, monkeypatch):
     import argparse
 
     from otel_agent.commands import dashboard as dash_mod
 
     called = {"popen": False}
+    monkeypatch.setattr(dash_mod, "get_proxy_status", lambda: None)
     monkeypatch.setattr(
         dash_mod.subprocess, "Popen", lambda *a, **k: called.__setitem__("popen", True)
     )
@@ -352,6 +406,7 @@ def test_handle_dashboard_foreground_already_running_exits(tmp_path, capsys, mon
     db_path = tmp_path / "telemetry.sqlite"
     db_path.write_bytes(b"")
     monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: {"pid": 99, "port": 9090})
+    monkeypatch.setattr(dash_mod, "get_proxy_status", lambda: None)
     called = {"uvicorn": False}
     monkeypatch.setattr(dash_mod, "_run_foreground", lambda args: called.__setitem__("uvicorn", True))
 
@@ -378,6 +433,8 @@ def test_handle_dashboard_foreground_ignores_own_pid(tmp_path, capsys, monkeypat
     monkeypatch.setattr(
         dash_mod, "get_dashboard_status", lambda: {"pid": os.getpid(), "port": 9090}
     )
+    monkeypatch.setattr(dash_mod, "get_proxy_status", lambda: None)
+    monkeypatch.setattr(dash_mod, "_is_port_in_use", lambda port: False)
     called = {"uvicorn": False}
     monkeypatch.setattr(dash_mod, "_run_foreground", lambda args: called.__setitem__("uvicorn", True))
 
@@ -396,6 +453,7 @@ def test_handle_dashboard_already_running_exits(tmp_path, capsys, monkeypatch):
     db_path = tmp_path / "telemetry.sqlite"
     db_path.write_bytes(b"")
     monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: {"pid": 99, "port": 9090})
+    monkeypatch.setattr(dash_mod, "get_proxy_status", lambda: None)
     called = {"popen": False}
     monkeypatch.setattr(
         dash_mod.subprocess, "Popen", lambda *a, **k: called.__setitem__("popen", True)
@@ -420,6 +478,7 @@ def test_handle_dashboard_port_in_use_exits(tmp_path, capsys, monkeypatch):
     db_path = tmp_path / "telemetry.sqlite"
     db_path.write_bytes(b"")
     monkeypatch.setattr(dash_mod, "get_dashboard_status", lambda: None)
+    monkeypatch.setattr(dash_mod, "get_proxy_status", lambda: None)
     monkeypatch.setattr(dash_mod, "_is_port_in_use", lambda port: True)
     called = {"popen": False}
     monkeypatch.setattr(
