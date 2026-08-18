@@ -70,6 +70,21 @@ def test_parser_doctor_subcommand():
     assert args.port == 45638
 
 
+def test_parser_auth_import_xai():
+    parser = build_parser()
+    args = parser.parse_args(["auth", "import-xai"])
+    assert args.command == "auth"
+    assert args.auth_action == "import-xai"
+
+
+def test_parser_auth_login_no_browser():
+    parser = build_parser()
+    args = parser.parse_args(["auth", "login", "--no-browser"])
+    assert args.command == "auth"
+    assert args.auth_action == "login"
+    assert args.no_browser is True
+
+
 def test_version_flag(capsys):
     parser = build_parser()
     try:

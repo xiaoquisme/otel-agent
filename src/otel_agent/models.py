@@ -65,7 +65,9 @@ async def fetch_provider_models(
     or is unreachable.
     """
     url = f"{provider.base_url.rstrip('/')}/models"
-    headers = {"Authorization": f"Bearer {provider.api_key}"}
+    from otel_agent.auth_vault import resolve_bearer
+
+    headers = {"Authorization": f"Bearer {resolve_bearer(provider)}"}
 
     try:
         resp = await client.get(url, headers=headers, timeout=10.0)

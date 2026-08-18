@@ -103,6 +103,18 @@ def build_parser() -> argparse.ArgumentParser:
     logs_p.add_argument("-F", "--follow", action="store_true", help="Stream logs in real-time")
     logs_p.add_argument("-n", "--lines", type=int, default=50, help="Number of recent lines (default: 50)")
 
+    # --- auth ---
+    auth_p = sub.add_parser("auth", help="Sign in to SuperGrok / xAI OAuth")
+    auth_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
+    auth_p.add_argument(
+        "--no-browser", action="store_true",
+        help="Do not open a browser during auth login",
+    )
+    auth_p.add_argument(
+        "auth_action", nargs="?", default="status", choices=["status", "login", "import-xai"],
+        help="status (default), login (device-code), or import-xai",
+    )
+
     return parser
 
 
@@ -136,6 +148,9 @@ def main() -> None:
     elif args.command == "dashboard":
         from otel_agent.commands.dashboard import handle_dashboard
         handle_dashboard(args)
+    elif args.command == "auth":
+        from otel_agent.commands.auth_cmd import handle_auth
+        handle_auth(args)
     else:
         parser.print_help()
         sys.exit(1)
