@@ -104,7 +104,7 @@ export default function DetailPage() {
         </span>
         <button
           type="button"
-          onClick={() => downloadRequestJson(detail.id)}
+          onClick={() => downloadRequestJson(detail)}
           style={{
             flexShrink: 0,
             fontSize: 'var(--text-xs)',

@@ -40,6 +40,32 @@ export function exportData(format: 'csv' | 'json', params: RequestListParams = {
   window.location.href = `${API_BASE}/export?format=${format}&${query.toString()}`
 }
 
-export function downloadRequestJson(id: number): void {
-  window.location.href = `${API_BASE}/requests/${id}/download`
+function maybeParseJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  const text = value.trim()
+  if (!text) return value
+  try {
+    return JSON.parse(text)
+  } catch {
+    return value
+  }
+}
+
+export function downloadRequestJson(detail: RequestDetail): void {
+  const payload = {
+    ...detail,
+    request_body: maybeParseJson(detail.request_body),
+    response_body: maybeParseJson(detail.response_body),
+    request_headers: maybeParseJson(detail.request_headers),
+    response_headers: maybeParseJson(detail.response_headers),
+  }
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `request-${detail.id}.json`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
 }
