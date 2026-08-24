@@ -466,6 +466,47 @@ def test_route_request_invalid_id(tmp_path):
     api.close()
 
 
+def test_route_request_download_json(tmp_path):
+    db = tmp_path / "test.sqlite"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    resp = client.get("/api/requests/2/download")
+    assert resp.status_code == 200
+    assert "application/json" in resp.headers.get("content-type", "")
+    disposition = resp.headers.get("content-disposition", "")
+    assert "attachment" in disposition
+    assert "request-2.json" in disposition
+    body = resp.json()
+    assert body["id"] == 2
+    assert body["request_body"] == {"model": "gpt-4"}
+    assert body["response_body"] == {"choices": []}
+    api.close()
+
+
+def test_route_request_download_keeps_non_json_body(tmp_path):
+    db = tmp_path / "test.sqlite"
+    _create_test_db(db, 1)
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE requests SET request_body = ? WHERE id = 1", ("not-json",))
+    conn.commit()
+    conn.close()
+    client, api = _make_client(db)
+    resp = client.get("/api/requests/1/download")
+    assert resp.status_code == 200
+    assert resp.json()["request_body"] == "not-json"
+    api.close()
+
+
+def test_route_request_download_not_found(tmp_path):
+    db = tmp_path / "test.sqlite"
+    _create_test_db(db, 3)
+    client, api = _make_client(db)
+    resp = client.get("/api/requests/999/download")
+    assert resp.status_code == 404
+    assert "attachment" not in resp.headers.get("content-disposition", "")
+    api.close()
+
+
 def test_route_export_csv(tmp_path):
     db = tmp_path / "test.sqlite"
     _create_test_db(db, 5)

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { fetchRequestDetail } from '../api/client'
+import { fetchRequestDetail, downloadRequestJson } from '../api/client'
 import type { RequestDetail } from '../api/types'
 import { Skeleton, CodeBlock } from '../components/ui'
 import { buildTrajectoryCells } from '../components/trajectory/buildTrajectoryCells'
@@ -102,6 +102,22 @@ export default function DetailPage() {
           {detail.response_status} · {detail.latency_ms?.toFixed(0) ?? 0}ms
           {detail.model_name ? ` · ${detail.model_name}` : ''}
         </span>
+        <button
+          type="button"
+          onClick={() => downloadRequestJson(detail.id)}
+          style={{
+            flexShrink: 0,
+            fontSize: 'var(--text-xs)',
+            color: 'var(--color-text-secondary)',
+            background: 'var(--color-bg-base)',
+            border: '1px solid var(--color-border-default)',
+            borderRadius: 'var(--radius-sm)',
+            padding: 'var(--space-1) var(--space-2)',
+            cursor: 'pointer',
+          }}
+        >
+          Download JSON
+        </button>
       </header>
 
       {cells.length === 0 ? (

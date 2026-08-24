@@ -39,3 +39,7 @@ export function exportData(format: 'csv' | 'json', params: RequestListParams = {
 
   window.location.href = `${API_BASE}/export?format=${format}&${query.toString()}`
 }
+
+export function downloadRequestJson(id: number): void {
+  window.location.href = `${API_BASE}/requests/${id}/download`
+}
