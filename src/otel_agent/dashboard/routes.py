@@ -1,9 +1,10 @@
 """FastAPI router for the otel-agent dashboard.
 
-Provides 6 endpoints:
+Provides 7 endpoints:
   GET /              — index.html (served by server.py mount)
   GET /api/requests  — paginated request list
   GET /api/requests/{id} — single request detail with structured messages
+  GET /api/requests/{id}/download — pretty-printed JSON attachment
   GET /api/export    — CSV/JSON export
   GET /api/cache/clear — clear the COUNT cache
   GET /api/usage     — usage summary for a time range
@@ -72,6 +73,46 @@ def get_request_detail(request_id: int) -> JSONResponse:
     if result is None:
         return JSONResponse({"error": "Request not found"}, status_code=404)
     return JSONResponse(result)
+
+
+def _maybe_parse_json(value: Any) -> Any:
+    """Parse JSON text in place; leave non-JSON strings and other types as-is."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return value
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return value
+
+
+def downloadable_request(record: dict) -> dict:
+    """Copy a structured request and decode JSON body/header strings."""
+    payload = dict(record)
+    for field in ("request_body", "response_body", "request_headers", "response_headers"):
+        if field in payload:
+            payload[field] = _maybe_parse_json(payload[field])
+    return payload
+
+
+@router.get("/requests/{request_id}/download")
+def download_request(request_id: int) -> Response:
+    """Pretty-printed JSON attachment for a single request."""
+    api = get_api()
+    result = api.get_structured_request(request_id)
+    if result is None:
+        return JSONResponse({"error": "Request not found"}, status_code=404)
+    payload = downloadable_request(result)
+    content = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="request-{request_id}.json"',
+        },
+    )
 
 
 @router.get("/export")
