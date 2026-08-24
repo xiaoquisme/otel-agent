@@ -33,7 +33,7 @@ Keep one token name per job:
 - `*-hover` — a darker (or otherwise still contrasting) fill for inverse-text buttons
 - syntax text — a readable accent, never a muted surface token
 
-After changing tokens, rebuild and replace `src/otel_agent/dashboard/frontend_dist/` from `frontend/dist`. The Python dashboard serves the packaged assets, not Vite source.
+After changing tokens, rebuild and commit `src/otel_agent/dashboard/frontend_dist/` from a fresh `frontend/dist`. The Python dashboard serves those packaged assets, not Vite source. `uv tool install` keeps the committed `frontend_dist` and will not overwrite it with a leftover `frontend/dist`.
 
 ## Why This Matters
 
