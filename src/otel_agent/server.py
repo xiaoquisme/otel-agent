@@ -45,7 +45,13 @@ def normalize_usage(response: dict | str) -> dict[str, int | None]:
         total_tokens = sum(values) if values else None
     return {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens}
 
-from otel_agent.provider_utils import AUTH_HEADERS, build_upstream_url, build_request_headers, prefix_model_name
+from otel_agent.provider_utils import (
+    AUTH_HEADERS,
+    build_upstream_url,
+    build_image_upstream_url,
+    build_request_headers,
+    prefix_model_name,
+)
 
 
 def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
@@ -184,6 +190,54 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             client, url, headers, upstream_body,
             provider, telemetry, request, start_time,
             source_format="anthropic", target_format=provider.api_format,
+            request_body=original_body, log_body=log_body,
+        )
+
+    # ------------------------------------------------------------------
+    # Image generation endpoint (OpenAI-compatible)
+    # ------------------------------------------------------------------
+    @app.post("/v1/images/generations", response_model=None)
+    async def image_generations(request: Request):
+        """OpenAI-compatible image generation endpoint.
+
+        Only supported for OpenAI-format providers. Anthropic providers
+        return 400 since they don't have an image generation API.
+        """
+        body = await request.json()
+        model = body.get("model", "")
+
+        try:
+            provider_name, upstream_model = parse_model(model)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        try:
+            provider = resolve_provider(provider_name, config)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        # Anthropic doesn't have an image generation API
+        if provider.api_format == "anthropic":
+            return JSONResponse(
+                {"error": {"message": f"Provider '{provider.name}' uses Anthropic API format which does not support image generation. Route to an OpenAI-format provider instead.", "type": "invalid_request_error"}},
+                status_code=400,
+            )
+
+        # Prepare upstream body
+        upstream_body = dict(body)
+        if upstream_model:
+            upstream_body["model"] = upstream_model
+
+        url = build_image_upstream_url(provider)
+        headers = build_request_headers(provider)
+        start_time = time.monotonic()
+        original_body = json.dumps(body)
+        log_body = config.log_request_body
+
+        return await _handle_non_streaming(
+            client, url, headers, upstream_body,
+            provider, telemetry, request, start_time,
+            source_format="openai", target_format="openai",
             request_body=original_body, log_body=log_body,
         )
 

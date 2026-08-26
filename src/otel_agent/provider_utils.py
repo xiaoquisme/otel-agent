@@ -17,6 +17,12 @@ def build_upstream_url(provider: Provider) -> str:
     return f"{base}/{path}"
 
 
+def build_image_upstream_url(provider: Provider) -> str:
+    """Build the upstream URL for image generation (OpenAI /v1/images/generations)."""
+    base = provider.base_url.rstrip("/")
+    return f"{base}/images/generations"
+
+
 def build_request_headers(provider: Provider) -> dict[str, str]:
     """Build auth + content-type headers for a provider."""
     from otel_agent.auth_vault import resolve_bearer

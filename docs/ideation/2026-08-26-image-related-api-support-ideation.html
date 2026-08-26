@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ideation: Image-Related APIs for otel-agent</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1d27;
+  --surface-2: #232733;
+  --border: #2e3345;
+  --text: #e4e6ef;
+  --text-muted: #8b8fa3;
+  --accent: #6c8aff;
+  --accent-soft: rgba(108,138,255,0.12);
+  --warn: #f0a050;
+  --warn-soft: rgba(240,160,80,0.12);
+  --success: #50c878;
+  --success-soft: rgba(80,200,120,0.12);
+  --radius: 8px;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 15px; line-height: 1.65; }
+.container { max-width: 900px; margin: 0 auto; padding: 48px 24px 80px; }
+header { margin-bottom: 40px; }
+h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+.meta { color: var(--text-muted); font-size: 13px; display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+.meta span { display: inline-flex; align-items: center; gap: 4px; }
+.stats { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 14px; font-size: 13px; }
+.stat strong { color: var(--accent); }
+section { margin-bottom: 40px; }
+h2 { font-size: 20px; font-weight: 600; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h3 { font-size: 15px; color: var(--text-muted); font-weight: 500; margin-bottom: 8px; }
+.jump-list { list-style: none; margin-bottom: 24px; }
+.jump-list li { padding: 4px 0; }
+.jump-list a { color: var(--accent); text-decoration: none; font-size: 14px; }
+.jump-list a:hover { text-decoration: underline; }
+.idea-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 20px; }
+.idea-card h3 { color: var(--text); font-size: 17px; font-weight: 600; margin-bottom: 12px; }
+.idea-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.chip { font-size: 12px; padding: 3px 10px; border-radius: 20px; font-weight: 500; }
+.chip-axis { background: var(--accent-soft); color: var(--accent); }
+.chip-conf { background: var(--success-soft); color: var(--success); }
+.chip-cx { background: var(--warn-soft); color: var(--warn); }
+.field { margin-bottom: 10px; }
+.field-label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+.field-value { font-size: 14px; }
+.basis { font-family: var(--mono); font-size: 13px; background: var(--surface-2); padding: 8px 12px; border-radius: 4px; border-left: 3px solid var(--accent); }
+.basis-tag { color: var(--accent); font-weight: 600; }
+.rejection-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.rejection-table th { text-align: left; padding: 8px 12px; border-bottom: 2px solid var(--border); color: var(--text-muted); font-weight: 600; }
+.rejection-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.rejection-table td:first-child { color: var(--text-muted); width: 30px; }
+footer { margin-top: 60px; padding-top: 16px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+<header>
+<h1>Ideation: Image-Related APIs for otel-agent</h1>
+<div class="meta">
+<span>2026-08-26</span>
+<span>topic: image-related-api-support</span>
+<span>mode: repo-grounded</span>
+</div>
+<div class="stats">
+<div class="stat"><strong>38</strong> raw ideas</div>
+<div class="stat"><strong>7</strong> survivors</div>
+<div class="stat"><strong>31</strong> cut</div>
+<div class="stat"><strong>5</strong> axes</div>
+</div>
+</header>
+
+<section>
+<h2>Grounding Context</h2>
+<div class="idea-card">
+<h3>Codebase Context</h3>
+<div class="field">
+<div class="field-value">Python 3.10+ FastAPI LLM API gateway (otel-agent) with React/TypeScript dashboard. DuckDB/SQLite storage.</div>
+</div>
+<div class="field">
+<div class="field-label">Critical Gap</div>
+<div class="field-value">converter.py only handles text content parts. All 6 converter functions filter type=="text" and silently drop image_url/image blocks. No image generation endpoints exist. Dashboard blind to image content.</div>
+</div>
+<div class="field">
+<div class="field-label">External Context</div>
+<div class="field-value">OpenAI: image_url content parts with url field (base64 data URIs or HTTP URLs). Anthropic: image content blocks with source field (type: "base64" or "url"). Formats are structurally incompatible — require active transformation, not passthrough.</div>
+</div>
+</div>
+</section>
+
+<section>
+<h2>Topic Axes</h2>
+<div class="field">
+<div class="field-value">1. Multimodal chat content — image_url/image content parts in chat completion requests and responses</div>
+</div>
+<div class="field">
+<div class="field-value">2. Cross-format image conversion — converting image content between OpenAI and Anthropic formats</div>
+</div>
+<div class="field">
+<div class="field-value">3. Image generation proxy — new endpoint for /v1/images/generations</div>
+</div>
+<div class="field">
+<div class="field-value">4. Image telemetry and dashboard — logging, storing, and displaying image-related requests</div>
+</div>
+<div class="field">
+<div class="field-value">5. Streaming with image content — handling image content in streaming responses</div>
+</div>
+</section>
+
+<section>
+<h2>Ranked Ideas</h2>
+<ul class="jump-list">
+<li><a href="#idea-1">1. Unified ContentPart Abstraction</a></li>
+<li><a href="#idea-2">2. Silent Image Stripping Fix</a></li>
+<li><a href="#idea-3">3. Image Generation Proxy</a></li>
+<li><a href="#idea-4">4. Image-Aware Auto-Routing</a></li>
+<li><a href="#idea-5">5. Telemetry Body Decomposition</a></li>
+<li><a href="#idea-6">6. Dashboard Image Content Lens</a></li>
+<li><a href="#idea-7">7. Content-Aware Streaming Frame</a></li>
+</ul>
+
+<div class="idea-card" id="idea-1">
+<h3>1. Unified ContentPart Abstraction</h3>
+<div class="idea-meta">
+<span class="chip chip-axis">Cross-format image conversion</span>
+<span class="chip chip-conf">Conf 85%</span>
+<span class="chip chip-cx">Cx M</span>
+</div>
+<div class="field">
+<div class="field-label">Description</div>
+<div class="field-value">Introduce a single ContentPart union type with factory methods (from_openai, from_anthropic, serialize) that all 6 converter functions, message_parser, and logger consume. Today every function independently filters type=="text" and discards the rest — converter.py:27, message_parser.py:46, message_parser.py:194. Adding any new content type (images now, audio later) requires writing one converter, not touching 6+ files.</div>
+</div>
+<div class="field">
+<div class="field-label">Basis</div>
+<div class="basis"><span class="basis-tag">reasoned:</span> Each of the 6 converter functions and 4 parser branches independently reimplements the same text-only filter; a shared abstraction eliminates this duplication and creates a single extension point.</div>
+</div>
+<div class="field">
+<div class="field-label">Rationale</div>
+<div class="field-value">Highest-leverage single investment. Once ContentPart exists, every future content type plugs in at one location. Without it, each new type requires editing converter.py, message_parser.py, render.py, and logger.py separately — compounding maintenance cost.</div>
+</div>
+<div class="field">
+<div class="field-label">Downsides</div>
+<div class="field-value">Requires refactoring all 6 converter functions and the parser. Risk of regression during migration if tests are insufficient (and currently there are zero multimodal tests).</div>
+</div>
+</div>
+
+<div class="idea-card" id="idea-2">
+<h3>2. Silent Image Stripping Fix</h3>
+<div class="idea-meta">
+<span class="chip chip-axis">Cross-format image conversion</span>
+<span class="chip chip-conf">Conf 90%</span>
+<span class="chip chip-cx">Cx S</span>
+</div>
+<div class="field">
+<div class="field-label">Description</div>
+<div class="field-value">Fix the core correctness bug: converter.py silently drops image_url content parts during cross-format conversion. The gateway returns a successful response but the upstream provider never sees the images. This is a correctness bug disguised as a feature gap — users get worse answers and blame the model.</div>
+</div>
+<div class="field">
+<div class="field-label">Basis</div>
+<div class="basis"><span class="basis-tag">direct:</span> converter.py:27-30 — system message content array uses text-only flatten. converter.py:64-89 — anthropic_to_openai_request forwards content verbatim but formats are structurally incompatible. All 6 functions filter type=="text".</div>
+</div>
+<div class="field">
+<div class="field-label">Rationale</div>
+<div class="field-value">Without this fix, the gateway actively harms quality while appearing healthy. Every multimodal request through a cross-format path produces degraded results with no diagnostic signal.</div>
+</div>
+<div class="field">
+<div class="field-label">Downsides</div>
+<div class="field-value">The fix requires non-trivial transformation logic (restructuring source objects into data URIs). Must handle both base64 and URL source types. Testing is critical but currently absent.</div>
+</div>
+</div>
+
+<div class="idea-card" id="idea-3">
+<h3>3. Image Generation Proxy</h3>
+<div class="idea-meta">
+<span class="chip chip-axis">Image generation proxy</span>
+<span class="chip chip-conf">Conf 80%</span>
+<span class="chip chip-cx">Cx M</span>
+</div>
+<div class="field">
+<div class="field-label">Description</div>
+<div class="field-value">Add /v1/images/generations endpoint following the existing endpoint pattern in server.py (route decorator → parse body → resolve provider → forward). Users who need DALL-E or similar must call the provider API directly today, bypassing all gateway value: logging, auto-routing, rate limiting, cost tracking.</div>
+</div>
+<div class="field">
+<div class="field-label">Basis</div>
+<div class="basis"><span class="basis-tag">direct:</span> server.py shows clear pattern for new endpoints. config.py supports provider api_format detection. No /v1/images endpoint exists in codebase.</div>
+</div>
+<div class="field">
+<div class="field-label">Rationale</div>
+<div class="field-value">The gateway's value proposition is being a single entry point for all LLM operations. Image generation is a major LLM capability. Every call that bypasses the gateway is a missed data point and a missed auto-routing opportunity.</div>
+</div>
+<div class="field">
+<div class="field-label">Downsides</div>
+<div class="field-value">Image generation APIs differ significantly from chat APIs (synchronous, larger payloads, different response shapes). Only OpenAI supports this endpoint — Anthropic and other providers don't have image generation APIs.</div>
+</div>
+</div>
+
+<div class="idea-card" id="idea-4">
+<h3>4. Image-Aware Auto-Routing</h3>
+<div class="idea-meta">
+<span class="chip chip-axis">Multimodal chat content</span>
+<span class="chip chip-conf">Conf 75%</span>
+<span class="chip chip-cx">Cx M</span>
+</div>
+<div class="field">
+<div class="field-label">Description</div>
+<div class="field-value">Fix classifier blindness to images (classifier.py:39-49 _extract_text_content filters to text) and add a Provider capabilities set (vision, image_generation) for routing decisions. A request with image_url gets routed to a vision-capable model, not one that silently drops the image.</div>
+</div>
+<div class="field">
+<div class="field-label">Basis</div>
+<div class="basis"><span class="basis-tag">direct:</span> classifier.py:39-49 — _extract_text_content strips everything that isn't text. auto_handler.py routes by task classification alone — no image awareness.</div>
+</div>
+<div class="field">
+<div class="field-label">Rationale</div>
+<div class="field-value">The auto-router's core promise is picking the right model. A vision request gets the same complexity score as text, potentially routing to a text-only model that can't process images — a functional failure.</div>
+</div>
+<div class="field">
+<div class="field-label">Downsides</div>
+<div class="field-value">Requires updating the classifier, auto_handler, and config.py. Provider capability metadata must be maintained per provider.</div>
+</div>
+</div>
+
+<div class="idea-card" id="idea-5">
+<h3>5. Telemetry Body Decomposition</h3>
+<div class="idea-meta">
+<span class="chip chip-axis">Image telemetry and dashboard</span>
+<span class="chip chip-conf">Conf 70%</span>
+<span class="chip chip-cx">Cx M</span>
+</div>
+<div class="field">
+<div class="field-label">Description</div>
+<div class="field-value">Replace opaque string storage of request/response bodies with a decomposition layer that separates content payload from metadata. Today logger.py stores request_body and response_body as TEXT, and server.py truncates at 500 KB — which silently drops base64 image data. Decomposition extracts structured fields (model, image count, image sizes) while storing raw body separately.</div>
+</div>
+<div class="field">
+<div class="field-label">Basis</div>
+<div class="basis"><span class="basis-tag">direct:</span> logger.py:28-55 stores as opaque TEXT. server.py:430,442 truncates at 500 KB. No image columns in RequestRecord schema.</div>
+</div>
+<div class="field">
+<div class="field-label">Rationale</div>
+<div class="field-value">Once bodies are decomposed, you can query "how many image requests hit provider X" without parsing raw JSON. This powers cost attribution, quality dashboards, and debugging — three future capabilities from one infrastructure investment.</div>
+</div>
+<div class="field">
+<div class="field-label">Downsides</div>
+<div class="field-value">Schema migration required for DuckDB and SQLite. Must maintain backward compatibility with existing data. Decomposition logic adds processing overhead on the write path.</div>
+</div>
+</div>
+
+<div class="idea-card" id="idea-6">
+<h3>6. Dashboard Image Content Lens</h3>
+<div class="idea-meta">
+<span class="chip chip-axis">Image telemetry and dashboard</span>
+<span class="chip chip-conf">Conf 65%</span>
+<span class="chip chip-cx">Cx L</span>
+</div>
+<div class="field">
+<div class="field-label">Description</div>
+<div class="field-value">Build a specialized rendering mode in the dashboard that extracts and displays image content: thumbnails for images in chat messages, side-by-side diff views for image generation requests, and a gallery view of all images processed in a time window. Makes visual content inspection trivial for operators.</div>
+</div>
+<div class="field">
+<div class="field-label">Basis</div>
+<div class="basis"><span class="basis-tag">direct:</span> message_parser.py only extracts text. specs/016-llm-body-viewer/research.md documents "[Image content]" placeholder strategy. No &lt;img&gt; tags exist in frontend.</div>
+</div>
+<div class="field">
+<div class="field-label">Rationale</div>
+<div class="field-value">The dashboard IS the product for observability. Without image display, any multimodal debugging falls back to raw JSON inspection — a friction point that discourages adoption.</div>
+</div>
+<div class="field">
+<div class="field-label">Downsides</div>
+<div class="field-value">Frontend changes in React/TypeScript. Must handle large base64 payloads efficiently. Privacy considerations for displaying image content.</div>
+</div>
+</div>
+
+<div class="idea-card" id="idea-7">
+<h3>7. Content-Aware Streaming Frame</h3>
+<div class="idea-meta">
+<span class="chip chip-axis">Streaming with image content</span>
+<span class="chip chip-conf">Conf 70%</span>
+<span class="chip chip-cx">Cx M</span>
+</div>
+<div class="field">
+<div class="field-label">Description</div>
+<div class="field-value">Extend the SSE streaming pipeline to emit content-part-aware frames rather than raw text deltas. Currently streaming converters only map text_delta events — Anthropic's image_delta blocks produce None returns and are silently swallowed. Typed frames (content.text, content.image, content.tool_use) let the client demultiplex by type.</div>
+</div>
+<div class="field">
+<div class="field-label">Basis</div>
+<div class="basis"><span class="basis-tag">direct:</span> converter.py:196-201, 219-224 — streaming converters only handle text_delta. server.py:302-405 yields untyped SSE lines.</div>
+</div>
+<div class="field">
+<div class="field-label">Rationale</div>
+<div class="field-value">The streaming frame format, once standardized, becomes the backbone for any future real-time content type. Audio transcription, tool_use streaming, image generation progress — all become cheap additions.</div>
+</div>
+<div class="field">
+<div class="field-label">Downsides</div>
+<div class="field-value">Changes the SSE wire format, which may break existing clients. Must maintain backward compatibility with text-only streams.</div>
+</div>
+</div>
+</section>
+
+<section>
+<h2>Rejection Summary</h2>
+<table class="rejection-table">
+<thead><tr><th>#</th><th>Idea</th><th>Reason</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Image-Aware Request Deduplication</td><td>Interesting but better as a future optimization, not a core API feature</td></tr>
+<tr><td>2</td><td>Image Cost Attribution Engine</td><td>Depends on telemetry decomposition; premature as standalone</td></tr>
+<tr><td>3</td><td>Provider Capability Registry</td><td>Merged into Image-Aware Auto-Routing (#4)</td></tr>
+<tr><td>4</td><td>Cross-Provider Image Normalization Pipeline</td><td>Merged into Unified ContentPart Abstraction (#1)</td></tr>
+<tr><td>5</td><td>Gateway IS the Vision Model</td><td>Scope overrun — changes the gateway's role</td></tr>
+<tr><td>6</td><td>Image Conversion is Free (passthrough)</td><td>Formats are incompatible; passthrough causes errors</td></tr>
+<tr><td>7</td><td>Provider Handles All Conversion</td><td>Pushes responsibility upstream; loses gateway value</td></tr>
+<tr><td>8</td><td>OCR at Gateway</td><td>Too expensive; changes gateway's role</td></tr>
+<tr><td>9</td><td>Silent-Drop Canary</td><td>Better subsumed by Silent Image Stripping Fix (#2)</td></tr>
+<tr><td>10</td><td>Strip Images with Warning</td><td>Degrades quality; not aligned with user intent</td></tr>
+<tr><td>11</td><td>Test Suite Coverage</td><td>Important but part of implementation, not a standalone idea</td></tr>
+<tr><td>12-38</td><td>(27 additional ideas)</td><td>Duplicates, too vague, not actionable, or scope overrun</td></tr>
+</tbody>
+</table>
+</section>
+
+<footer>
+Composed 2026-08-26 by ce-ideate from codebase scan + web research
+</footer>
+</div>
+</body>
+</html>
