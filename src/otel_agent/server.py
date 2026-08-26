@@ -49,6 +49,7 @@ from otel_agent.provider_utils import (
     AUTH_HEADERS,
     build_upstream_url,
     build_image_upstream_url,
+    build_image_edit_upstream_url,
     build_request_headers,
     prefix_model_name,
 )
@@ -240,6 +241,91 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             source_format="openai", target_format="openai",
             request_body=original_body, log_body=log_body,
         )
+
+    # ------------------------------------------------------------------
+    # Image edit endpoint (OpenAI-compatible)
+    # ------------------------------------------------------------------
+    @app.post("/v1/images/edits", response_model=None)
+    async def image_edits(request: Request):
+        """OpenAI-compatible image edit endpoint.
+
+        Accepts multipart form data with an image file, prompt, and optional
+        mask. Only supported for OpenAI-format providers.
+        """
+        form = await request.form()
+
+        # Extract model from form data (may be absent — defaults to dall-e-2)
+        model_raw = form.get("model", "dall-e-2")
+        model = str(model_raw) if model_raw else "dall-e-2"
+
+        try:
+            provider_name, upstream_model = parse_model(model)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        try:
+            provider = resolve_provider(provider_name, config)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        if provider.api_format == "anthropic":
+            return JSONResponse(
+                {"error": {"message": f"Provider '{provider.name}' uses Anthropic API format which does not support image editing. Route to an OpenAI-format provider instead.", "type": "invalid_request_error"}},
+                status_code=400,
+            )
+
+        # Build upstream multipart form
+        import io
+        files = {}
+        data = {}
+
+        for key in form:
+            if key == "model":
+                data["model"] = upstream_model or "dall-e-2"
+            elif key in ("image", "mask"):
+                upload_file = form[key]
+                # UploadFile has 'read' method; str does not
+                if callable(getattr(upload_file, "read", None)):
+                    content = await upload_file.read()
+                    fname = getattr(upload_file, "filename", key)
+                    ctype = getattr(upload_file, "content_type", "application/octet-stream")
+                    files[key] = (fname, io.BytesIO(content), ctype)
+            else:
+                val = form[key]
+                if isinstance(val, str):
+                    data[key] = val
+
+        url = build_image_edit_upstream_url(provider)
+        headers = build_request_headers(provider)
+        # Remove Content-Type for multipart (httpx sets it with boundary)
+        headers.pop("Content-Type", None)
+        start_time = time.monotonic()
+        original_body = f"multipart form: {list(form.keys())}"
+        log_body = config.log_request_body
+
+        try:
+            resp = await client.post(url, headers=headers, files=files, data=data)
+        except httpx.ConnectError as e:
+            latency_ms = (time.monotonic() - start_time) * 1000
+            error_body = {"error": {"message": f"Connection failed to provider '{provider.name}': {e}", "type": "server_error"}}
+            _log_telemetry(telemetry, request, 502, error_body, latency_ms, provider, request_body=original_body, log_body=log_body, source_format="openai")
+            return JSONResponse(error_body, status_code=502)
+        except httpx.TimeoutException:
+            latency_ms = (time.monotonic() - start_time) * 1000
+            error_body = {"error": {"message": f"Timeout connecting to provider '{provider.name}'", "type": "server_error"}}
+            _log_telemetry(telemetry, request, 504, error_body, latency_ms, provider, request_body=original_body, log_body=log_body, source_format="openai")
+            return JSONResponse(error_body, status_code=504)
+
+        latency_ms = (time.monotonic() - start_time) * 1000
+
+        try:
+            resp_body = resp.json()
+        except Exception:
+            resp_body = {"raw": resp.text}
+
+        _log_telemetry(telemetry, request, resp.status_code, resp_body, latency_ms, provider, request_body=original_body, resp_headers=dict(resp.headers), log_body=log_body, source_format="openai")
+
+        return JSONResponse(resp_body, status_code=resp.status_code)
 
     # ------------------------------------------------------------------
     # Models endpoint

@@ -775,3 +775,71 @@ def test_image_generation_telemetry_logged():
         assert row[0] == "POST"
         assert "/v1/images/generations" in row[1]
         assert row[2] == 200
+
+
+# ------------------------------------------------------------------
+# Image edit endpoint tests
+# ------------------------------------------------------------------
+
+
+def test_image_edit_endpoint_exists():
+    """POST /v1/images/edits route exists and accepts multipart requests."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.post") as mock_post:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = {
+                    "created": 1234567890,
+                    "data": [{"url": "https://example.com/edited.png"}],
+                }
+                mock_resp.headers = {}
+                mock_post.return_value = mock_resp
+
+                # Send multipart form with a fake image
+                import io
+                fake_image = io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+                resp = client.post(
+                    "/v1/images/edits",
+                    files={"image": ("test.png", fake_image, "image/png")},
+                    data={"prompt": "add a hat", "model": "openai/dall-e-2"},
+                )
+                assert resp.status_code == 200
+                body = resp.json()
+                assert "data" in body
+        telemetry.close()
+
+
+def test_image_edit_anthropic_provider_returns_400():
+    """Anthropic providers return 400 for image editing."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "config.yaml"
+        config_path.write_text(
+            "providers:\n"
+            "  - name: anthropic\n"
+            "    base_url: https://api.anthropic.com\n"
+            "    api_key: test-key\n"
+            "    api_format: anthropic\n"
+        )
+        config = Config(config_path)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            import io
+            fake_image = io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+            resp = client.post(
+                "/v1/images/edits",
+                files={"image": ("test.png", fake_image, "image/png")},
+                data={"prompt": "add a hat", "model": "anthropic/claude-3"},
+            )
+            assert resp.status_code == 400
+            body = resp.json()
+            assert "does not support image editing" in body["error"]["message"]
+        telemetry.close()
