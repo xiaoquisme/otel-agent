@@ -13,8 +13,12 @@ AUTH_HEADERS = {
 def build_upstream_url(provider: Provider) -> str:
     """Build the upstream URL for a provider."""
     base = provider.base_url.rstrip("/")
-    path = "messages" if provider.api_format == "anthropic" else "chat/completions"
-    return f"{base}/{path}"
+    if provider.api_format == "anthropic":
+        # Anthropic API lives at /v1/messages; auto-append /v1 when missing
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
+        return f"{base}/messages"
+    return f"{base}/chat/completions"
 
 
 def build_request_headers(provider: Provider) -> dict[str, str]:
