@@ -631,3 +631,215 @@ def test_v1_models_is_json_not_spa_html(tmp_path):
         health = client.get("/health")
         assert health.json() == {"status": "ok"}
     telemetry.close()
+
+
+# ------------------------------------------------------------------
+# Image generation endpoint tests
+# ------------------------------------------------------------------
+
+
+def test_image_generation_endpoint_exists():
+    """POST /v1/images/generations route exists and accepts requests."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.post") as mock_post:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = {
+                    "created": 1234567890,
+                    "data": [{"url": "https://example.com/image.png"}],
+                }
+                mock_resp.headers = {}
+                mock_post.return_value = mock_resp
+
+                resp = client.post(
+                    "/v1/images/generations",
+                    json={
+                        "model": "openai/dall-e-3",
+                        "prompt": "a cat",
+                        "n": 1,
+                        "size": "1024x1024",
+                    },
+                )
+                assert resp.status_code == 200
+                body = resp.json()
+                assert "data" in body
+                assert len(body["data"]) == 1
+        telemetry.close()
+
+
+def test_image_generation_anthropic_provider_returns_400():
+    """Anthropic providers return 400 for image generation."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "config.yaml"
+        config_path.write_text(
+            "providers:\n"
+            "  - name: anthropic\n"
+            "    base_url: https://api.anthropic.com\n"
+            "    api_key: test-key\n"
+            "    api_format: anthropic\n"
+        )
+        config = Config(config_path)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            resp = client.post(
+                "/v1/images/generations",
+                json={"model": "anthropic/claude-3", "prompt": "a cat"},
+            )
+            assert resp.status_code == 400
+            body = resp.json()
+            assert "error" in body
+            assert "does not support image generation" in body["error"]["message"]
+        telemetry.close()
+
+
+def test_image_generation_invalid_model_format():
+    """Invalid model format returns 400."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            resp = client.post(
+                "/v1/images/generations",
+                json={"model": "no-slash", "prompt": "a cat"},
+            )
+            assert resp.status_code == 400
+            body = resp.json()
+            assert "error" in body
+        telemetry.close()
+
+
+def test_image_generation_unknown_provider():
+    """Unknown provider returns 400."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            resp = client.post(
+                "/v1/images/generations",
+                json={"model": "unknown/dall-e-3", "prompt": "a cat"},
+            )
+            assert resp.status_code == 400
+            body = resp.json()
+            assert "error" in body
+        telemetry.close()
+
+
+def test_image_generation_telemetry_logged():
+    """Image generation request is logged to telemetry."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.post") as mock_post:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = {
+                    "created": 1234567890,
+                    "data": [{"url": "https://example.com/image.png"}],
+                    "model": "dall-e-3",
+                }
+                mock_resp.headers = {}
+                mock_post.return_value = mock_resp
+
+                resp = client.post(
+                    "/v1/images/generations",
+                    json={"model": "openai/dall-e-3", "prompt": "a cat"},
+                )
+                assert resp.status_code == 200
+
+        telemetry.close()
+        conn = sqlite3.connect(str(Path(td) / "t.sqlite"))
+        row = conn.execute(
+            "SELECT method, url, response_status, model_name FROM requests"
+        ).fetchone()
+        conn.close()
+        assert row is not None, "No telemetry record found"
+        assert row[0] == "POST"
+        assert "/v1/images/generations" in row[1]
+        assert row[2] == 200
+
+
+# ------------------------------------------------------------------
+# Image edit endpoint tests
+# ------------------------------------------------------------------
+
+
+def test_image_edit_endpoint_exists():
+    """POST /v1/images/edits route exists and accepts multipart requests."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.post") as mock_post:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                mock_resp.json.return_value = {
+                    "created": 1234567890,
+                    "data": [{"url": "https://example.com/edited.png"}],
+                }
+                mock_resp.headers = {}
+                mock_post.return_value = mock_resp
+
+                # Send multipart form with a fake image
+                import io
+                fake_image = io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+                resp = client.post(
+                    "/v1/images/edits",
+                    files={"image": ("test.png", fake_image, "image/png")},
+                    data={"prompt": "add a hat", "model": "openai/dall-e-2"},
+                )
+                assert resp.status_code == 200
+                body = resp.json()
+                assert "data" in body
+        telemetry.close()
+
+
+def test_image_edit_anthropic_provider_returns_400():
+    """Anthropic providers return 400 for image editing."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "config.yaml"
+        config_path.write_text(
+            "providers:\n"
+            "  - name: anthropic\n"
+            "    base_url: https://api.anthropic.com\n"
+            "    api_key: test-key\n"
+            "    api_format: anthropic\n"
+        )
+        config = Config(config_path)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            import io
+            fake_image = io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+            resp = client.post(
+                "/v1/images/edits",
+                files={"image": ("test.png", fake_image, "image/png")},
+                data={"prompt": "add a hat", "model": "anthropic/claude-3"},
+            )
+            assert resp.status_code == 400
+            body = resp.json()
+            assert "does not support image editing" in body["error"]["message"]
+        telemetry.close()

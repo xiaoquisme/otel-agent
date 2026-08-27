@@ -23,6 +23,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "markdown>=3.10.2",
     "bleach>=6.4.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
