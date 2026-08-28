@@ -499,14 +499,28 @@ async def _handle_streaming(
 
                         # Extract model name from first chunk
                         if model_name is None:
-                            model_name = chunk_data.get("model")
+                            model_name = chunk_data.get("model") or chunk_data.get("message", {}).get("model")
 
                         # Collect for telemetry
                         collected_chunks.append(json.dumps(chunk_data))
                         # T031: Extract usage from streaming chunks
+                        # Anthropic message_start nests usage inside message.usage
                         chunk_usage = normalize_usage(chunk_data)
-                        if chunk_usage["total_tokens"] is not None:
-                            last_valid_usage = chunk_usage
+                        nested_usage = normalize_usage(chunk_data.get("message", {}))
+                        # Merge: prefer non-None values from either source
+                        merged = {
+                            k: chunk_usage[k] if chunk_usage[k] is not None else nested_usage[k]
+                            for k in chunk_usage
+                        }
+                        if any(v is not None for v in merged.values()):
+                            if last_valid_usage is None:
+                                last_valid_usage = merged
+                            else:
+                                # Accumulate: keep existing non-None, overlay new non-None
+                                last_valid_usage = {
+                                    k: merged[k] if merged[k] is not None else last_valid_usage[k]
+                                    for k in last_valid_usage
+                                }
                     else:
                         # Pass through non-data lines (event:, id:, etc.)
                         yield f"{line}\n".encode()
@@ -530,10 +544,19 @@ async def _handle_streaming(
             # T031: If usage was captured from streaming chunks, include it in the
             # response body so _log_telemetry can normalize and persist it.
             if last_valid_usage is not None:
+                # Recompute total from merged input/output to avoid stale
+                # auto-computed values from partial chunks (e.g. message_delta
+                # only has output_tokens so its total_tokens is wrong).
+                inp = last_valid_usage["input_tokens"]
+                out = last_valid_usage["output_tokens"]
+                recomputed_total = (
+                    (inp or 0) + (out or 0) if inp is not None or out is not None
+                    else last_valid_usage["total_tokens"]
+                )
                 resp_body["usage"] = {
-                    "input_tokens": last_valid_usage["input_tokens"],
-                    "output_tokens": last_valid_usage["output_tokens"],
-                    "total_tokens": last_valid_usage["total_tokens"],
+                    "input_tokens": inp,
+                    "output_tokens": out,
+                    "total_tokens": recomputed_total,
                 }
             _log_telemetry(
                 telemetry, request, stream_status, resp_body, latency_ms, provider,
