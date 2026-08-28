@@ -606,6 +606,89 @@ async def test_streaming_model_name_prefix_in_db():
         )
 
 
+@pytest.mark.anyio
+async def test_streaming_anthropic_model_and_usage_from_nested_message():
+    """Anthropic streaming chunks nest model/usage inside message_start.message.
+
+    Regression test: model_name was NULL and early usage was missed because
+    the code only checked top-level fields.  Anthropic SSE format puts them
+    inside the 'message' object of message_start events.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "stream_anthropic.sqlite"
+        config_path = Path(td) / "config.yaml"
+        config_path.write_text(
+            "providers:\n"
+            "  - name: anthropic\n"
+            "    base_url: https://api.anthropic.com\n"
+            "    api_key: test-key\n"
+            "    api_format: anthropic\n"
+        )
+        config = Config(config_path)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        # Anthropic SSE format: model and usage nested in message_start.message
+        chunks = [
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_test123",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-4-20250514",
+                    "content": [],
+                    "usage": {"input_tokens": 42, "output_tokens": 0},
+                },
+            },
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "Hello"},
+            },
+            {"type": "content_block_stop", "index": 0},
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 8},
+            },
+            {"type": "message_stop"},
+        ]
+        mock_stream = _FakeStreamMethod(chunks)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/messages",
+                    json={
+                        "model": "anthropic/claude-sonnet-4-20250514",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": True,
+                    },
+                )
+                await resp.aread()
+
+        telemetry.close()
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT model_name, input_tokens, output_tokens, total_tokens FROM requests"
+        ).fetchone()
+        conn.close()
+        assert row is not None, "No telemetry record found"
+        assert row[0] == "anthropic/claude-sonnet-4-20250514", (
+            f"Expected prefixed model_name 'anthropic/claude-sonnet-4-20250514', got {row[0]!r}"
+        )
+        assert row[1] == 42, f"Expected input_tokens=42, got {row[1]}"
+        assert row[2] == 8, f"Expected output_tokens=8, got {row[2]}"
+        assert row[3] == 50, f"Expected total_tokens=50, got {row[3]}"
+
+
 def test_v1_models_is_json_not_spa_html(tmp_path):
     """GET /v1/models must not be swallowed by the dashboard SPA fallback."""
     from fastapi.testclient import TestClient
