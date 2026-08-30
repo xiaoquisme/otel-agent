@@ -585,11 +585,26 @@ def _log_telemetry(
     try:
         body_str = json.dumps(resp_body) if isinstance(resp_body, dict) else str(resp_body)
         usage = normalize_usage(resp_body)
-        # Extract client-visible model from response body for analytics
+        # Extract client-visible model from response body for analytics.
+        # Fall back to the client's request body when the upstream omits the
+        # model field (common with OpenRouter and some proxied providers).
+        # When falling back, skip prefixing — the request body model is
+        # already prefixed (e.g. "openai/gpt-4"), unlike upstream responses
+        # which return the bare model name (e.g. "gpt-4").
+        from_request_body = False
         model_name = None
         if isinstance(resp_body, dict):
             model_name = resp_body.get("model")
-        model_name = prefix_model_name(model_name, provider.name)
+        if not model_name and request_body:
+            try:
+                model_name = json.loads(request_body).get("model")
+                from_request_body = True
+            except (json.JSONDecodeError, AttributeError, TypeError):
+                pass
+        if from_request_body:
+            model_name = model_name or None
+        else:
+            model_name = prefix_model_name(model_name or None, provider.name)
         stored_body = request_body[:500_000] if log_body else ""
         stored_headers = redact_sensitive_headers(resp_headers) if resp_headers else {}
         stored_request_headers = dict(request.headers)

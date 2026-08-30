@@ -926,3 +926,86 @@ def test_image_edit_anthropic_provider_returns_400():
             body = resp.json()
             assert "does not support image editing" in body["error"]["message"]
         telemetry.close()
+
+
+# ------------------------------------------------------------------
+# Model fallback from request body when upstream omits model
+# ------------------------------------------------------------------
+
+def test_non_streaming_model_falls_back_to_request_body():
+    """When upstream response has no 'model' field, extract from request body.
+
+    Regression test: model_name was NULL because _log_telemetry only read
+    the model from the upstream response body, which some providers omit.
+    """
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.post") as mock_post:
+                mock_resp = MagicMock()
+                mock_resp.status_code = 200
+                # Upstream response has NO 'model' field
+                mock_resp.json.return_value = {
+                    "id": "chatcmpl-123",
+                    "choices": [{"message": {"content": "hi"}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                }
+                mock_resp.headers = {}
+                mock_post.return_value = mock_resp
+
+                resp = client.post(
+                    "/v1/chat/completions",
+                    json={"model": "openai/gpt-4", "messages": [{"role": "user", "content": "hi"}]},
+                )
+                assert resp.status_code == 200
+
+        telemetry.close()
+        conn = sqlite3.connect(str(Path(td) / "t.sqlite"))
+        row = conn.execute("SELECT model_name FROM requests").fetchone()
+        conn.close()
+        assert row is not None, "No telemetry record found"
+        assert row[0] == "openai/gpt-4", (
+            f"Expected 'openai/gpt-4' from request body fallback, got {row[0]!r}"
+        )
+
+
+@pytest.mark.anyio
+async def test_streaming_model_falls_back_to_request_body():
+    """When streaming chunks have no 'model' field, extract from request body.
+
+    Regression test: streaming model_name was NULL because no chunk
+    contained a 'model' field (some providers omit it from SSE chunks).
+    """
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+
+        # Chunks with NO 'model' field at all
+        chunks = [
+            {"choices": [{"delta": {"content": "Hello"}, "index": 0}]},
+            {"choices": [{"delta": {"content": " world"}, "index": 0}]},
+        ]
+        mock_stream = _FakeStreamMethod(chunks)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/chat/completions",
+                    json={"model": "openai/gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                )
+                await resp.aread()
+
+        telemetry.close()
+        conn = sqlite3.connect(str(Path(td) / "t.sqlite"))
+        row = conn.execute("SELECT model_name FROM requests").fetchone()
+        conn.close()
+        assert row is not None, "No telemetry record found"
+        assert row[0] == "openai/gpt-4", (
+            f"Expected 'openai/gpt-4' from request body fallback, got {row[0]!r}"
+        )
