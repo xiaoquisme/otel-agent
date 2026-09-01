@@ -464,6 +464,24 @@ async def _handle_streaming(
         try:
             async with client.stream("POST", url, headers=headers, json=body) as resp:
                 resp_headers = dict(resp.headers)
+                stream_status = resp.status_code
+
+                # Detect non-SSE error responses (e.g. 400 JSON from xAI).
+                # Without this check the generator silently yields nothing
+                # and the client sees an empty stream.
+                content_type = resp.headers.get("content-type", "")
+                if resp.status_code >= 400 and "text/event-stream" not in content_type:
+                    error_body = (await resp.aread()).decode("utf-8", errors="replace")
+                    try:
+                        error_data = json.loads(error_body)
+                        error_msg = json.dumps(error_data)
+                    except (json.JSONDecodeError, ValueError):
+                        error_msg = json.dumps({"error": {"message": error_body, "type": "server_error"}})
+                    yield f"data: {error_msg}\n\n".encode()
+                    if source_format == "openai":
+                        yield b"data: [DONE]\n\n"
+                    return
+
                 sent_done = False
                 async for line in resp.aiter_lines():
                     if not line:
