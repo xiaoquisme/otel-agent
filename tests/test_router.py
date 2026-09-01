@@ -39,6 +39,25 @@ def test_parse_model_empty_suffix_raises():
         parse_model("openai/")
 
 
+def test_parse_model_strips_context_suffix():
+    """[500k], [1m] etc. are gateway hints — upstream APIs reject them."""
+    provider, model = parse_model("xai/grok-4.6[500k]")
+    assert provider == "xai"
+    assert model == "grok-4.6"
+
+
+def test_parse_model_strips_context_suffix_1m():
+    provider, model = parse_model("xiaomi-a/mimo-v2.5-pro[1m]")
+    assert provider == "xiaomi-a"
+    assert model == "mimo-v2.5-pro"
+
+
+def test_parse_model_no_suffix_unchanged():
+    provider, model = parse_model("xai/grok-4.6")
+    assert provider == "xai"
+    assert model == "grok-4.6"
+
+
 def test_resolve_provider_found(tmp_path):
     config_file = tmp_path / "config.yaml"
     config_file.write_text("""

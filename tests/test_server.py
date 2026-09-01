@@ -165,6 +165,7 @@ class _FakeSSEStream:
     def __init__(self, chunks: list[dict], done: bool = True):
         self._chunks = chunks
         self._done = done
+        self.status_code = 200
         self.headers = {"content-type": "text/event-stream"}
 
     async def __aenter__(self):
@@ -180,6 +181,28 @@ class _FakeSSEStream:
             yield "data: [DONE]"
 
 
+class _FakeErrorStream:
+    """Mock for upstream returning a non-SSE error (e.g. 400 JSON) on a streaming endpoint."""
+
+    def __init__(self, status_code: int, error_body: dict):
+        self.status_code = status_code
+        self._error_body = error_body
+        self.headers = {"content-type": "application/json"}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    async def aread(self):
+        return json.dumps(self._error_body).encode()
+
+    async def aiter_lines(self):
+        # Non-SSE response — yield nothing (the fix should catch this before iterating)
+        yield json.dumps(self._error_body)
+
+
 class _FakeStreamMethod:
     """Mock for httpx.AsyncClient.stream() that returns an async context manager.
 
@@ -190,6 +213,16 @@ class _FakeStreamMethod:
 
     def __init__(self, chunks: list[dict], done: bool = True):
         self._stream = _FakeSSEStream(chunks, done)
+
+    def __call__(self, *args, **kwargs):
+        return self._stream
+
+
+class _FakeErrorStreamMethod:
+    """Mock for httpx.AsyncClient.stream() that returns a non-SSE error response."""
+
+    def __init__(self, status_code: int, error_body: dict):
+        self._stream = _FakeErrorStream(status_code, error_body)
 
     def __call__(self, *args, **kwargs):
         return self._stream
@@ -1009,3 +1042,42 @@ async def test_streaming_model_falls_back_to_request_body():
         assert row[0] == "openai/gpt-4", (
             f"Expected 'openai/gpt-4' from request body fallback, got {row[0]!r}"
         )
+
+
+# ------------------------------------------------------------------
+# Streaming error response detection (non-SSE upstream errors)
+# ------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_streaming_surfaces_upstream_error_response():
+    """When upstream returns a non-SSE error (e.g. 400 JSON) on a streaming
+    endpoint, the proxy MUST surface the error to the client instead of
+    yielding an empty stream.
+
+    Regression test for: xAI returns 400 with JSON body for invalid model
+    name, proxy yielded nothing, Claude Code saw empty stream.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        error_body = {"code": "invalid-argument", "error": "Model not found: gpt-4[500k]"}
+        mock_stream = _FakeErrorStreamMethod(400, error_body)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/chat/completions",
+                    json={"model": "openai/gpt-4[500k]", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                )
+                body = resp.text
+                # The error must appear in the SSE stream, not be silently swallowed
+                assert "Model not found" in body, (
+                    f"Expected error message in stream output, got: {body[:500]}"
+                )
+                assert "data: [DONE]" in body, "Stream must end with [DONE]"
+
+        telemetry.close()
