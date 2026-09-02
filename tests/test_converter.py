@@ -75,6 +75,38 @@ def test_anthropic_to_openai_stop_sequences():
     assert result["stop"] == ["END"]
 
 
+def test_anthropic_to_openai_flattens_thinking_blocks():
+    """Claude Code multi-turn history uses thinking blocks; xAI rejects them."""
+    anthropic = {
+        "model": "grok-4.6",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "I should say hi.", "signature": "sig"},
+                    {"type": "text", "text": "STREAM_OK"},
+                ],
+            },
+            {"role": "user", "content": [{"type": "text", "text": "again"}]},
+        ],
+    }
+    result = anthropic_to_openai_request(anthropic)
+    assert result["messages"][0] == {"role": "user", "content": "hi"}
+    assistant = result["messages"][1]
+    assert assistant["role"] == "assistant"
+    assert assistant["content"] == "STREAM_OK"
+    assert assistant["reasoning_content"] == "I should say hi."
+    assert result["messages"][2] == {"role": "user", "content": "again"}
+
+
+def test_openai_to_anthropic_response_preserves_error_body():
+    """A 400 JSON error must not become an empty Anthropic message."""
+    error = {"code": "Client specified an invalid argument", "error": "Invalid request"}
+    result = openai_to_anthropic_response(error)
+    assert result == error
+
+
 # --- Response conversion ---
 
 

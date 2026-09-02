@@ -62,10 +62,49 @@ def openai_to_anthropic_request(openai_body: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _flatten_anthropic_content(content: Any) -> tuple[str | list[Any], str]:
+    """Turn Anthropic content blocks into OpenAI string content + reasoning.
+
+    Claude Code history uses ``thinking`` / ``text`` blocks. OpenAI-format
+    providers (xAI) reject those objects as invalid arguments.
+    """
+    if isinstance(content, str):
+        return content, ""
+    if not isinstance(content, list):
+        return str(content) if content else "", ""
+
+    texts: list[str] = []
+    reasoning_parts: list[str] = []
+    leftover: list[Any] = []
+    for part in content:
+        if not isinstance(part, dict):
+            leftover.append(part)
+            continue
+        kind = part.get("type")
+        if kind == "text":
+            texts.append(str(part.get("text") or ""))
+        elif kind in ("thinking", "redacted_thinking"):
+            thinking = part.get("thinking") or part.get("data") or ""
+            if thinking:
+                reasoning_parts.append(str(thinking))
+        else:
+            leftover.append(part)
+
+    reasoning = "".join(reasoning_parts)
+    if leftover:
+        combined: list[Any] = []
+        if texts:
+            combined.append({"type": "text", "text": "".join(texts)})
+        combined.extend(leftover)
+        return combined, reasoning
+    return "".join(texts), reasoning
+
+
 def anthropic_to_openai_request(anthropic_body: dict[str, Any]) -> dict[str, Any]:
     """Convert an Anthropic messages request to OpenAI chat completion format.
 
     The top-level 'system' field is prepended as a system message.
+    Content-block arrays (text/thinking) are flattened for OpenAI providers.
     """
     messages = anthropic_body.get("messages", [])
     system = anthropic_body.get("system", "")
@@ -83,11 +122,12 @@ def anthropic_to_openai_request(anthropic_body: dict[str, Any]) -> dict[str, Any
 
     for msg in messages:
         role = msg.get("role", "user")
-        content = msg.get("content", "")
-        if role == "assistant":
-            converted_messages.append({"role": "assistant", "content": content})
-        else:
-            converted_messages.append({"role": "user", "content": content})
+        content, reasoning = _flatten_anthropic_content(msg.get("content", ""))
+        out_role = "assistant" if role == "assistant" else "user"
+        converted: dict[str, Any] = {"role": out_role, "content": content}
+        if reasoning and out_role == "assistant":
+            converted["reasoning_content"] = reasoning
+        converted_messages.append(converted)
 
     result: dict[str, Any] = {
         "model": anthropic_body.get("model", ""),
@@ -110,6 +150,9 @@ def anthropic_to_openai_request(anthropic_body: dict[str, Any]) -> dict[str, Any
 
 def openai_to_anthropic_response(openai_resp: dict[str, Any]) -> dict[str, Any]:
     """Convert an OpenAI chat completion response to Anthropic messages format."""
+    if "choices" not in openai_resp:
+        return openai_resp
+
     choices = openai_resp.get("choices", [])
     content_blocks: list[dict[str, Any]] = []
     stop_reason = None
