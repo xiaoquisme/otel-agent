@@ -23,10 +23,10 @@ from otel_agent.circuit_breaker import CircuitBreaker
 from otel_agent.classifier import classify_task
 from otel_agent.config import Config, Provider
 from otel_agent.converter import (
+    OpenAIToAnthropicStreamConverter,
     anthropic_to_openai_request,
     anthropic_to_openai_response,
     convert_anthropic_chunk_to_openai,
-    convert_openai_chunk_to_anthropic,
     openai_to_anthropic_request,
     openai_to_anthropic_response,
 )
@@ -328,19 +328,26 @@ async def _handle_streaming_auto(
         last_valid_usage: dict | None = None
         sent_done = False
         model_name: str | None = None
+        openai_to_anthropic: OpenAIToAnthropicStreamConverter | None = None
+        if source_format == "anthropic" and target_format == "openai":
+            openai_to_anthropic = OpenAIToAnthropicStreamConverter()
 
         try:
             async with client.stream("POST", url, headers=headers, json=body) as resp:
                 resp_headers = dict(resp.headers)
                 async for line in resp.aiter_lines():
                     if not line:
-                        yield b"\n"
+                        if openai_to_anthropic is None:
+                            yield b"\n"
                         continue
 
                     if line.startswith("data: "):
                         data_str = line[6:]
                         if data_str.strip() == "[DONE]":
-                            if source_format == "openai":
+                            if openai_to_anthropic is not None:
+                                for event in openai_to_anthropic.flush():
+                                    yield event.encode()
+                            elif source_format == "openai":
                                 yield b"data: [DONE]\n\n"
                                 sent_done = True
                             break
@@ -356,10 +363,9 @@ async def _handle_streaming_auto(
                             converted = convert_anthropic_chunk_to_openai(chunk_data)
                             if converted:
                                 yield f"data: {json.dumps(converted)}\n\n".encode()
-                        elif source_format == "anthropic" and target_format == "openai":
-                            converted = convert_openai_chunk_to_anthropic(chunk_data)
-                            if converted:
-                                yield f"data: {json.dumps(converted)}\n\n".encode()
+                        elif openai_to_anthropic is not None:
+                            for event in openai_to_anthropic.feed(chunk_data):
+                                yield event.encode()
 
                         # Extract model name from first chunk
                         if model_name is None:
@@ -381,10 +387,13 @@ async def _handle_streaming_auto(
                                     k: merged[k] if merged[k] is not None else last_valid_usage[k]
                                     for k in last_valid_usage
                                 }
-                    else:
+                    elif openai_to_anthropic is None:
                         yield f"{line}\n".encode()
 
-                if not sent_done and source_format == "openai":
+                if openai_to_anthropic is not None:
+                    for event in openai_to_anthropic.flush():
+                        yield event.encode()
+                elif not sent_done and source_format == "openai":
                     yield b"data: [DONE]\n\n"
 
         except httpx.ConnectError:

@@ -1081,3 +1081,47 @@ async def test_streaming_surfaces_upstream_error_response():
                 assert "data: [DONE]" in body, "Stream must end with [DONE]"
 
         telemetry.close()
+
+
+@pytest.mark.anyio
+async def test_anthropic_stream_from_openai_emits_message_start():
+    """Claude Code on /v1/messages needs Anthropic SSE, not OpenAI content deltas."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        chunks = [
+            {
+                "id": "chatcmpl-1",
+                "model": "gpt-4",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}],
+            },
+            {
+                "id": "chatcmpl-1",
+                "model": "gpt-4",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            },
+        ]
+        mock_stream = _FakeStreamMethod(chunks)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/messages",
+                    json={
+                        "model": "openai/gpt-4",
+                        "max_tokens": 16,
+                        "stream": True,
+                        "messages": [{"role": "user", "content": "hi"}],
+                    },
+                )
+                body = resp.text
+
+        telemetry.close()
+        assert "event: message_start" in body
+        assert "event: content_block_delta" in body
+        assert "event: message_stop" in body
+        assert '"text": "Hi"' in body

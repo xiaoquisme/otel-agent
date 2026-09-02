@@ -1,6 +1,7 @@
 """Tests for Anthropic ↔ OpenAI format conversion."""
 
 from otel_agent.converter import (
+    OpenAIToAnthropicStreamConverter,
     anthropic_to_openai_request,
     anthropic_to_openai_response,
     convert_anthropic_chunk_to_openai,
@@ -170,3 +171,77 @@ def test_anthropic_chunk_to_openai_other():
     chunk = {"type": "message_start"}
     result = convert_anthropic_chunk_to_openai(chunk)
     assert result is None
+
+
+def _event_types(events) -> list[str]:
+    return [e.event for e in events]
+
+
+def test_openai_to_anthropic_stream_emits_message_start_before_text():
+    """Claude Code requires message_start; lone content_block_delta is incomplete."""
+    conv = OpenAIToAnthropicStreamConverter()
+    events = conv.feed({
+        "id": "chatcmpl-1",
+        "model": "grok-4.6",
+        "choices": [{"delta": {"content": "Hello", "role": "assistant"}, "finish_reason": None}],
+    })
+    types = _event_types(events)
+    assert types[:3] == ["message_start", "content_block_start", "content_block_delta"]
+    assert events[0].data["message"]["model"] == "grok-4.6"
+    assert events[0].data["message"]["id"] == "chatcmpl-1"
+    assert events[2].data["delta"]["text"] == "Hello"
+
+
+def test_openai_to_anthropic_stream_maps_reasoning_content_to_thinking():
+    """xAI streams reasoning_content with no content; dropping it yields an empty Anthropic stream."""
+    conv = OpenAIToAnthropicStreamConverter()
+    first = conv.feed({
+        "id": "chatcmpl-1",
+        "model": "grok-4.6",
+        "choices": [{"delta": {"reasoning_content": "The", "role": "assistant"}, "finish_reason": None}],
+    })
+    types = _event_types(first)
+    assert "message_start" in types
+    assert "content_block_start" in types
+    thinking = [e for e in first if e.event == "content_block_delta"]
+    assert thinking
+    assert thinking[0].data["delta"]["type"] == "thinking_delta"
+    assert thinking[0].data["delta"]["thinking"] == "The"
+
+    second = conv.feed({
+        "choices": [{"delta": {"content": "Hi"}, "finish_reason": None}],
+    })
+    types = _event_types(second)
+    assert types[0] == "content_block_stop"
+    assert "content_block_start" in types
+    text = [e for e in second if e.event == "content_block_delta"]
+    assert text[0].data["delta"]["type"] == "text_delta"
+    assert text[0].data["delta"]["text"] == "Hi"
+
+
+def test_openai_to_anthropic_stream_finish_emits_message_stop():
+    conv = OpenAIToAnthropicStreamConverter()
+    conv.feed({
+        "id": "chatcmpl-1",
+        "model": "grok-4.6",
+        "choices": [{"delta": {"content": "Hi"}, "finish_reason": None}],
+    })
+    events = conv.feed({
+        "choices": [{"delta": {}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 1},
+    })
+    types = _event_types(events)
+    assert types[-3:] == ["content_block_stop", "message_delta", "message_stop"]
+    delta = [e for e in events if e.event == "message_delta"][0]
+    assert delta.data["delta"]["stop_reason"] == "end_turn"
+
+
+def test_openai_to_anthropic_stream_flush_closes_without_finish_chunk():
+    conv = OpenAIToAnthropicStreamConverter()
+    conv.feed({
+        "id": "chatcmpl-1",
+        "model": "grok-4.6",
+        "choices": [{"delta": {"content": "Hi"}, "finish_reason": None}],
+    })
+    events = conv.flush()
+    assert _event_types(events)[-2:] == ["message_delta", "message_stop"]
