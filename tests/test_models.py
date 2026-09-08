@@ -111,11 +111,10 @@ def test_aggregate_basic():
     result = aggregate_models(raw)
     assert result["object"] == "list"
     ids = [m["id"] for m in result["data"]]
-    # 2 provider models + synthetic "auto" model
-    assert len(result["data"]) == 3
+    assert len(result["data"]) == 2
     assert "openai/gpt-4o" in ids
     assert "openai/gpt-4o-mini" in ids
-    assert "auto" in ids
+    assert "auto" not in ids
     assert result["data"][0]["owned_by"] == "openai"
 
 
@@ -132,18 +131,16 @@ def test_aggregate_multiple_providers():
 
 def test_aggregate_empty():
     result = aggregate_models({})
-    # Empty input still returns the synthetic "auto" model
-    assert result == {"object": "list", "data": [{"id": "auto", "object": "model", "created": 0, "owned_by": "otel-agent"}]}
+    assert result == {"object": "list", "data": []}
 
 
 def test_aggregate_provider_with_empty_models():
     raw = {"openai": [], "xiaomi": [{"id": "mimo"}]}
     result = aggregate_models(raw)
     ids = [m["id"] for m in result["data"]]
-    # 1 provider model + synthetic "auto" model
-    assert len(result["data"]) == 2
+    assert len(result["data"]) == 1
     assert "xiaomi/mimo" in ids
-    assert "auto" in ids
+    assert "auto" not in ids
 
 
 def test_aggregate_preserves_created_field():
@@ -166,5 +163,4 @@ def test_aggregate_sorted_by_provider():
     }
     result = aggregate_models(raw)
     providers = [m["owned_by"] for m in result["data"]]
-    # Provider models sorted alphabetically, then "auto" at the end
-    assert providers == ["anthropic", "openai", "xiaomi", "otel-agent"]
+    assert providers == ["anthropic", "openai", "xiaomi"]

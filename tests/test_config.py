@@ -246,3 +246,25 @@ providers:
 log_request_body: false
 """)
     assert cfg.log_request_body is False
+
+
+def test_legacy_auto_routing_yaml_is_ignored(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  - name: openai
+    base_url: https://api.openai.com/v1
+    api_key: sk-a
+    api_format: openai
+    cost_per_1k_input: 0.001
+    default_model: gpt-4o
+    tiers: [not-a-real-tier]
+auto_routing:
+  circuit_breaker_threshold: 5
+""")
+    cfg = Config(config_file)
+    provider = cfg.get_provider("openai")
+    assert provider is not None
+    assert not hasattr(provider, "cost_per_1k_input")
+    assert not hasattr(provider, "default_model")
+    assert not hasattr(cfg, "auto_routing")

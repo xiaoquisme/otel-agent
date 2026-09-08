@@ -742,11 +742,45 @@ def test_v1_models_is_json_not_spa_html(tmp_path):
         assert models.headers["content-type"].startswith("application/json"), models.text[:200]
         body = models.json()
         assert body["object"] == "list"
-        assert any(item.get("id") == "auto" for item in body["data"])
+        assert not any(item.get("id") == "auto" for item in body["data"])
 
         health = client.get("/health")
         assert health.json() == {"status": "ok"}
     telemetry.close()
+
+
+def test_bare_auto_model_is_invalid_on_chat_and_messages(tmp_path):
+    """Bare model=auto is rejected like any unprefixed model."""
+    from fastapi.testclient import TestClient
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "providers:\n"
+        "  - name: openai\n"
+        "    base_url: https://api.openai.com/v1\n"
+        "    api_key: test-key\n"
+        "    api_format: openai\n"
+    )
+    config = Config(config_path)
+    telemetry = TelemetryLogger(tmp_path / "t.sqlite")
+    app = create_app(config, telemetry)
+    with TestClient(app) as client:
+        chat = client.post(
+            "/v1/chat/completions",
+            json={"model": "auto", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        messages = client.post(
+            "/v1/messages",
+            json={"model": "auto", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    telemetry.close()
+    assert chat.status_code == 400
+    assert chat.json()["error"]["type"] == "invalid_request_error"
+    assert "provider prefix" in chat.json()["error"]["message"]
+    assert "X-Routed-Provider" not in chat.headers
+    assert messages.status_code == 400
+    assert messages.json()["error"]["type"] == "invalid_request_error"
+    assert "X-Routed-Provider" not in messages.headers
 
 
 # ------------------------------------------------------------------
