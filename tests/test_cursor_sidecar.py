@@ -55,10 +55,10 @@ def test_fetch_loopback_cursor_models_uses_agent_cli(monkeypatch):
     assert all(m["owned_by"] == "cursor" for m in models)
 
 
-def test_cursor_cli_model_for_sidecar_passthrough():
+def test_cursor_cli_model_for_sidecar_always_passthrough_prefix():
     from otel_agent.cursor_sidecar import cursor_cli_model_for_sidecar
 
     assert cursor_cli_model_for_sidecar("auto") == "auto"
-    assert cursor_cli_model_for_sidecar("gpt-5.3-codex") == "gpt-5.3-codex"
+    assert cursor_cli_model_for_sidecar("gpt-5.3-codex") == "cursor-gpt-5.3-codex"
     assert cursor_cli_model_for_sidecar("composer-2.5") == "cursor-composer-2.5"
     assert cursor_cli_model_for_sidecar("cursor-grok-4.6-high-fast") == "cursor-grok-4.6-high-fast"

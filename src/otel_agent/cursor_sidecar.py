@@ -60,48 +60,14 @@ def list_cursor_cli_models(*, api_key: str = "") -> list[str]:
     return parse_agent_list_models(text)
 
 
-# cursor-agent-api-proxy extractModel() maps unknown ids to "auto", but
-# `cursor-<id>` remainder is passed through even when not in its catalog.
-_SIDECAR_KNOWN_MODELS = frozenset({
-    "auto",
-    "composer-1.5",
-    "composer-1",
-    "gpt-5.3-codex",
-    "gpt-5.3-codex-low",
-    "gpt-5.3-codex-high",
-    "gpt-5.3-codex-xhigh",
-    "gpt-5.3-codex-fast",
-    "gpt-5.3-codex-low-fast",
-    "gpt-5.3-codex-high-fast",
-    "gpt-5.3-codex-xhigh-fast",
-    "gpt-5.2",
-    "gpt-5.2-codex",
-    "gpt-5.2-codex-high",
-    "gpt-5.2-codex-low",
-    "gpt-5.2-codex-xhigh",
-    "gpt-5.2-codex-fast",
-    "gpt-5.2-codex-high-fast",
-    "gpt-5.2-codex-low-fast",
-    "gpt-5.2-codex-xhigh-fast",
-    "gpt-5.1-codex-max",
-    "gpt-5.1-codex-max-high",
-    "opus-4.6-thinking",
-    "sonnet-4.5-thinking",
-    "gpt-5.2-high",
-    "opus-4.6",
-    "opus-4.5",
-    "opus-4.5-thinking",
-    "sonnet-4.5",
-    "gpt-5.1-high",
-    "gemini-3-pro",
-    "gemini-3-flash",
-    "grok",
-})
-
-
 def cursor_cli_model_for_sidecar(cli_id: str) -> str:
-    """Rewrite a CLI id so cursor-agent-api-proxy will not coerce it to auto."""
-    if not cli_id or cli_id in _SIDECAR_KNOWN_MODELS or cli_id.startswith("cursor-"):
+    """Prefix CLI ids so cursor-agent-api-proxy extractModel() passes them through.
+
+    That wrapper maps unknown names to ``auto``. A ``cursor-<id>`` remainder is
+    forwarded even when the id is not in its catalog. ``auto`` is already
+    accepted. Ids that already start with ``cursor-`` are left alone.
+    """
+    if not cli_id or cli_id == "auto" or cli_id.startswith("cursor-"):
         return cli_id
     return f"cursor-{cli_id}"
 
