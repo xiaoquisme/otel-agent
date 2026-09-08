@@ -170,6 +170,22 @@ What this does:
 
 Do not expose the proxy on a shared network — anyone who can reach it can spend your SuperGrok quota. If a request still 403s after a successful login, the account is not entitled (or is out of quota); see https://grok.com/?_s=usage. Re-login will not fix that.
 
+### Cursor subscription
+
+Cursor dashboard API keys are not an OpenAI chat-completions host (`POST https://api.cursor.com/v1/chat/completions` is 404). Point a `cursor` provider at a local OpenAI sidecar (`cursor-agent-api`) that wraps the Cursor CLI.
+
+```yaml
+providers:
+  - name: cursor
+    base_url: http://127.0.0.1:4646/v1
+    api_key: crsr_YOUR_KEY
+    api_format: openai
+```
+
+Install the CLI and sidecar once (`agent` on PATH, `npm install -g cursor-agent-api-proxy`). `otel-agent proxy start` / `stop` then starts and stops the sidecar with the gateway. Use model `cursor/auto` (OpenAI-family ids on Cursor may be region-blocked).
+
+Do not put `auth: xai-oauth` on this provider — the key is static YAML, like any other `api_key`.
+
 ## Client Usage
 
 ### OpenAI SDK

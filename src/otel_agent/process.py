@@ -15,6 +15,10 @@ DASHBOARD_PID_FILE = AGENT_DIR / "dashboard.pid"
 DASHBOARD_PORT_FILE = AGENT_DIR / "dashboard.port"
 DASHBOARD_LOG_FILE = AGENT_DIR / "dashboard.log"
 
+CURSOR_SIDECAR_PID_FILE = AGENT_DIR / "cursor-sidecar.pid"
+CURSOR_SIDECAR_PORT_FILE = AGENT_DIR / "cursor-sidecar.port"
+CURSOR_SIDECAR_LOG_FILE = AGENT_DIR / "cursor-sidecar.log"
+
 
 def ensure_agent_dir() -> Path:
     """Create ~/.otel-agent/ if it doesn't exist. Returns the path."""
@@ -151,3 +155,31 @@ def stop_dashboard(timeout: float = 5.0) -> bool:
     Returns True if dashboard was stopped, False if no dashboard was running.
     """
     return _stop(DASHBOARD_PID_FILE, DASHBOARD_PORT_FILE, timeout)
+
+
+def write_cursor_sidecar_pid(pid: int) -> None:
+    """Write PID to the Cursor sidecar PID file."""
+    _write_pid(CURSOR_SIDECAR_PID_FILE, pid)
+
+
+def read_cursor_sidecar_pid() -> int | None:
+    """Read Cursor sidecar PID from file. Returns None if missing or invalid."""
+    return _read_pid(CURSOR_SIDECAR_PID_FILE)
+
+
+def get_cursor_sidecar_status() -> dict | None:
+    """Get Cursor sidecar status. Returns {\"pid\": int, \"port\": int} or None."""
+    return _get_status(CURSOR_SIDECAR_PID_FILE, CURSOR_SIDECAR_PORT_FILE, 4646)
+
+
+def cleanup_cursor_sidecar_pid() -> None:
+    """Delete the Cursor sidecar PID and port files."""
+    _cleanup(CURSOR_SIDECAR_PID_FILE, CURSOR_SIDECAR_PORT_FILE)
+
+
+def stop_cursor_sidecar(timeout: float = 5.0) -> bool:
+    """Send SIGTERM to the Cursor sidecar and wait for it to exit.
+
+    Returns True if the sidecar was stopped, False if none was running.
+    """
+    return _stop(CURSOR_SIDECAR_PID_FILE, CURSOR_SIDECAR_PORT_FILE, timeout)

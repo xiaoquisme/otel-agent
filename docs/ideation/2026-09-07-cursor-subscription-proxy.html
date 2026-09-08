@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ideation: 通过 otel-agent 代理 Cursor 订阅</title>
+<style>
+  :root { --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --red: #f85149; --yellow: #d29922; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 2rem; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 1.8rem; margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h2 { font-size: 1.3rem; margin: 2rem 0 0.8rem; color: var(--accent); }
+  h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+  .meta { color: var(--muted); font-size: 0.85rem; margin-bottom: 2rem; }
+  .stats { display: flex; gap: 1.5rem; margin: 1rem 0; flex-wrap: wrap; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 1rem; }
+  .stat .label { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .stat .value { font-size: 1.2rem; font-weight: 600; }
+  .idea { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; margin: 1rem 0; }
+  .idea.recommended { border-color: var(--green); }
+  .idea-header { display: flex; align-items: center; gap: 0.8rem; margin-bottom: 0.6rem; flex-wrap: wrap; }
+  .idea-num { background: var(--accent); color: var(--bg); font-weight: 700; font-size: 0.85rem; padding: 0.15rem 0.5rem; border-radius: 4px; }
+  .idea.recommended .idea-num { background: var(--green); }
+  .idea-title { font-weight: 600; font-size: 1.05rem; }
+  .badge { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 3px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .badge-green { background: #238636; color: #fff; }
+  .badge-yellow { background: #9e6a03; color: #fff; }
+  .badge-blue { background: #1f6feb; color: #fff; }
+  .basis { font-size: 0.85rem; color: var(--muted); margin-top: 0.5rem; }
+  .basis code { background: var(--bg); padding: 0.1rem 0.3rem; border-radius: 3px; font-size: 0.75rem; }
+  p { margin: 0.5rem 0; }
+  ul, ol { margin: 0.5rem 0 0.5rem 1.5rem; }
+  li { margin: 0.3rem 0; }
+  code { background: var(--surface); padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.9em; }
+  pre { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow-x: auto; margin: 0.8rem 0; font-size: 0.85rem; }
+  .flow { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem; margin: 1rem 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; white-space: pre; overflow-x: auto; line-height: 1.8; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th, td { padding: 0.5rem 0.8rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+  th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; }
+  .grounding { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin: 1rem 0; font-size: 0.85rem; }
+  .grounding h3 { margin-top: 0; font-size: 0.95rem; }
+  .jump { font-size: 0.9rem; margin: 0.8rem 0 1.2rem; }
+  .jump a { color: var(--accent); }
+  .meta-row { font-size: 0.85rem; color: var(--muted); margin: 0.3rem 0; }
+  .diagram { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; margin: 0.8rem 0; overflow-x: auto; }
+  footer.composition-signal { color: var(--muted); font-size: 0.75rem; margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .callout { background: #161b22; border: 1px solid var(--yellow); border-radius: 8px; padding: 0.9rem 1rem; margin: 1rem 0; }
+  .callout .eyebrow { color: var(--yellow); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<h1>通过 otel-agent 代理 Cursor 订阅</h1>
+<div class="meta">
+  Date: <time datetime="2026-09-08">2026-09-08</time> (resume of 2026-09-07)<br>
+  Topic: cursor-subscription-proxy<br>
+  Focus: 像 xAI / SuperGrok 那样，把 Cursor 订阅从 otel-agent 代理出去<br>
+  Mode: repo-grounded<br>
+  Run ID: 0fefd51d
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="label">Raw this run</div><div class="value">~36</div></div>
+  <div class="stat"><div class="label">Survivors</div><div class="value">7</div></div>
+  <div class="stat"><div class="label">Cut this run</div><div class="value">12+</div></div>
+  <div class="stat"><div class="label">Recommended</div><div class="value">1</div></div>
+</div>
+
+<div class="callout">
+  <div class="eyebrow">What changed since yesterday</div>
+  <p>昨天的推荐（「Dashboard 若有 API key，就当 Anthropic/OpenAI 的 key 用」）已经过时。Cursor <strong>确实有</strong>用户 API key（<code>cursor.com/dashboard/api</code>、<code>CURSOR_API_KEY</code> / <code>crsr_…</code>）和官方 CLI <code>agent login</code>，但官方文档写明：Cloud Agents API 与 SDK <strong>不是</strong>独立的 model-inference / chat-completions API。xAI 能「原样代理」，是因为 <code>api.x.ai</code> 已经说 OpenAI REST。Cursor 缺的是这层表面，不是缺 key。</p>
+  <p>仓库里没有 Cursor 的 implementation plan；已有的是 xAI 的 <code>docs/plans/2026-08-17-004</code> 与 <code>005</code>（已落地）。</p>
+</div>
+
+<h2 id="grounding-context">Grounding Context</h2>
+<div class="grounding">
+<h3>Codebase Context</h3>
+<p>otel-agent 是本地 LLM 网关：按 <code>provider/model</code> 前缀路由到 OpenAI 或 Anthropic REST。Provider 需要 <code>base_url</code> + <code>api_key</code>，或 <code>auth: xai-oauth</code> 且空 key。OpenAI 上游永远拼 <code>{base}/chat/completions</code>。<code>VALID_AUTH_MODES</code> 只有空和 <code>xai-oauth</code>。<code>VALID_API_FORMATS</code> 只有 <code>openai</code> | <code>anthropic</code>。旋转 token 放在 <code>~/.otel-agent/auth.json</code>；<code>resolve_bearer</code> 只对 xAI 走 vault。代理绑 <code>0.0.0.0</code>。源码里没有 Cursor。</p>
+<h3>Past learnings</h3>
+<p><code>docs/solutions/architecture-patterns/import-supergrok-oauth-sidecar-vault.md</code>：消费级订阅是个人 grant；旋转 refresh 不能写进 mtime 热加载的 YAML；从兄弟 CLI 拷贝，不要回写；在兄弟 CLI 不够用之前不要发明 device-code。xAI 不需要协议适配器——Bearer 已经能打 <code>POST https://api.x.ai/v1/chat/completions</code>（含 SSE）。</p>
+<h3>External context (2026-09-08)</h3>
+<ul>
+  <li>官方：Dashboard API Keys、<code>agent login</code> / <code>CURSOR_API_KEY</code>、Python/TS SDK、Cloud Agents REST、<a href="https://cursor.com/docs/sdk/bridge">SDK Bridge</a>（Connect/protobuf over HTTP/1.1；经典 gRPC/HTTP2 连不上）。</li>
+  <li>官方原话：Cloud Agents API 与 SDK「are not a standalone model-inference or chat-completions API」。Help 里的 BYOK 是把 OpenAI/Anthropic key <em>填进</em> Cursor，方向相反。</li>
+  <li>社区：<a href="https://github.com/tageecc/cursor-agent-api-proxy">cursor-agent-api-proxy</a>、<a href="https://github.com/leeguooooo/agent-cli-to-api">agent-cli-to-api</a> 把 <code>agent</code> CLI 包成 <code>/v1/chat/completions</code>。cookie / IDE 逆向（cursor2api）仍然脆弱。</li>
+</ul>
+<h3>Additional context</h3>
+<p>根目录 <code>README.md</code>（SuperGrok 登录）、<code>CONCEPTS.md</code>（Sidecar Auth Vault）、<code>AGENTS.md</code>（dashboard <code>:45638</code> 安装地雷）。无 <code>STRATEGY.md</code>。</p>
+</div>
+
+<h2 id="topic-axes">Topic Axes</h2>
+<ul>
+  <li><strong>auth-acquisition</strong> — 凭证从哪来（dashboard key vs <code>agent login</code> vs 逆向）</li>
+  <li><strong>chat-completions-surface</strong> — 客户端要的 OpenAI 推理面 vs Cursor 实际提供的 agent API</li>
+  <li><strong>credential-lifecycle</strong> — 静态 key 进 YAML vs 旋转 grant 进 vault</li>
+  <li><strong>runtime-bridge</strong> — 谁把 Cursor 协议翻成 chat/completions（sidecar vs 进程内）</li>
+  <li><strong>product-compliance</strong> — 个人订阅、用量池、0.0.0.0 暴露</li>
+</ul>
+
+<h2 id="ranked-ideas">Ranked Ideas</h2>
+<p class="jump">
+  <a href="#idea-1">1. 零代码配方</a> ·
+  <a href="#idea-2">2. 20 分钟官方 REST spike</a> ·
+  <a href="#idea-3">3. 不要 auth:cursor-oauth</a> ·
+  <a href="#idea-4">4. 前缀 cursor/…</a> ·
+  <a href="#idea-5">5. 个人 grant 警告</a> ·
+  <a href="#idea-6">6. 以后再 spawn sidecar</a> ·
+  <a href="#idea-7">7. 从 agent CLI 导入</a>
+</p>
+
+<article class="idea recommended" id="idea-1">
+  <div class="idea-header">
+    <span class="idea-num">1</span>
+    <span class="idea-title">零代码配方：Dashboard key + 本地 OpenAI sidecar + YAML provider</span>
+    <span class="badge badge-green">Recommended</span>
+    <span class="badge badge-blue">Low</span>
+  </div>
+  <p class="meta-row">Axis: runtime-bridge · Confidence: 88% · Complexity: Low</p>
+  <p><strong>Description:</strong> 今天就能用、且最像 xAI 客户端体验的路径：在 <a href="https://cursor.com/dashboard/api">cursor.com/dashboard/api</a> 生成用户 API key（或 <code>agent login</code>），跑一个已经说 OpenAI 的本地适配器（社区 <code>cursor-agent-api-proxy</code>，或官方 CLI 的薄包装），然后在 otel-agent 里加一个普通 provider——<code>name: cursor</code>、<code>base_url: http://127.0.0.1:4646/v1</code>、<code>api_key: crsr_…</code> 或占位、<code>api_format: openai</code>。客户端继续 <code>POST /v1/chat/completions</code>，model 用 <code>cursor/auto</code>（或 <code>agent --list-models</code> 里的 id）。otel-agent 一行协议代码都不用写。</p>
+  <p>这是昨天 idea 1 与 idea 6 的合体，并纠正了「key 指向 api.anthropic.com」的错误。</p>
+  <div class="diagram">
+  <svg viewBox="0 0 860 220" width="100%" height="200" role="img" aria-label="xAI path versus Cursor path">
+    <rect x="8" y="16" width="844" height="88" rx="8" fill="#161b22" stroke="#30363d"/>
+    <text x="24" y="40" fill="#8b949e" font-size="12">xAI (already shipped)</text>
+    <rect x="24" y="52" width="140" height="36" rx="4" fill="#21262d" stroke="#3fb950"/>
+    <text x="94" y="74" text-anchor="middle" fill="#e6edf3" font-size="11">client OpenAI</text>
+    <rect x="196" y="52" width="160" height="36" rx="4" fill="#21262d" stroke="#58a6ff"/>
+    <text x="276" y="74" text-anchor="middle" fill="#e6edf3" font-size="11">otel-agent vault</text>
+    <rect x="388" y="52" width="200" height="36" rx="4" fill="#21262d" stroke="#3fb950"/>
+    <text x="488" y="74" text-anchor="middle" fill="#e6edf3" font-size="11">api.x.ai /chat/completions</text>
+    <line x1="164" y1="70" x2="196" y2="70" stroke="#8b949e" stroke-width="2"/>
+    <line x1="356" y1="70" x2="388" y2="70" stroke="#8b949e" stroke-width="2"/>
+    <rect x="8" y="116" width="844" height="88" rx="8" fill="#161b22" stroke="#30363d"/>
+    <text x="24" y="140" fill="#8b949e" font-size="12">Cursor (this idea)</text>
+    <rect x="24" y="152" width="140" height="36" rx="4" fill="#21262d" stroke="#3fb950"/>
+    <text x="94" y="174" text-anchor="middle" fill="#e6edf3" font-size="11">client OpenAI</text>
+    <rect x="196" y="152" width="160" height="36" rx="4" fill="#21262d" stroke="#58a6ff"/>
+    <text x="276" y="174" text-anchor="middle" fill="#e6edf3" font-size="11">otel-agent YAML</text>
+    <rect x="388" y="152" width="200" height="36" rx="4" fill="#21262d" stroke="#d29922"/>
+    <text x="488" y="174" text-anchor="middle" fill="#e6edf3" font-size="11">local sidecar :4646</text>
+    <rect x="620" y="152" width="210" height="36" rx="4" fill="#21262d" stroke="#8b949e"/>
+    <text x="725" y="174" text-anchor="middle" fill="#e6edf3" font-size="11">Cursor agent / SDK</text>
+    <line x1="164" y1="170" x2="196" y2="170" stroke="#8b949e" stroke-width="2"/>
+    <line x1="356" y1="170" x2="388" y2="170" stroke="#8b949e" stroke-width="2"/>
+    <line x1="588" y1="170" x2="620" y2="170" stroke="#8b949e" stroke-width="2"/>
+  </svg>
+  </div>
+  <p class="basis"><strong>Basis:</strong> <code>direct:</code> <code>provider_utils.py:21</code> OpenAI 上游永远是 <code>/chat/completions</code>；任意 <code>base_url</code> 已可指向 localhost。<code>external:</code> Cursor docs/api 明确不是 chat-completions；<code>cursor-agent-api-proxy</code> 暴露 <code>/v1/chat/completions</code>。</p>
+  <p><strong>Rationale:</strong> 「像 xAI」对你来说是 Hermes/OpenClaw 继续打网关。缺的那一跳放在 sidecar，而不是改网关的格式集合。</p>
+  <p><strong>Downsides:</strong> 两个进程；社区包装可能随 CLI 破；用量走 Cursor 订阅池，和 IDE 抢配额。官方 SDK 才是长期适配器，社区包只是最快的今天。</p>
+</article>
+
+<article class="idea" id="idea-2">
+  <div class="idea-header">
+    <span class="idea-num">2</span>
+    <span class="idea-title">先做 20 分钟官方 REST spike，取代昨天的 MITM</span>
+    <span class="badge badge-blue">Low</span>
+  </div>
+  <p class="meta-row">Axis: chat-completions-surface · Confidence: 90% · Complexity: Low</p>
+  <p><strong>Description:</strong> 用刚生成的 <code>crsr_</code> 打三个端点：<code>GET https://api.cursor.com/v1/models</code>、<code>POST …/v1/chat/completions</code>、<code>POST …/v1/agents</code>（及 Basic vs Bearer）。若 chat-completions 意外 200，idea 1 的 sidecar 可以删掉，变成「真 xAI 同构」。若只有 agents/SDK，就锁定 sidecar。这是昨天「30 分钟 MITM spike」在官方 REST 出现之后的廉价替代。</p>
+  <p class="basis"><strong>Basis:</strong> <code>external:</code> Cloud Agents 文档给了 <code>api.cursor.com</code> + Bearer/Basic；<code>reasoned:</code> 文档可能滞后，一次 curl 比写协议桥便宜两个数量级。</p>
+  <p><strong>Rationale:</strong> 在写任何 otel-agent 代码之前，这是唯一能翻转「有没有推理 REST」的实验。</p>
+  <p><strong>Downsides:</strong> 若 401/404，你只是确认了文档。不要把 spike 扩成抓包 IDE。</p>
+</article>
+
+<article class="idea" id="idea-3">
+  <div class="idea-header">
+    <span class="idea-num">3</span>
+    <span class="idea-title">不要加 auth: cursor-oauth —— 「像 xAI」指的是前缀 + chat/completions</span>
+    <span class="badge badge-blue">Low</span>
+  </div>
+  <p class="meta-row">Axis: credential-lifecycle · Confidence: 86% · Complexity: Low</p>
+  <p><strong>Description:</strong> 昨天 idea 2（Auth0 抽 token + vault）把 xAI 的手段当成了目的。xAI 需要 vault，是因为 SuperGrok access ~6h 且 refresh 会旋转，不能写进热加载 YAML。Cursor 的 dashboard key 是静态秘密；<code>resolve_bearer</code> 的非 oauth 分支已经返回 <code>api_key</code>。空 key 只对 <code>xai-oauth</code> 合法。保持 <code>VALID_AUTH_MODES</code> 不动。</p>
+  <p class="basis"><strong>Basis:</strong> <code>direct:</code> <code>auth_vault.py:209-212</code>；<code>config.py:66-67, 185-188</code>；learning「tokens rotate on refresh and cannot live in mtime-watched config.yaml」。</p>
+  <p><strong>Rationale:</strong> 抄错抽象会让你为静态 key 再做一个 auth 模式，然后发现没有 token endpoint 可刷。</p>
+  <p><strong>Downsides:</strong> 若 Cursor 以后只发短命 OAuth、停发静态 key，再开 vault。今天不要预支。</p>
+</article>
+
+<article class="idea" id="idea-4">
+  <div class="idea-header">
+    <span class="idea-num">4</span>
+    <span class="idea-title">客户端仍走现有 OpenAI 路径，model 前缀 cursor/…</span>
+    <span class="badge badge-blue">Low</span>
+  </div>
+  <p class="meta-row">Axis: chat-completions-surface · Confidence: 84% · Complexity: Low</p>
+  <p><strong>Description:</strong> 对齐 xAI 的 R2：OAuth/适配器是 auth 或 runtime 细节，不是第二个 provider 名。不要引入 <code>cursor-oauth/…</code> 或 <code>cursor-grpc</code> 作为客户端字符串。README 增加与 SuperGrok 并列的 curl：<code>model: cursor/auto</code>。</p>
+  <p class="basis"><strong>Basis:</strong> <code>direct:</code> plan 004 R2「Keep the client model prefix <code>xai/…</code>」；<code>README.md</code> curl 示例。</p>
+  <p><strong>Rationale:</strong> 你已经在用 Hermes 打 otel-agent。改客户端字符串比加 sidecar 更痛。</p>
+  <p><strong>Downsides:</strong> Cursor 模型 id（<code>composer-2.5</code>、<code>auto-smart</code>）和 OpenAI 名不同，需要一份短对照，而不是新 API 格式。</p>
+</article>
+
+<article class="idea" id="idea-5">
+  <div class="idea-header">
+    <span class="idea-num">5</span>
+    <span class="idea-title">个人 grant 警告 + 用量池 403 改写</span>
+    <span class="badge badge-yellow">Medium</span>
+  </div>
+  <p class="meta-row">Axis: product-compliance · Confidence: 80% · Complexity: Medium</p>
+  <p><strong>Description:</strong> SuperGrok 已经警告：订阅 token 是个人的，代理绑 <code>0.0.0.0</code>。Cursor SDK/CLI/Cloud Agent 走同一套用量池，和 IDE 抢配额。README 写清这一点；对 Cursor 上游的额度类 403，抄 <code>xai_errors.py</code> 改写并指向 <code>cursor.com/dashboard/usage</code>，不要当 circuit-breaker 失败。</p>
+  <p class="basis"><strong>Basis:</strong> <code>direct:</code> plan 004 R9；<code>proxy.py</code> <code>host="0.0.0.0"</code>；<code>xai_errors.py</code>；<code>external:</code> SDK 文档「SDK runs follow the same pricing, request pools」。</p>
+  <p><strong>Rationale:</strong> 否则你会以为网关坏了，其实是 Cursor 月度池打满，而且可能把企业 key 暴露在局域网。</p>
+  <p><strong>Downsides:</strong> 没有流量时改写器是死代码。可以先只写 README 警告，改写器跟在第一次真实 403 之后。</p>
+</article>
+
+<article class="idea" id="idea-6">
+  <div class="idea-header">
+    <span class="idea-num">6</span>
+    <span class="idea-title">以后：sidecar 跟 proxy 同生命周期（像 dashboard spawn）</span>
+    <span class="badge badge-yellow">Medium</span>
+  </div>
+  <p class="meta-row">Axis: runtime-bridge · Confidence: 72% · Complexity: Medium</p>
+  <p><strong>Description:</strong> idea 1 稳定之后，才考虑 <code>otel-agent proxy start</code> 拉起/探活本地适配器，停的时候一起停。对标 dashboard 的 <code>subprocess.Popen</code> + pid 文件，以及 AGENTS.md 里「install 不 restart 仍是旧进程」的地雷。不要把 <code>cursor-sdk</code> 链进网关进程。</p>
+  <p class="basis"><strong>Basis:</strong> <code>direct:</code> <code>commands/proxy.py</code> / <code>dashboard.py</code> 已有 daemon spawn；AGENTS.md dashboard landmine。<code>reasoned:</code> 两个无文档进程撑不过 <code>uv tool install --force .</code>。</p>
+  <p><strong>Rationale:</strong> 这是「网关产品」相对「自己拼两个命令」的增量。不是今天的阻塞。</p>
+  <p><strong>Downsides:</strong> 生命周期、日志、Node vs Python 包装的成本。官方 Python SDK 在进程内跑 agent loop 会把 otel-agent 变成 Cursor 运行时——那是错误的产品边界（见拒绝表）。</p>
+</article>
+
+<article class="idea" id="idea-7">
+  <div class="idea-header">
+    <span class="idea-num">7</span>
+    <span class="idea-title">若要自动登录：从 agent CLI / CURSOR_API_KEY 导入，不要发明 device-code</span>
+    <span class="badge badge-blue">Low</span>
+  </div>
+  <p class="meta-row">Axis: auth-acquisition · Confidence: 78% · Complexity: Low</p>
+  <p><strong>Description:</strong> 昨天 idea 2/6 的正确后续不是 <code>otel-agent auth cursor-login</code> 再注册一个 OAuth app。兄弟 CLI 已经是 <code>agent login</code>。最多：读 <code>CURSOR_API_KEY</code> 或 CLI 的本地凭据，upsert YAML provider（静态 key）。xAI 的 device-code 是「没有 Hermes/Grok」时才加的第二刀。</p>
+  <p class="basis"><strong>Basis:</strong> <code>direct:</code> learning「Do not invent a new device-code client until import-from-sibling-CLI is insufficient」；plan 005 只在 import 不够时才做 RFC 8628。<code>external:</code> Cursor CLI 认证文档。</p>
+  <p><strong>Rationale:</strong> 避免第二个 xai_oauth.py。Dashboard 复制 key 对个人订阅已经够用。</p>
+  <p><strong>Downsides:</strong> CLI 凭据格式未探；可能只是环境变量。探明之前不要写导入器。</p>
+</article>
+
+<h2 id="rejection-summary">Rejection Summary</h2>
+<table>
+  <thead>
+    <tr><th>#</th><th>Idea</th><th>Reason rejected</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>prior 5</td><td>Session Cookie 代理</td><td>昨天已拒；官方 key / CLI 登录后更弱。</td></tr>
+    <tr><td>prior 2</td><td>Auth0 Token 提取 + vault</td><td>官方静态 key 存在；vault 是为旋转 grant。手段抄错。</td></tr>
+    <tr><td>prior 3</td><td>MITM 抓 Bearer</td><td>被 idea 2 的官方 REST curl 取代；证书钉扎/HTTP2 成本无必要。</td></tr>
+    <tr><td>prior 4 / CF2</td><td>进程内 gRPC 或 Connect 客户端</td><td>官方 Bridge 不是经典 gRPC；也不是 chat-completions。维护成本相对 sidecar 过高。</td></tr>
+    <tr><td>AB3</td><td>把 Cloud Agent 当产品（仓库+任务，不是补全）</td><td>超出「像 x.ai 那样」的范围，除非你确认要的是 Cursor Agent 工作流而不是模型推理。</td></tr>
+    <tr><td>L1</td><td>立刻做通用 subscription-adapter 种类</td><td>被 idea 1/6 覆盖；单独做是范围膨胀。</td></tr>
+    <tr><td>L2</td><td>doctor 增加 Cursor 行</td><td>有 sidecar 之后才有意义；低于讨论门槛。</td></tr>
+    <tr><td>A1–A3</td><td>插座/护照/房卡类比</td><td>复述 idea 1 和 3，不单独成方向。</td></tr>
+    <tr><td>yesterday 1 原推荐</td><td>把 Cursor key 指向 api.anthropic.com / api.openai.com</td><td>那些 key 不能当上游模型供应商的 key；BYOK 方向相反。</td></tr>
+  </tbody>
+</table>
+
+<h2>Recommended path</h2>
+<div class="flow">今天: Dashboard 生成 crsr_ key
+  → curl api.cursor.com 的 /v1/models、/v1/chat/completions、/v1/agents（idea 2）
+  → 若没有 chat-completions: 跑本地 OpenAI sidecar
+  → otel-agent YAML: name cursor, base_url localhost, api_format openai（idea 1+3+4）
+  → README 写个人用量池警告（idea 5 的文档部分）
+
+以后才: sidecar 跟 proxy 一起起停（idea 6）；从 agent CLI 导入 key（idea 7）
+不要: auth:cursor-oauth、aiserver.v1 gRPC、MITM、cookie</div>
+
+<footer class="composition-signal">Composed 2026-09-08T02:05Z by ce-ideate (resume of docs/ideation/2026-09-07-cursor-subscription-proxy.html; run 0fefd51d). Source: user request to proxy a Cursor subscription through otel-agent like xAI.</footer>
+</body>
+</html>
