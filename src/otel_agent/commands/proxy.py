@@ -23,6 +23,7 @@ from otel_agent.process import (
     stop_proxy,
     write_pid,
 )
+from otel_agent.cursor_sidecar import start_cursor_sidecar, stop_cursor_sidecar
 
 
 def handle_proxy(args) -> None:
@@ -101,6 +102,13 @@ def handle_proxy_start(args) -> None:
     print(f"Gateway started on :{args.port} (PID {proc.pid})")
     print(f"Logging to {LOG_FILE}")
 
+    from otel_agent.config import Config
+
+    sidecar = start_cursor_sidecar(Config(Path(args.config).expanduser()))
+    if sidecar:
+        extra = " (already listening)" if sidecar.get("adopted") else f" (PID {sidecar['pid']})"
+        print(f"Cursor sidecar on :{sidecar['port']}{extra}")
+
 
 def _run_foreground(args) -> None:
     """Run the gateway in the foreground (blocking)."""
@@ -134,30 +142,44 @@ def _run_server(args) -> None:
     print(f"  GET  /health")
     print(f"\nCtrl+C to stop\n")
 
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=args.port,
-        log_level="info",
-    )
+    sidecar = start_cursor_sidecar(config)
+    if sidecar:
+        extra = " (already listening)" if sidecar.get("adopted") else f" (PID {sidecar['pid']})"
+        print(f"Cursor sidecar on :{sidecar['port']}{extra}")
+
+    try:
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=args.port,
+            log_level="info",
+        )
+    finally:
+        stop_cursor_sidecar()
 
 
 def handle_proxy_stop(args) -> None:
     """Stop the running gateway."""
+    sidecar_stopped = stop_cursor_sidecar()
     stopped = stop_proxy()
     if stopped:
         print("Gateway stopped.")
     else:
         print("No gateway is running.")
+    if sidecar_stopped:
+        print("Cursor sidecar stopped.")
 
 
 def handle_proxy_restart(args) -> None:
     """Stop and restart the gateway."""
+    sidecar_stopped = stop_cursor_sidecar()
     stopped = stop_proxy()
     if stopped:
         print("Gateway stopped.")
     else:
         print("No gateway was running.")
+    if sidecar_stopped:
+        print("Cursor sidecar stopped.")
 
     # Small delay to let the port free up
     time.sleep(0.5)
@@ -171,6 +193,11 @@ def handle_proxy_status(args) -> None:
         print(f"Gateway running on :{status['port']} (PID {status['pid']})")
     else:
         print("Gateway is not running.")
+    from otel_agent.process import get_cursor_sidecar_status
+
+    sidecar = get_cursor_sidecar_status()
+    if sidecar is not None:
+        print(f"Cursor sidecar on :{sidecar['port']} (PID {sidecar['pid']})")
 
 
 def handle_proxy_logs(args) -> None:

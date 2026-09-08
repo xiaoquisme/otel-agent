@@ -153,3 +153,28 @@ def test_dashboard_helpers_do_not_touch_proxy_pid(tmp_path):
         assert proxy_pid.exists()
         assert read_pid() == 111
         assert not dash_pid.exists()
+
+
+def test_write_read_cursor_sidecar_pid(tmp_path):
+    from otel_agent.process import write_cursor_sidecar_pid, read_cursor_sidecar_pid
+
+    with patch("otel_agent.process.CURSOR_SIDECAR_PID_FILE", tmp_path / "cursor-sidecar.pid"):
+        write_cursor_sidecar_pid(12345)
+        assert read_cursor_sidecar_pid() == 12345
+
+
+def test_cursor_sidecar_cleanup_does_not_touch_proxy_pid(tmp_path):
+    from otel_agent.process import cleanup_cursor_sidecar_pid, write_cursor_sidecar_pid
+
+    proxy_pid = tmp_path / "proxy.pid"
+    sidecar_pid = tmp_path / "cursor-sidecar.pid"
+    with (
+        patch("otel_agent.process.PID_FILE", proxy_pid),
+        patch("otel_agent.process.CURSOR_SIDECAR_PID_FILE", sidecar_pid),
+    ):
+        write_pid(111)
+        write_cursor_sidecar_pid(222)
+        cleanup_cursor_sidecar_pid()
+        assert proxy_pid.exists()
+        assert read_pid() == 111
+        assert not sidecar_pid.exists()

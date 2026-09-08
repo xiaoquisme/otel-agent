@@ -509,3 +509,134 @@ def test_handle_dashboard_stop_invokes_helper(capsys, monkeypatch):
     captured = capsys.readouterr()
     assert called["stop"] is True
     assert "Dashboard stopped." in captured.out
+
+
+def test_proxy_start_spawns_cursor_sidecar_when_cursor_provider(tmp_path, capsys, monkeypatch):
+    import argparse
+    from types import SimpleNamespace
+
+    from otel_agent.commands import proxy as proxy_mod
+
+    written = {}
+    monkeypatch.setattr(proxy_mod, "get_proxy_status", lambda: None)
+    monkeypatch.setattr(proxy_mod, "_is_port_in_use", lambda port: False)
+    monkeypatch.setattr(proxy_mod, "ensure_agent_dir", lambda: tmp_path)
+    monkeypatch.setattr(proxy_mod, "write_pid", lambda pid: written.setdefault("proxy_pid", pid))
+    monkeypatch.setattr(proxy_mod, "LOG_FILE", tmp_path / "proxy.log")
+    monkeypatch.setattr(proxy_mod, "PORT_FILE", tmp_path / "proxy.port")
+    monkeypatch.setattr(proxy_mod, "time", SimpleNamespace(sleep=lambda _s: None))
+
+    class FakeProc:
+        pid = 1111
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(proxy_mod.subprocess, "Popen", lambda *a, **k: FakeProc())
+    sidecar = {"started": False}
+
+    def fake_start(config):
+        sidecar["started"] = True
+        sidecar["config"] = config
+        return {"pid": 2222, "port": 4646}
+
+    monkeypatch.setattr(proxy_mod, "start_cursor_sidecar", fake_start)
+
+    args = argparse.Namespace(
+        proxy_action="start",
+        port=45638,
+        db=str(tmp_path / "t.sqlite"),
+        config=str(tmp_path / "config.yaml"),
+        foreground=False,
+    )
+    proxy_mod.handle_proxy(args)
+    captured = capsys.readouterr()
+    assert sidecar["started"] is True
+    assert "1111" in captured.out
+    assert "cursor sidecar" in captured.out.lower()
+    assert "4646" in captured.out
+
+
+def test_proxy_start_skips_sidecar_without_cursor_provider(tmp_path, capsys, monkeypatch):
+    import argparse
+    from types import SimpleNamespace
+
+    from otel_agent.commands import proxy as proxy_mod
+
+    monkeypatch.setattr(proxy_mod, "get_proxy_status", lambda: None)
+    monkeypatch.setattr(proxy_mod, "_is_port_in_use", lambda port: False)
+    monkeypatch.setattr(proxy_mod, "ensure_agent_dir", lambda: tmp_path)
+    monkeypatch.setattr(proxy_mod, "write_pid", lambda pid: None)
+    monkeypatch.setattr(proxy_mod, "LOG_FILE", tmp_path / "proxy.log")
+    monkeypatch.setattr(proxy_mod, "PORT_FILE", tmp_path / "proxy.port")
+    monkeypatch.setattr(proxy_mod, "time", SimpleNamespace(sleep=lambda _s: None))
+
+    class FakeProc:
+        pid = 1111
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(proxy_mod.subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(proxy_mod, "start_cursor_sidecar", lambda config: None)
+
+    args = argparse.Namespace(
+        proxy_action="start",
+        port=45638,
+        db=str(tmp_path / "t.sqlite"),
+        config=str(tmp_path / "config.yaml"),
+        foreground=False,
+    )
+    proxy_mod.handle_proxy(args)
+    captured = capsys.readouterr()
+    assert "Cursor sidecar" not in captured.out
+    assert "cursor sidecar" not in captured.out.lower()
+
+
+def test_proxy_stop_stops_cursor_sidecar(capsys, monkeypatch):
+    import argparse
+
+    from otel_agent.commands import proxy as proxy_mod
+
+    called = {"sidecar": False}
+    monkeypatch.setattr(proxy_mod, "stop_proxy", lambda: True)
+    monkeypatch.setattr(
+        proxy_mod, "stop_cursor_sidecar", lambda: called.__setitem__("sidecar", True) or True
+    )
+
+    args = argparse.Namespace(proxy_action="stop", config="~/.otel-agent/config.yaml")
+    proxy_mod.handle_proxy(args)
+    captured = capsys.readouterr()
+    assert called["sidecar"] is True
+    assert "Gateway stopped." in captured.out
+    assert "sidecar" in captured.out.lower()
+
+
+def test_start_cursor_sidecar_skips_non_loopback(tmp_path):
+    from otel_agent.config import Config
+    from otel_agent.cursor_sidecar import start_cursor_sidecar
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "providers:\n"
+        "  - name: cursor\n"
+        "    base_url: https://api.cursor.com/v1\n"
+        "    api_key: crsr_test\n"
+        "    api_format: openai\n"
+    )
+    assert start_cursor_sidecar(Config(cfg)) is None
+
+
+def test_start_cursor_sidecar_skips_missing_provider(tmp_path):
+    from otel_agent.config import Config
+    from otel_agent.cursor_sidecar import start_cursor_sidecar
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "providers:\n"
+        "  - name: xai\n"
+        "    base_url: https://api.x.ai/v1\n"
+        "    auth: xai-oauth\n"
+        "    api_format: openai\n"
+    )
+    assert start_cursor_sidecar(Config(cfg)) is None
