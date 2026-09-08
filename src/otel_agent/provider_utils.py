@@ -46,3 +46,15 @@ def build_request_headers(provider: Provider) -> dict[str, str]:
 def prefix_model_name(model_name: str | None, provider_name: str) -> str | None:
     """Prefix model name with provider config name for dashboard display."""
     return f"{provider_name}/{model_name}" if model_name else None
+
+
+def rewrite_upstream_model(provider: Provider, upstream_model: str) -> str:
+    """Adjust the stripped model id before sending it upstream."""
+    from urllib.parse import urlparse
+
+    from otel_agent.cursor_sidecar import cursor_cli_model_for_sidecar
+
+    host = (urlparse(provider.base_url).hostname or "").lower()
+    if provider.name == "cursor" and host in ("127.0.0.1", "localhost"):
+        return cursor_cli_model_for_sidecar(upstream_model)
+    return upstream_model
