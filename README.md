@@ -182,7 +182,7 @@ providers:
     api_format: openai
 ```
 
-Install the CLI and sidecar once (`agent` on PATH, `npm install -g cursor-agent-api-proxy`). `otel-agent proxy start` / `stop` then starts and stops the sidecar with the gateway. Use model `cursor/auto` (OpenAI-family ids on Cursor may be region-blocked).
+Install the CLI and sidecar once (`agent` on PATH, `npm install -g cursor-agent-api-proxy`). `otel-agent proxy start` / `stop` then starts and stops the sidecar with the gateway. `/v1/models` lists ids from `agent --list-models` (not the sidecar's stale catalog). Prefer `cursor/auto` or `cursor/composer-2.5`; OpenAI-family ids may be region-blocked.
 
 Do not put `auth: xai-oauth` on this provider — the key is static YAML, like any other `api_key`.
 

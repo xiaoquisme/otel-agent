@@ -52,6 +52,7 @@ from otel_agent.provider_utils import (
     build_image_edit_upstream_url,
     build_request_headers,
     prefix_model_name,
+    rewrite_upstream_model,
 )
 
 
@@ -106,7 +107,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
 
         # Prepare the upstream request body
         upstream_body = dict(body)
-        upstream_body["model"] = upstream_model
+        upstream_body["model"] = rewrite_upstream_model(provider, upstream_model)
 
         # If provider speaks Anthropic, convert the request
         needs_conversion = provider.api_format == "anthropic"
@@ -165,7 +166,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
 
         upstream_body = dict(body)
-        upstream_body["model"] = upstream_model
+        upstream_body["model"] = rewrite_upstream_model(provider, upstream_model)
 
         needs_conversion = provider.api_format == "openai"
 

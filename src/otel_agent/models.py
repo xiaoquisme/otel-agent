@@ -62,11 +62,24 @@ async def fetch_provider_models(
     """Fetch model list from a single provider via GET /v1/models.
 
     Returns an empty list if the provider doesn't expose a models endpoint
-    or is unreachable.
+    or is unreachable. Loopback Cursor providers use `agent --list-models`
+    so clients never see the sidecar's stale hardcoded catalog.
     """
-    url = f"{provider.base_url.rstrip('/')}/models"
+    from urllib.parse import urlparse
+
     from otel_agent.auth_vault import resolve_bearer
 
+    host = (urlparse(provider.base_url).hostname or "").lower()
+    if provider.name == "cursor" and host in ("127.0.0.1", "localhost"):
+        from otel_agent.cursor_sidecar import list_cursor_cli_models
+
+        ids = list_cursor_cli_models(api_key=provider.api_key)
+        return [
+            {"id": model_id, "object": "model", "owned_by": "cursor", "created": 0}
+            for model_id in ids
+        ]
+
+    url = f"{provider.base_url.rstrip('/')}/models"
     headers = {"Authorization": f"Bearer {resolve_bearer(provider)}"}
 
     try:
