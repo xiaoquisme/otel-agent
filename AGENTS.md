@@ -8,7 +8,7 @@ at specs/020-dashboard-usage-metrics/plan.md
 
 `docs/solutions/` — documented solutions to past problems (architecture patterns, bugs, best practices), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
 
-`CONCEPTS.md` — shared domain vocabulary (Thompson Sampling, Circuit Breaker, Tier, etc.) — relevant when orienting to the codebase or discussing domain concepts.
+`CONCEPTS.md` — shared domain vocabulary (Sidecar Auth Vault, SuperGrok Grant, etc.) — relevant when orienting to the codebase or discussing domain concepts.
 
 ## Dashboard CLI landmine
 
