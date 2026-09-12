@@ -120,6 +120,29 @@ class TestOpenAIRequest:
         assert assistant_msg["tool_calls"][0]["name"] == "get_weather"
         assert messages[2]["role"] == "tool"
 
+    def test_multipart_user_content_is_flattened_to_string(self) -> None:
+        """OpenAI content arrays must be strings so the dashboard oneLine() helper can render."""
+        body = json.dumps({
+            "model": "xai/grok-4.6",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "pi update --extensions"}],
+                },
+                {
+                    "role": "tool",
+                    "content": [{"type": "text", "text": "tool output"}],
+                },
+            ],
+        })
+        result = parse_messages(request_body=body, response_body=None)
+        messages = result["messages"]
+        assert messages[0]["content"] == "pi update --extensions"
+        assert isinstance(messages[0]["content"], str)
+        assert messages[1]["role"] == "tool"
+        assert messages[1]["content"] == "tool output"
+        assert isinstance(messages[1]["content"], str)
+
 
 # ---------------------------------------------------------------------------
 # Tests: OpenAI response parsing

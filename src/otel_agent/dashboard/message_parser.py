@@ -16,6 +16,23 @@ from otel_agent.dashboard.render import (
 )
 
 
+def _flatten_text_content(content: Any) -> str:
+    """Normalize OpenAI/Anthropic message content to a single string."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+            elif isinstance(block, str):
+                parts.append(block)
+        return "\n".join(parts)
+    return str(content)
+
+
 def _extract_openai_request_messages(parsed: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract chat messages from an OpenAI-style request body."""
     messages = parsed.get("messages")
@@ -25,10 +42,9 @@ def _extract_openai_request_messages(parsed: dict[str, Any]) -> list[dict[str, A
     result: list[dict[str, Any]] = []
     for m in messages:
         role = m.get("role", "unknown")
-        msg: dict[str, Any] = {"role": role}
+        msg: dict[str, Any] = {"role": role, "content": _flatten_text_content(m.get("content"))}
 
         if role == "assistant" and m.get("tool_calls"):
-            content = m.get("content", "") or ""
             tool_calls = []
             for tc in m["tool_calls"]:
                 fn = tc.get("function", tc)
@@ -37,12 +53,7 @@ def _extract_openai_request_messages(parsed: dict[str, Any]) -> list[dict[str, A
                     "name": fn.get("name", "tool"),
                     "arguments": fn.get("arguments", ""),
                 })
-            msg["content"] = content
             msg["tool_calls"] = tool_calls
-        elif role == "tool":
-            msg["content"] = m.get("content", "")
-        else:
-            msg["content"] = m.get("content", "")
 
         result.append(msg)
     return result
@@ -59,29 +70,15 @@ def _extract_anthropic_request_messages(parsed: dict[str, Any]) -> list[dict[str
     # System message
     system = parsed.get("system")
     if system:
-        if isinstance(system, str):
-            sys_content = system
-        elif isinstance(system, list):
-            sys_content = "\n".join(
-                b.get("text", "") for b in system if isinstance(b, dict) and b.get("type") == "text"
-            )
-        else:
-            sys_content = str(system)
+        sys_content = _flatten_text_content(system)
         if sys_content:
             result.append({"role": "system", "content": sys_content})
 
     for m in messages:
-        role = m.get("role", "unknown")
-        content_raw = m.get("content", "")
-        if isinstance(content_raw, str):
-            content = content_raw
-        elif isinstance(content_raw, list):
-            content = "\n".join(
-                b.get("text", "") for b in content_raw if isinstance(b, dict) and b.get("type") == "text"
-            )
-        else:
-            content = str(content_raw) if content_raw else ""
-        result.append({"role": role, "content": content})
+        result.append({
+            "role": m.get("role", "unknown"),
+            "content": _flatten_text_content(m.get("content")),
+        })
     return result
 
 

@@ -11,8 +11,9 @@ export interface TrajectoryCell {
   toolCall?: { id?: string; name: string; arguments: string }
 }
 
-function oneLine(text: string, max = 160): string {
-  const collapsed = text.replace(/\s+/g, ' ').trim()
+function oneLine(text: unknown, max = 160): string {
+  const value = typeof text === 'string' ? text : text == null ? '' : String(text)
+  const collapsed = value.replace(/\s+/g, ' ').trim()
   if (collapsed.length <= max) return collapsed
   return `${collapsed.slice(0, max - 1)}…`
 }
