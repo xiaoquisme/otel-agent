@@ -16,6 +16,9 @@ from otel_agent.auth_vault import (
     AuthError,
     adopt_grant,
     extract_grant,
+    get_status,
+    plan_type_from_access_token,
+    read_owner_last_refresh,
     resolve_bearer,
     save_grant,
     token_endpoint_from_claims,
@@ -815,3 +818,214 @@ def test_adopt_verb_reports_a_missing_sibling_store(tmp_path, monkeypatch, capsy
     with pytest.raises(SystemExit):
         handle_auth(Namespace(auth_action="import-codex", config=str(tmp_path / "config.yaml")))
     assert "not signed in" in capsys.readouterr().out
+
+
+# ------------------------------------------------------------------
+# Subscription status and diagnosable credential failures (R11 / R12)
+# ------------------------------------------------------------------
+
+
+def _plan_bearing_token(*, plan: str = "prolite", exp: int | None = None) -> str:
+    """An access token shaped like the real one: the tier rides a URL-shaped
+    claim rather than a top-level one."""
+    return _jwt({
+        "iss": "https://auth.openai.com",
+        "client_id": CODEX_CLIENT_ID,
+        "exp": exp if exp is not None else int(time.time()) + 86400,
+        "https://api.openai.com/auth": {
+            "chatgpt_plan_type": plan,
+            "chatgpt_account_id": "acct-0000",
+        },
+    })
+
+
+def _seed_codex_entry(vault: Path, **overrides) -> None:
+    entry: dict = {
+        "auth": "codex-oauth",
+        "tokens": {
+            "access_token": _plan_bearing_token(),
+            "refresh_token": "ref-codex",
+            "expires_at": int(time.time()) + 86400,
+        },
+        "discovery": {"token_endpoint": CODEX_TOKEN_ENDPOINT},
+        "client_id": CODEX_CLIENT_ID,
+    }
+    entry.update(overrides)
+    vault.write_text(json.dumps({"providers": {"codex": entry}}))
+
+
+class _RejectedResponse:
+    """A token endpoint refusing the refresh."""
+
+    status_code = 401
+
+    def json(self) -> dict:
+        return {"error": "invalid_grant"}
+
+
+def test_status_answers_all_four_things_r11_asks_for(tmp_path):
+    """可用 / 档位 / 到期时间 / 上次结果, in one call."""
+    vault = tmp_path / "auth.json"
+    _seed_codex_entry(
+        vault,
+        plan_type="plus",
+        last_refresh="2026-09-15T05:31:37Z",
+        last_refresh_result={"at": 1757914297.0, "ok": True, "detail": ""},
+    )
+
+    status = get_status("codex", path=vault)
+
+    assert status["available"] is True
+    assert status["plan"] == "prolite"
+    assert isinstance(status["expires_at"], int) and status["expires_at"] > time.time()
+    assert status["last_result"]["ok"] is True
+    assert status["last_result"]["at"] == 1757914297.0
+
+
+def test_status_reflects_a_failed_refresh(tmp_path, monkeypatch):
+    """R11: after a refresh fails, the status says so rather than going quiet."""
+    vault = tmp_path / "auth.json"
+    _seed_codex_entry(vault, tokens={
+        "access_token": "tok-old",
+        "refresh_token": "ref-old",
+        "expires_at": int(time.time()) - 10,
+    })
+    monkeypatch.setattr("otel_agent.auth_vault._needs_refresh", lambda entry: True)
+    monkeypatch.setattr(
+        "otel_agent.auth_vault.httpx.post", lambda *a, **k: _RejectedResponse()
+    )
+
+    with pytest.raises(AuthError, match="401"):
+        resolve_bearer(_codex_provider(), path=vault)
+
+    status = get_status("codex", path=vault)
+    assert status["last_result"]["ok"] is False
+    assert "401" in status["last_result"]["detail"]
+
+
+def test_status_reflects_a_refused_refresh(tmp_path, monkeypatch):
+    """A refusal before the exchange is a result too: it is what tells the
+    operator the credential must be re-adopted rather than retried."""
+    vault = tmp_path / "auth.json"
+    _seed_codex_entry(vault, discovery={})
+    monkeypatch.setattr("otel_agent.auth_vault._needs_refresh", lambda entry: True)
+    posts: list = []
+    _stub_post(monkeypatch, _refresh_payload(), posts)
+    _stub_discovery_as_a_failure(monkeypatch)
+
+    with pytest.raises(AuthError, match="token endpoint"):
+        resolve_bearer(_codex_provider(), path=vault)
+
+    assert posts == []
+    status = get_status("codex", path=vault)
+    assert status["last_result"]["ok"] is False
+    assert "token endpoint" in status["last_result"]["detail"]
+
+
+def test_a_successful_refresh_becomes_the_last_result(tmp_path, monkeypatch):
+    vault = tmp_path / "auth.json"
+    _seed_codex_entry(vault, tokens={
+        "access_token": "tok-old",
+        "refresh_token": "ref-old",
+        "expires_at": int(time.time()) - 10,
+    })
+    monkeypatch.setattr("otel_agent.auth_vault._needs_refresh", lambda entry: True)
+    posts: list = []
+    _stub_post(monkeypatch, _refresh_payload(), posts)
+
+    assert resolve_bearer(_codex_provider(), path=vault) == "tok-new"
+
+    status = get_status("codex", path=vault)
+    assert status["last_result"]["ok"] is True
+    assert status["last_refresh"].endswith("Z")
+
+
+def test_status_marks_a_grant_left_mid_refresh_as_unavailable(tmp_path):
+    """The pair is on disk, but the resolver refuses it: the tier of the answer
+    R11 asks for must not claim otherwise."""
+    vault = tmp_path / "auth.json"
+    _seed_codex_entry(vault, refresh_in_flight={"generation": 1, "started_at": time.time()})
+
+    status = get_status("codex", path=vault)
+
+    assert status["logged_in"] is True
+    assert status["available"] is False
+
+
+def test_save_grant_keeps_the_recorded_status_fields(tmp_path):
+    """KTD9: a re-login merges, so what the status surface reads survives it."""
+    vault = tmp_path / "auth.json"
+    _seed_codex_entry(
+        vault,
+        plan_type="plus",
+        last_refresh="2026-09-15T05:31:37Z",
+        last_refresh_result={"at": 1757914297.0, "ok": True, "detail": ""},
+    )
+    save_grant(
+        "codex",
+        {"access_token": "tok-new", "refresh_token": "ref-new", "expires_in": 21600},
+        auth="codex-oauth",
+        path=vault,
+    )
+
+    entry = json.loads(vault.read_text())["providers"]["codex"]
+    assert entry["last_refresh"] == "2026-09-15T05:31:37Z"
+    assert entry["last_refresh_result"]["ok"] is True
+    assert entry["plan_type"] == "plus"
+    # ... and the status surface still reads them.
+    status = get_status("codex", path=vault)
+    assert status["last_result"]["at"] == 1757914297.0
+
+
+def test_status_of_an_absent_grant_says_so(tmp_path):
+    status = get_status("codex", path=tmp_path / "absent.json")
+    assert status["logged_in"] is False
+    assert status["available"] is False
+    assert status["plan"] == ""
+    assert status["last_result"] is None
+    assert status["expires_at"] is None
+
+
+def test_plan_type_is_read_off_the_grants_own_claims():
+    assert plan_type_from_access_token(_plan_bearing_token(plan="prolite")) == "prolite"
+    assert plan_type_from_access_token(_plan_bearing_token(plan="plus")) == "plus"
+    # No tier named means no tier claimed, never a guess.
+    assert plan_type_from_access_token(_jwt({"exp": 1})) == ""
+    assert plan_type_from_access_token("opaque-token") == ""
+
+
+def test_credential_errors_name_the_provider_they_are_about(tmp_path, monkeypatch):
+    """The app-level handler needs the provider to attach the status (R12)."""
+    with pytest.raises(AuthError) as missing:
+        resolve_bearer(_codex_provider(), path=tmp_path / "absent.json")
+    assert missing.value.provider == "codex"
+
+    vault = tmp_path / "auth.json"
+    _seed_codex_entry(vault, tokens={
+        "access_token": "tok-old",
+        "refresh_token": "ref-old",
+        "expires_at": int(time.time()) - 10,
+    })
+    monkeypatch.setattr("otel_agent.auth_vault._needs_refresh", lambda entry: True)
+    monkeypatch.setattr(
+        "otel_agent.auth_vault.httpx.post", lambda *a, **k: _RejectedResponse()
+    )
+    with pytest.raises(AuthError) as failed:
+        resolve_bearer(_codex_provider(), path=vault)
+    assert failed.value.provider == "codex"
+
+
+def test_owner_last_refresh_is_read_from_the_owning_store(tmp_path):
+    store_path = tmp_path / "hermes.json"
+    _write_store(store_path, _codex_store())
+    assert read_owner_last_refresh(_codex_source(store_path)) == "2026-09-15T05:31:37.965237Z"
+
+
+def test_owner_last_refresh_degrades_when_nothing_can_be_read(tmp_path):
+    """Most machines have no sibling CLI installed; that is not a doctor error."""
+    assert read_owner_last_refresh(_codex_source(tmp_path / "nope.json")) == ""
+    junk = tmp_path / "junk.json"
+    junk.write_text("not json")
+    assert read_owner_last_refresh(_codex_source(junk)) == ""
+    _write_store(junk, {"credential_pool": {"openai-codex": [{"refresh_token": "r"}]}})
+    assert read_owner_last_refresh(_codex_source(junk)) == ""

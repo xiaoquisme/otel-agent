@@ -2107,3 +2107,166 @@ async def test_responses_streaming_client_still_gets_a_stream(tmp_path, monkeypa
 
         assert resp.headers["content-type"].startswith("text/event-stream"), resp.headers["content-type"]
         assert "event: response.completed" in resp.text
+
+
+# ------------------------------------------------------------------
+# U6: a credential failure is its own class of error, and it is one
+# provider's alone (R11 / R12 / KTD6 / KTD8)
+# ------------------------------------------------------------------
+
+
+def _make_mixed_config(td: str) -> Config:
+    """One plain provider beside the subscription provider."""
+    config_path = Path(td) / "config.yaml"
+    config_path.write_text(
+        "providers:\n"
+        "  - name: openai\n"
+        "    base_url: https://api.openai.com/v1\n"
+        "    api_key: sk-plain\n"
+        "    api_format: openai\n"
+        "  - name: codex\n"
+        "    base_url: https://chatgpt.com/backend-api/codex\n"
+        "    auth: codex-oauth\n"
+        "    api_format: openai\n"
+    )
+    return Config(config_path)
+
+
+class _ModelsResponse:
+    status_code = 200
+
+    def json(self):
+        return {"data": [{"id": "gpt-4o", "object": "model"}]}
+
+
+def _patch_models_get(monkeypatch, seen: dict) -> None:
+    """Serve the plain provider's model list, and never let a call reach a
+    provider whose credential the gateway does not have."""
+    real_get = httpx.AsyncClient.get
+
+    async def _get(self, url, **kwargs):
+        url = str(url)
+        if "chatgpt.com" in url:
+            raise AssertionError(f"a credential-less provider was called upstream: {url}")
+        if "api.openai.com" not in url:
+            # The test client's own GET of /v1/models must reach the app.
+            return await real_get(self, url, **kwargs)
+        seen["url"] = url
+        return _ModelsResponse()
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _get)
+
+
+async def _get_models(app, **params):
+    from httpx import ASGITransport
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        return await client.get("/v1/models", params=params or None)
+
+
+@pytest.mark.anyio
+async def test_models_route_localizes_a_credential_failure_to_its_provider(tmp_path, monkeypatch):
+    """KTD6/AE2: the broken provider is named rather than silently absent, and
+    the providers that are fine still answer."""
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(tmp_path / "absent.json"))
+    with tempfile.TemporaryDirectory() as td:
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(_make_mixed_config(td), telemetry)
+        seen: dict = {}
+        _patch_models_get(monkeypatch, seen)
+
+        resp = await _get_models(app)
+        telemetry.close()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [m["id"] for m in body["data"]] == ["openai/gpt-4o"]
+    assert [e["provider"] for e in body["errors"]] == ["codex"]
+    assert "vault" in body["errors"][0]["message"]
+    assert body["errors"][0]["type"] == "credential_error"
+    # The broken provider is the only one that was not asked upstream.
+    assert seen["url"] == "https://api.openai.com/v1/models"
+
+
+@pytest.mark.anyio
+async def test_models_route_for_a_broken_provider_is_an_explicit_error(tmp_path, monkeypatch):
+    """specs/009-models-api allows a clear error: a client that asked for
+    exactly that provider must not read the answer as "it has no models"."""
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(tmp_path / "absent.json"))
+    with tempfile.TemporaryDirectory() as td:
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(_make_mixed_config(td), telemetry)
+        seen: dict = {}
+        _patch_models_get(monkeypatch, seen)
+
+        resp = await _get_models(app, provider="codex")
+        telemetry.close()
+
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["error"]["type"] == "credential_error"
+    assert "codex" in resp.json()["error"]["message"]
+    assert seen == {}
+
+
+@pytest.mark.anyio
+async def test_a_subscription_request_without_a_grant_is_diagnosable(tmp_path, monkeypatch):
+    """R12/AE2: a credential failure arrives as its own class of error,
+    carrying the subscription's current status — not as an unclassified 500."""
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(tmp_path / "absent.json"))
+    with tempfile.TemporaryDirectory() as td:
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(_make_vault_config(td), telemetry)
+
+        from httpx import ASGITransport
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/v1/responses", json={"model": "codex/gpt-5", "input": "hi"})
+        telemetry.close()
+
+    assert resp.status_code != 500, resp.text
+    body = resp.json()
+    assert body["error"]["type"] == "credential_error"
+    assert body["error"]["code"] == "credential_unavailable"
+    assert body["error"]["provider"] == "codex"
+    assert "vault" in body["error"]["message"]
+    # AE2: the error carries the current status, not just a complaint.
+    assert body["credential"]["available"] is False
+    assert body["credential"]["last_result"] is None
+
+
+@pytest.mark.anyio
+async def test_an_unrefreshable_grant_is_a_credential_error(tmp_path, monkeypatch):
+    """AE2's Given in full: the grant is present, expired, and cannot be
+    refreshed. The client is told the credential is the problem, and nothing is
+    sent upstream bearing a token that is known to be dead."""
+    with tempfile.TemporaryDirectory() as td:
+        _seed_vault(tmp_path, monkeypatch)
+        vault = tmp_path / "auth.json"
+        stored = json.loads(vault.read_text())
+        stored["providers"]["codex"]["tokens"]["expires_at"] = 0
+        vault.write_text(json.dumps(stored))
+
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(_make_vault_config(td), telemetry)
+
+        class _Rejected:
+            status_code = 401
+
+            def json(self):
+                return {"error": "invalid_grant"}
+
+        monkeypatch.setattr("otel_agent.auth_vault.httpx.post", lambda *a, **k: _Rejected())
+
+        def _no_stream(*args, **kwargs):
+            raise AssertionError("the upstream was called with a credential known to be dead")
+
+        from httpx import ASGITransport
+        with patch("httpx.AsyncClient.stream", _no_stream):
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post("/v1/responses", json={"model": "codex/gpt-5", "input": "hi"})
+        telemetry.close()
+
+    assert resp.status_code == 503, resp.text
+    body = resp.json()
+    assert body["error"]["type"] == "credential_error"
+    assert "401" in body["error"]["message"]
+    # The failed refresh is on record, so the operator sees why (R11).
+    assert body["credential"]["last_result"]["ok"] is False

@@ -40,7 +40,16 @@ _LOCK_POLL_SECONDS = 0.02
 
 
 class AuthError(Exception):
-    """Raised when a SuperGrok grant is missing or cannot be refreshed."""
+    """Raised when a SuperGrok grant is missing or cannot be refreshed.
+
+    ``provider`` names the subscription the failure is about, when the raiser
+    knows it. It exists so the HTTP layer can answer with that subscription's
+    status instead of a message the client has to parse (R12).
+    """
+
+    def __init__(self, message: str, *, provider: str = "") -> None:
+        super().__init__(message)
+        self.provider = provider
 
 
 @dataclass(frozen=True)
@@ -97,9 +106,44 @@ def _jwt_claims(token: str) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _jwt_claim(token: str, *path: str) -> Any:
+    """Read one claim out of a JWT payload, following a nested path.
+
+    ``("exp",)`` reads a top-level claim; a longer path descends into nested
+    objects, which is how this vendor namespaces its subscription metadata.
+    The claims are unverified, exactly as in ``_jwt_claims``.
+    """
+    node: Any = _jwt_claims(token)
+    for key in path:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
 def _jwt_exp(token: str) -> int | None:
-    exp = _jwt_claims(token).get("exp")
+    exp = _jwt_claim(token, "exp")
     return int(exp) if isinstance(exp, (int, float)) else None
+
+
+#: Where a Codex grant names its subscription tier (R11's 「档位」). The vendor
+#: puts it under a URL-shaped claim rather than a top-level one, so the path is
+#: declared here instead of being sniffed for by claim name.
+PLAN_TYPE_CLAIM = ("https://api.openai.com/auth", "chatgpt_plan_type")
+
+
+def plan_type_from_access_token(access_token: str) -> str:
+    """The subscription tier the token itself names, or '' when it names none.
+
+    Read off the credential rather than stored beside it, so no refresh can
+    leave a stale tier behind: whatever the live token claims is the answer.
+    """
+    value = _jwt_claim(access_token, *PLAN_TYPE_CLAIM)
+    return str(value).strip() if isinstance(value, str) else ""
+
+
+def _iso_utc(timestamp: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
 
 
 def token_endpoint_from_claims(claims: dict[str, Any]) -> str:
@@ -269,16 +313,52 @@ def save_grant(
 
 
 def get_status(provider_name: str = "xai", *, path: Path | None = None) -> dict[str, Any]:
+    """The current state of one subscription (R11).
+
+    Four answers, and nothing that would require a network round trip to give:
+
+    ``available``
+        Whether the gateway holds a credential it can present. A grant that is
+        missing, incomplete, or left unresolved mid-refresh is not available.
+        Whether the last refresh *worked* is the ``last_result`` half of the
+        answer, deliberately not folded in here: deciding it would mean
+        attempting a refresh, which is the caller's business.
+    ``plan``
+        The tier the access token itself names, or '' when it names none.
+    ``expires_at``
+        When the access token stops being usable, in epoch seconds.
+    ``last_result``
+        How the last refresh attempt ended — ``{"at", "ok", "detail"}`` — or
+        None on a grant the gateway has never tried to refresh.
+    """
     vault = path or default_vault_path()
     entry = _load(vault).get("providers", {}).get(provider_name)
     if not isinstance(entry, dict):
-        return {"logged_in": False, "path": str(vault)}
-    tokens = entry.get("tokens") or {}
+        return {
+            "logged_in": False,
+            "available": False,
+            "path": str(vault),
+            "imported_from": "",
+            "plan": "",
+            "expires_at": None,
+            "last_result": None,
+            "last_refresh": "",
+        }
+    raw_tokens = entry.get("tokens")
+    tokens: dict[str, Any] = raw_tokens if isinstance(raw_tokens, dict) else {}
+    access = str(tokens.get("access_token", "") or "").strip()
+    refresh = str(tokens.get("refresh_token", "") or "").strip()
+    logged_in = bool(access and refresh)
+    result = entry.get("last_refresh_result")
     return {
-        "logged_in": bool(str(tokens.get("access_token", "")).strip() and str(tokens.get("refresh_token", "")).strip()),
+        "logged_in": logged_in,
+        "available": logged_in and not entry.get("refresh_in_flight"),
         "path": str(vault),
         "imported_from": entry.get("imported_from") or "",
-        "expires_at": (tokens.get("expires_at") if isinstance(tokens, dict) else None),
+        "plan": plan_type_from_access_token(access),
+        "expires_at": tokens.get("expires_at"),
+        "last_result": dict(result) if isinstance(result, dict) else None,
+        "last_refresh": str(entry.get("last_refresh") or ""),
     }
 
 
@@ -446,6 +526,23 @@ def _finish_refresh(entry: dict[str, Any], payload: dict[str, Any]) -> dict[str,
     return updated
 
 
+def _record_refresh_result(entry: dict[str, Any], *, ok: bool, detail: str = "") -> dict[str, Any]:
+    """Record how a refresh attempt ended, on the entry it was made for (R11).
+
+    Written for a refusal as well as for a failed exchange: "refused, because
+    the credential records no client_id" is precisely the diagnosis the status
+    surface exists to hand the operator, and it is otherwise only in a message
+    nobody kept. ``last_refresh`` is advanced only on success, so a second
+    writer can be recognised by comparing timestamps rather than attempts.
+    """
+    now = time.time()
+    updated = dict(entry)
+    updated["last_refresh_result"] = {"at": now, "ok": bool(ok), "detail": detail}
+    if ok:
+        updated["last_refresh"] = _iso_utc(now)
+    return updated
+
+
 def _marker_detail(marker: Any) -> str:
     """Describe an interrupted-refresh marker for the operator."""
     if not isinstance(marker, dict):
@@ -480,40 +577,55 @@ def resolve_bearer(provider: Provider, *, path: Path | None = None, force: bool 
         raise AuthError(f"Provider '{provider.name}' has no api_key.")
 
     vault = path or default_vault_path()
+    name = provider.name
     with _vault_lock(vault):
         data = _load(vault)
-        entry = data.get("providers", {}).get(provider.name)
+        entry = data.get("providers", {}).get(name)
         if not isinstance(entry, dict):
             if provider.api_key:
                 return provider.api_key
             raise AuthError(
-                f"No subscription grant for '{provider.name}' in the vault. "
-                f"Run: otel-agent auth login"
+                f"No subscription grant for '{name}' in the vault. "
+                f"Run: otel-agent auth login",
+                provider=name,
             )
         marker = entry.get("refresh_in_flight")
         if marker:
             raise AuthError(
-                f"An interrupted refresh left '{provider.name}' in an ambiguous state"
+                f"An interrupted refresh left '{name}' in an ambiguous state"
                 f"{_marker_detail(marker)}: its refresh token may already have been "
                 f"consumed, so it is not presented again automatically. "
-                f"The credential must be re-adopted."
+                f"The credential must be re-adopted.",
+                provider=name,
             )
         if force or _needs_refresh(entry):
             # Validate where the token may go *before* recording any intent: a
             # credential that cannot be refreshed is not an ambiguous one.
-            target = _refresh_target(entry)
-            entry = _begin_refresh(entry)
-            data["providers"][provider.name] = entry
-            _atomic_write(vault, data)
-            payload = _post_refresh(target)
-            entry = _finish_refresh(entry, payload)
-            data["providers"][provider.name] = entry
+            try:
+                target = _refresh_target(entry)
+                entry = _begin_refresh(entry)
+                data["providers"][name] = entry
+                _atomic_write(vault, data)
+                payload = _post_refresh(target)
+                entry = _finish_refresh(entry, payload)
+            except AuthError as exc:
+                # A refusal is a result too, and the only record of it the
+                # operator can read afterwards (R11). It is written before the
+                # error leaves, while the lock that guards the entry is held.
+                entry = _record_refresh_result(entry, ok=False, detail=str(exc))
+                data["providers"][name] = entry
+                _atomic_write(vault, data)
+                raise AuthError(str(exc), provider=name) from exc
+            entry = _record_refresh_result(entry, ok=True)
+            data["providers"][name] = entry
             _atomic_write(vault, data)
         raw_tokens = entry.get("tokens")
         tokens: dict[str, Any] = raw_tokens if isinstance(raw_tokens, dict) else {}
         access = str(tokens.get("access_token", "") or "").strip()
         if not access:
-            raise AuthError(f"Subscription grant for '{provider.name}' has no access_token.")
+            raise AuthError(
+                f"Subscription grant for '{name}' has no access_token.", provider=name
+            )
         return access
 
 
@@ -624,6 +736,31 @@ def extract_grant(store: dict[str, Any], source: GrantSource) -> AdoptedGrant | 
             if grant is not None:
                 return grant
     return None
+
+
+def read_owner_last_refresh(source: GrantSource) -> str:
+    """When the owner CLI itself last refreshed the grant *source* names.
+
+    Read-only, and best-effort by design: most machines have no sibling CLI
+    installed, and a store that cannot be read says nothing about a second
+    writer. Both cases yield '' rather than an error, so a caller can ask this
+    on every machine without guarding it.
+    """
+    try:
+        store = json.loads(source.path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(store, dict):
+        return ""
+    for pointer in source.pointers:
+        node = _walk(store, pointer)
+        for candidate in (node if isinstance(node, list) else [node]):
+            if not isinstance(candidate, dict):
+                continue
+            value = candidate.get("last_refresh")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
 
 
 def read_grant_source(source: GrantSource) -> AdoptedGrant:

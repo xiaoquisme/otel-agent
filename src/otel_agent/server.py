@@ -6,12 +6,13 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from otel_agent.auth_vault import AuthError, get_status
 from otel_agent.config import Config, Provider
 from otel_agent.dashboard.api import DashboardAPI
 from otel_agent.dashboard.routes import router as dashboard_router, set_api as set_dashboard_api
@@ -79,6 +80,33 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         await client.aclose()
         dashboard_api.close()
         telemetry.close()
+
+    # ------------------------------------------------------------------
+    # Credential failures
+    # ------------------------------------------------------------------
+    @app.exception_handler(AuthError)
+    async def credential_error(request: Request, exc: AuthError) -> JSONResponse:
+        """Answer a subscription credential failure as what it is (R12).
+
+        The routes resolve a bearer before they forward anything, so an
+        AuthError used to leave the operation and reach the client as an
+        unclassified 500 — the same answer the client gets from a bug in this
+        gateway. It is neither: the gateway is fine and the upstream was never
+        asked. 503 with its own error type says which of the two it is, and the
+        subscription's status rides along so the diagnosis does not stop at
+        "something went wrong" (AE2).
+        """
+        error: dict[str, Any] = {
+            "message": str(exc),
+            "type": "credential_error",
+            "code": "credential_unavailable",
+        }
+        body: dict[str, Any] = {"error": error}
+        if exc.provider:
+            error["provider"] = exc.provider
+            body["credential"] = get_status(exc.provider)
+        logger.warning("Credential unavailable: %s", exc)
+        return JSONResponse(body, status_code=503)
 
     # ------------------------------------------------------------------
     # OpenAI-compatible endpoint
@@ -435,16 +463,37 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             providers = {provider: providers[provider]}
 
         raw_models: dict[str, list] = {}
+        failures: dict[str, str] = {}
         for name, prov in providers.items():
             cached = model_cache.get(name)
             if cached is not None:
                 raw_models[name] = cached
             else:
-                fetched = await fetch_provider_models(client, prov)
-                model_cache.put(name, fetched)
+                fetched = await fetch_provider_models(client, prov, failures=failures)
+                # A credential failure is not cached: it would hold the empty
+                # list in place for a whole TTL after the operator re-adopts,
+                # which is the same silent absence in slower motion.
+                if name not in failures:
+                    model_cache.put(name, fetched)
                 raw_models[name] = fetched
 
-        return JSONResponse(aggregate_models(raw_models))
+        if provider is not None and provider in failures:
+            # The client asked for exactly this provider, so "no models" would
+            # be a wrong answer and a 200 would dress it up as a right one
+            # (specs/009-models-api allows a clear error instead).
+            return JSONResponse(
+                {
+                    "error": {
+                        "message": failures[provider],
+                        "type": "credential_error",
+                        "code": "credential_unavailable",
+                        "provider": provider,
+                    }
+                },
+                status_code=503,
+            )
+
+        return JSONResponse(aggregate_models(raw_models, failures))
 
     # ------------------------------------------------------------------
     # Health check
