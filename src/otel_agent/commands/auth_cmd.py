@@ -1,7 +1,6 @@
-"""otel-agent auth — SuperGrok login and optional Hermes/Grok import."""
+"""otel-agent auth — SuperGrok login and grant adoption from sibling CLIs."""
 from __future__ import annotations
 
-import json
 import webbrowser
 from pathlib import Path
 
@@ -9,12 +8,15 @@ import httpx
 
 from otel_agent.auth_vault import (
     AuthError,
+    DEFAULT_CODEX_BASE_URL,
     DEFAULT_XAI_BASE_URL,
-    extract_hermes_xai_grant,
+    GrantSource,
+    adopt_grant,
     get_status,
+    read_grant_source,
     save_grant,
 )
-from otel_agent.config import AUTH_XAI_OAUTH, upsert_provider
+from otel_agent.config import AUTH_CODEX_OAUTH, AUTH_XAI_OAUTH, upsert_provider
 from otel_agent.xai_oauth import (
     fetch_discovery,
     is_remote_session,
@@ -25,6 +27,51 @@ from otel_agent.xai_oauth import (
 HERMES_AUTH = Path.home() / ".hermes" / "auth.json"
 GROK_AUTH = Path.home() / ".grok" / "auth.json"
 DEFAULT_PROVIDER = "xai"
+CODEX_PROVIDER = "codex"
+
+#: Where each sibling CLI keeps a grant this gateway may adopt (D2). Adopting
+#: is a lookup here rather than a per-vendor branch: the file, the pointers
+#: into it, the provider the grant lands under and whatever the store cannot
+#: supply are all declared as rows. The owner's file is read, never written.
+GRANT_SOURCES: tuple[GrantSource, ...] = (
+    GrantSource(
+        label="hermes",
+        path=HERMES_AUTH,
+        # `providers` first: that is where xAI's discovery document — and so
+        # the token endpoint its refresh must present — is recorded.
+        pointers=(("providers", "xai-oauth"), ("credential_pool", "xai-oauth")),
+        provider=DEFAULT_PROVIDER,
+        auth=AUTH_XAI_OAUTH,
+        base_url=DEFAULT_XAI_BASE_URL,
+    ),
+    GrantSource(
+        label="grok-cli",
+        path=GROK_AUTH,
+        pointers=(("providers", "xai-oauth"), ("credential_pool", "xai-oauth")),
+        provider=DEFAULT_PROVIDER,
+        auth=AUTH_XAI_OAUTH,
+        base_url=DEFAULT_XAI_BASE_URL,
+    ),
+    GrantSource(
+        label="hermes",
+        path=HERMES_AUTH,
+        # `credential_pool` first: `base_url` and `source` live on the pool
+        # entry. `providers["openai-codex"]` carries only
+        # `tokens`/`last_refresh`/`auth_mode`.
+        pointers=(("credential_pool", "openai-codex"), ("providers", "openai-codex")),
+        provider=CODEX_PROVIDER,
+        auth=AUTH_CODEX_OAUTH,
+        base_url=DEFAULT_CODEX_BASE_URL,
+        # token_endpoint and client_id stay empty on purpose: the store carries
+        # neither (its base_url is the API host, not the token host), so both
+        # are read off the adopted grant's own claims by adopt_grant().
+    ),
+)
+
+
+def grant_sources(provider: str) -> tuple[GrantSource, ...]:
+    """Every declared source for *provider*, in declaration order."""
+    return tuple(source for source in GRANT_SOURCES if source.provider == provider)
 
 
 def handle_auth(args) -> None:
@@ -33,6 +80,8 @@ def handle_auth(args) -> None:
         _login(args)
     elif action == "import-xai":
         _import_xai(args)
+    elif action == "import-codex":
+        _import_codex(args)
     else:
         _status(args)
 
@@ -122,34 +171,62 @@ def _login(args) -> None:
 
 def _import_xai(args) -> None:
     config_path = Path(getattr(args, "config", "~/.otel-agent/config.yaml")).expanduser()
-    candidates = [HERMES_AUTH, GROK_AUTH]
     last_error = "No Hermes or Grok auth file found. Use: otel-agent auth login"
-    for source in candidates:
-        if not source.exists():
-            continue
+    for source in grant_sources(DEFAULT_PROVIDER):
         try:
-            store = json.loads(source.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            last_error = f"{source} is unreadable: {exc}"
+            grant = read_grant_source(source)
+        except AuthError as exc:
+            last_error = str(exc)
             continue
-        grant = extract_hermes_xai_grant(store)
-        if grant is None:
-            last_error = f"{source} has no xai-oauth grant."
-            continue
-        tokens, discovery = grant
-        imported_from = "hermes" if source == HERMES_AUTH else "grok-cli"
         save_grant(
-            DEFAULT_PROVIDER,
-            tokens,
-            auth=AUTH_XAI_OAUTH,
-            discovery=discovery,
-            imported_from=imported_from,
+            source.provider,
+            grant.tokens,
+            auth=source.auth,
+            discovery=grant.discovery,
+            imported_from=source.label,
         )
         _upsert_xai_provider(config_path)
-        print(f"Imported SuperGrok grant from {source}")
+        print(f"Imported SuperGrok grant from {source.path}")
         print(f"  provider: {DEFAULT_PROVIDER}  (use model xai/grok-4.6)")
         print(f"  config:   {config_path}")
-        print("  Tokens stay in ~/.otel-agent/auth.json — Hermes auth.json was not modified.")
+        print(f"  Tokens stay in ~/.otel-agent/auth.json — {source.path} was not modified.")
         return
     print(f"Import failed: {last_error}")
+    raise SystemExit(1)
+
+
+def _upsert_codex_provider(config_path: Path, base_url: str) -> None:
+    upsert_provider(
+        config_path,
+        {
+            "name": CODEX_PROVIDER,
+            "base_url": base_url,
+            "auth": AUTH_CODEX_OAUTH,
+            "api_format": "openai",
+        },
+    )
+
+
+def _import_codex(args) -> None:
+    """Adopt a Codex grant and hand the chain over to this gateway (F1)."""
+    config_path = Path(getattr(args, "config", "~/.otel-agent/config.yaml")).expanduser()
+    last_error = "No sibling CLI holds a Codex grant on this machine."
+    for source in grant_sources(CODEX_PROVIDER):
+        try:
+            adoption = adopt_grant(source)
+        except AuthError as exc:
+            last_error = str(exc)
+            continue
+        _upsert_codex_provider(config_path, adoption.base_url)
+        print(f"Adopted the Codex grant from {source.path}")
+        print(f"  provider: {CODEX_PROVIDER}  (use model codex/gpt-5)")
+        print(f"  config:   {config_path}")
+        print(f"  Tokens stay in ~/.otel-agent/auth.json — {source.path} was not modified.")
+        print()
+        print("Hand-off — this gateway now owns the grant:")
+        print("  1. Stop using this subscription from that CLI, or point it at this gateway.")
+        print("  2. Its own sign-in is stale from now on; it must sign in again if you keep using it.")
+        print("  3. A second writer that refreshes this chain will invalidate it.")
+        return
+    print(f"Adoption failed: {last_error}")
     raise SystemExit(1)

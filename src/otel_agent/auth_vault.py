@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
+from urllib.parse import urlparse
 
 import httpx
 
@@ -23,6 +24,13 @@ XAI_OAUTH_TOKEN_URL = "https://auth.x.ai/oauth2/token"
 XAI_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 3600
 CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300
 DEFAULT_XAI_BASE_URL = "https://api.x.ai/v1"
+DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+
+#: Appended to a grant's own ``iss`` when neither the source data nor the
+#: source declaration names a token endpoint. The host comes entirely from the
+#: credential, which is what keeps this a derivation rather than the vendor
+#: default KTD4 forbids.
+OAUTH_TOKEN_PATH = "/oauth/token"
 
 #: How long a writer waits for the cross-process vault lock. Long enough to
 #: outlast a slow token exchange, short enough that a wedged holder surfaces as
@@ -74,17 +82,39 @@ def default_vault_path() -> Path:
     return Path(override).expanduser() if override else DEFAULT_VAULT_PATH
 
 
-def _jwt_exp(token: str) -> int | None:
+def _jwt_claims(token: str) -> dict[str, Any]:
+    """Decode a JWT payload. Unverified on purpose: the token is the credential
+    this process already holds, and its claims are read for routing metadata
+    (expiry, issuer, client id), never for trust."""
     parts = token.split(".")
     if len(parts) < 2:
-        return None
+        return {}
     try:
         pad = "=" * (-len(parts[1]) % 4)
         payload = json.loads(base64.urlsafe_b64decode(parts[1] + pad))
     except Exception:
-        return None
-    exp = payload.get("exp")
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _jwt_exp(token: str) -> int | None:
+    exp = _jwt_claims(token).get("exp")
     return int(exp) if isinstance(exp, (int, float)) else None
+
+
+def token_endpoint_from_claims(claims: dict[str, Any]) -> str:
+    """Derive the token endpoint a grant's refresh token may be presented to.
+
+    Read off the grant's own ``iss`` so the host follows the credential rather
+    than a hardcoded vendor default (KTD4). An issuer that is not an absolute
+    https URL yields nothing: a caller that cannot derive an endpoint must
+    refuse rather than guess one.
+    """
+    issuer = str(claims.get("iss") or "").strip().rstrip("/")
+    parsed = urlparse(issuer)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return ""
+    return issuer + OAUTH_TOKEN_PATH
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -184,6 +214,7 @@ def save_grant(
     *,
     auth: str,
     discovery: dict[str, Any] | None = None,
+    client_id: str = "",
     imported_from: str = "",
     path: Path | None = None,
 ) -> None:
@@ -194,6 +225,10 @@ def save_grant(
     from the provider name. The entry is merged into, not replaced: fields this
     caller does not set (status written by the refresh path, plan claims, a
     token endpoint recorded at import time) survive.
+
+    *client_id* is the one a refresh presents; it is recorded with the
+    credential rather than assumed, because a mode whose token endpoint is
+    credential-specific has nowhere else to get it from.
 
     Adopting a grant is also what clears an interrupted-refresh marker: the
     ambiguity that marker records is resolved by the new refresh token.
@@ -224,6 +259,8 @@ def save_grant(
         }
         if discovery or not isinstance(entry.get("discovery"), dict):
             entry["discovery"] = discovery or {}
+        if client_id or "client_id" not in entry:
+            entry["client_id"] = client_id
         if imported_from or "imported_from" not in entry:
             entry["imported_from"] = imported_from
         entry.pop("refresh_in_flight", None)
@@ -423,13 +460,18 @@ def _marker_detail(marker: Any) -> str:
     return f" ({', '.join(parts)})" if parts else ""
 
 
-def resolve_bearer(provider: Provider, *, path: Path | None = None) -> str:
+def resolve_bearer(provider: Provider, *, path: Path | None = None, force: bool = False) -> str:
     """Return a live Bearer secret for *provider*.
 
     Blocking: it holds the cross-process vault lock and may refresh the
     credential over the network. Async callers must go through
     ``provider_utils.resolve_bearer_async`` so that a refresh never runs on the
     event loop (KTD1).
+
+    *force* refreshes a token that still looks valid. Adoption is the caller
+    that needs it (F1): on a single-use rotating chain the point of adopting is
+    to be the writer that spends the old refresh token first, not to wait for
+    the copied access token to age.
     """
     source = auth_source(provider.auth)
     if source is None or not source.vault_backed:
@@ -456,7 +498,7 @@ def resolve_bearer(provider: Provider, *, path: Path | None = None) -> str:
                 f"consumed, so it is not presented again automatically. "
                 f"The credential must be re-adopted."
             )
-        if _needs_refresh(entry):
+        if force or _needs_refresh(entry):
             # Validate where the token may go *before* recording any intent: a
             # credential that cannot be refreshed is not an ambiguous one.
             target = _refresh_target(entry)
@@ -475,26 +517,195 @@ def resolve_bearer(provider: Provider, *, path: Path | None = None) -> str:
         return access
 
 
-def extract_hermes_xai_grant(store: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    """Pull usable xAI tokens from a Hermes auth.json object."""
-    providers = store.get("providers") if isinstance(store, dict) else None
-    state = providers.get("xai-oauth") if isinstance(providers, dict) else None
-    tokens = state.get("tokens") if isinstance(state, dict) else None
-    if isinstance(tokens, dict) and str(tokens.get("access_token", "")).strip() and str(tokens.get("refresh_token", "")).strip():
-        raw_disc = state.get("discovery") if isinstance(state, dict) else None
-        discovery: dict[str, Any] = raw_disc if isinstance(raw_disc, dict) else {}
-        return tokens, discovery
-    pool = store.get("credential_pool") if isinstance(store, dict) else None
-    entries = pool.get("xai-oauth") if isinstance(pool, dict) else None
-    if isinstance(entries, list):
-        for entry in entries:
-            if not isinstance(entry, dict):
+@dataclass(frozen=True)
+class GrantSource:
+    """One sibling CLI's store, declared rather than branched on (D2).
+
+    Adopting a grant is a lookup in a table of these: the file, the pointers
+    into it, the provider the grant lands under, and whatever the store cannot
+    supply are all declared here. The owner's file is read and never written.
+    """
+
+    label: str
+    """Recorded as the vault entry's ``imported_from``."""
+
+    path: Path
+    """The owner CLI's credential store."""
+
+    pointers: tuple[tuple[str, ...], ...]
+    """Tried in order; the first node holding a complete token pair wins.
+
+    The order matters and is declared per source: it decides which shape's
+    ``base_url`` and ``discovery`` a grant is read from.
+    """
+
+    provider: str
+    """Provider name the grant is stored under, and the row written to config."""
+
+    auth: str
+    """Declared credential source, recorded on the vault entry."""
+
+    base_url: str = ""
+    """Upstream base_url for the provider config row, when the store has none."""
+
+    token_endpoint: str = ""
+    """Declared token endpoint. Empty means the store does not carry one and it
+    is read off the adopted grant's own claims instead (see ``adopt_grant``)."""
+
+    client_id: str = ""
+    """Declared client_id, under the same rule as ``token_endpoint``."""
+
+
+@dataclass(frozen=True)
+class AdoptedGrant:
+    """A grant lifted out of a sibling store, before it is written anywhere."""
+
+    tokens: dict[str, Any]
+    discovery: dict[str, Any]
+    base_url: str = ""
+
+
+@dataclass(frozen=True)
+class Adoption:
+    """What adopting a grant produced, for the caller to report."""
+
+    base_url: str
+    bearer: str
+
+
+def _walk(node: Any, pointer: tuple[str, ...]) -> Any:
+    for key in pointer:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def _grant_from_node(node: dict[str, Any]) -> AdoptedGrant | None:
+    """Read one candidate node, in either shape a store may present.
+
+    A ``providers`` entry keeps the pair under ``tokens`` and its discovery
+    document beside it; a ``credential_pool`` entry keeps the pair flat and its
+    ``base_url`` beside it. Only the node that actually supplied the pair is
+    read for either.
+    """
+    raw_tokens = node.get("tokens")
+    tokens: dict[str, Any] = raw_tokens if isinstance(raw_tokens, dict) else node
+    access = str(tokens.get("access_token", "") or "").strip()
+    refresh = str(tokens.get("refresh_token", "") or "").strip()
+    if not access or not refresh:
+        return None
+    raw_discovery = node.get("discovery")
+    return AdoptedGrant(
+        tokens={
+            "access_token": access,
+            "refresh_token": refresh,
+            "token_type": str(tokens.get("token_type") or "Bearer"),
+        },
+        discovery=dict(raw_discovery) if isinstance(raw_discovery, dict) else {},
+        base_url=str(node.get("base_url", "") or "").strip(),
+    )
+
+
+def extract_grant(store: dict[str, Any], source: GrantSource) -> AdoptedGrant | None:
+    """Pull a usable grant out of an already-parsed sibling store (pure)."""
+    for pointer in source.pointers:
+        node = _walk(store, pointer)
+        if isinstance(node, dict):
+            candidates: list[Any] = [node]
+        elif isinstance(node, list):
+            candidates = node
+        else:
+            continue
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
                 continue
-            access = str(entry.get("access_token", "") or "").strip()
-            refresh = str(entry.get("refresh_token", "") or "").strip()
-            if access and refresh:
-                return (
-                    {"access_token": access, "refresh_token": refresh, "token_type": entry.get("token_type") or "Bearer"},
-                    {},
-                )
+            grant = _grant_from_node(candidate)
+            if grant is not None:
+                return grant
     return None
+
+
+def read_grant_source(source: GrantSource) -> AdoptedGrant:
+    """Read *source*'s store and extract its grant.
+
+    The owner CLI's file is opened for reading only — a refresh writes the
+    vault and nothing else (R3).
+    """
+    try:
+        store = json.loads(source.path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise AuthError(
+            f"{source.path} does not exist, so the {source.label} CLI is not signed in "
+            f"on this machine."
+        ) from exc
+    except (OSError, ValueError) as exc:
+        raise AuthError(f"{source.path} is unreadable: {exc}") from exc
+    if not isinstance(store, dict):
+        raise AuthError(f"{source.path} does not hold a JSON object.")
+    grant = extract_grant(store, source)
+    if grant is None:
+        raise AuthError(f"{source.path} holds no {source.provider} grant.")
+    return grant
+
+
+def _credential_metadata(grant: AdoptedGrant, source: GrantSource) -> tuple[dict[str, Any], str]:
+    """The token endpoint and client_id a later refresh will present (KTD4).
+
+    Neither is in the store: its ``base_url`` is the API host, while the token
+    host is another one entirely. Both are read off the adopted grant's own
+    claims, so they follow the credential rather than a vendor default.
+    """
+    claims = _jwt_claims(str(grant.tokens.get("access_token", "") or ""))
+    discovery = dict(grant.discovery)
+    if not str(discovery.get("token_endpoint") or "").strip():
+        endpoint = source.token_endpoint or token_endpoint_from_claims(claims)
+        if not endpoint:
+            raise AuthError(
+                f"The {source.provider} grant in {source.path} records no token endpoint and "
+                f"its access token names no usable issuer, so a refresh would have nowhere "
+                f"to go: refusing to fall back to a vendor default."
+            )
+        discovery["token_endpoint"] = endpoint
+    client_id = source.client_id or str(claims.get("client_id") or "").strip()
+    if not client_id:
+        raise AuthError(
+            f"The {source.provider} grant in {source.path} records no client_id and its "
+            f"access token names none, so its refresh token could not be presented."
+        )
+    return discovery, client_id
+
+
+def adopt_grant(source: GrantSource, *, path: Path | None = None) -> Adoption:
+    """Adopt *source*'s grant and take over the chain (R3 / F1).
+
+    Three steps, in this order and for a reason:
+
+    1. The sibling's store is read — never written — and its pair copied into
+       the vault.
+    2. The token endpoint and client_id are recorded on the entry from the
+       adopted grant's own claims. Without them the first refresh is refused
+       outright (KTD4), so an adoption that skipped this would hand the gateway
+       a credential it could not keep alive.
+    3. The gateway refreshes once, immediately. On a single-use rotating chain
+       this is what makes it the only writer: whoever presents the refresh
+       token first consumes it, and the sibling's copy is then dead. Waiting
+       for the copied access token to near expiry would leave the sibling a
+       window to refresh first — and a loser that presents a revoked copy takes
+       the whole family down with it.
+    """
+    grant = read_grant_source(source)
+    discovery, client_id = _credential_metadata(grant, source)
+    vault = path or default_vault_path()
+    save_grant(
+        source.provider,
+        grant.tokens,
+        auth=source.auth,
+        discovery=discovery,
+        client_id=client_id,
+        imported_from=source.label,
+        path=vault,
+    )
+    base_url = grant.base_url or source.base_url
+    provider = Provider(name=source.provider, base_url=base_url, api_key="", auth=source.auth)
+    return Adoption(base_url=base_url, bearer=resolve_bearer(provider, path=vault, force=True))

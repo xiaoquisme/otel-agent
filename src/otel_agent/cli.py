@@ -111,8 +111,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Do not open a browser during auth login",
     )
     auth_p.add_argument(
-        "auth_action", nargs="?", default="status", choices=["status", "login", "import-xai"],
-        help="status (default), login (device-code), or import-xai",
+        "auth_action", nargs="?", default="status",
+        choices=["status", "login", "import-xai", "import-codex"],
+        help="status (default), login (device-code), import-xai, or import-codex",
     )
 
     return parser

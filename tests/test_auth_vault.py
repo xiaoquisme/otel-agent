@@ -1,20 +1,27 @@
 """Tests for SuperGrok sidecar vault and entitlement rewrite."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import threading
 import time
+from argparse import Namespace
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from otel_agent.auth_vault import (
     AuthError,
-    extract_hermes_xai_grant,
+    adopt_grant,
+    extract_grant,
     resolve_bearer,
     save_grant,
+    token_endpoint_from_claims,
 )
-from otel_agent.config import Provider
+from otel_agent.commands.auth_cmd import GRANT_SOURCES, grant_sources, handle_auth
+from otel_agent.config import Config, Provider
 from otel_agent.xai_errors import HINT, is_xai_provider, rewrite_xai_error
 
 XAI_TOKEN_ENDPOINT = "https://auth.x.ai/oauth2/token"
@@ -79,7 +86,7 @@ def test_refresh_writes_vault_not_hermes(tmp_path, monkeypatch):
         assert hermes.read_bytes() == before
 
 
-def test_extract_hermes_provider_block():
+def test_extract_grant_from_the_providers_shape():
     store = {
         "providers": {
             "xai-oauth": {
@@ -88,22 +95,54 @@ def test_extract_hermes_provider_block():
             }
         }
     }
-    grant = extract_hermes_xai_grant(store)
+    grant = extract_grant(store, grant_sources("xai")[0])
     assert grant is not None
-    tokens, discovery = grant
-    assert tokens["access_token"] == "a"
-    assert discovery["token_endpoint"].endswith("/token")
+    assert grant.tokens["access_token"] == "a"
+    assert grant.discovery["token_endpoint"].endswith("/token")
 
 
-def test_extract_hermes_pool_fallback():
+def test_extract_grant_falls_back_to_the_pool_shape():
     store = {
         "credential_pool": {
             "xai-oauth": [{"access_token": "pa", "refresh_token": "pr"}],
         }
     }
-    grant = extract_hermes_xai_grant(store)
+    grant = extract_grant(store, grant_sources("xai")[0])
     assert grant is not None
-    assert grant[0]["access_token"] == "pa"
+    assert grant.tokens["access_token"] == "pa"
+
+
+def test_import_xai_verb_goes_through_the_same_declaration_table(tmp_path, monkeypatch):
+    """`import-xai` is a declaration lookup too, not a second code path (D2)."""
+    store_path = tmp_path / "hermes.json"
+    _write_store(store_path, {
+        "providers": {
+            "xai-oauth": {
+                "tokens": {"access_token": "tok-xai", "refresh_token": "ref-xai"},
+                "discovery": {"token_endpoint": XAI_TOKEN_ENDPOINT},
+            }
+        }
+    })
+    vault = tmp_path / "auth.json"
+    config = tmp_path / "config.yaml"
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(vault))
+    monkeypatch.setattr(
+        "otel_agent.commands.auth_cmd.GRANT_SOURCES",
+        tuple(
+            replace(row, path=store_path) if row.provider == "xai" else row
+            for row in GRANT_SOURCES
+        ),
+    )
+
+    handle_auth(Namespace(auth_action="import-xai", config=str(config)))
+
+    entry = json.loads(vault.read_text())["providers"]["xai"]
+    assert entry["imported_from"] == "hermes"
+    assert entry["tokens"]["access_token"] == "tok-xai"
+    assert entry["discovery"]["token_endpoint"] == XAI_TOKEN_ENDPOINT
+    provider = Config(config).get_provider("xai")
+    assert provider is not None
+    assert provider.auth == "xai-oauth"
 
 
 def test_missing_grant_raises(tmp_path):
@@ -524,3 +563,255 @@ def test_refresh_leaves_the_owner_cli_file_untouched(tmp_path, monkeypatch):
     assert posts == [XAI_TOKEN_ENDPOINT]
     assert hermes.read_bytes() == before
     assert json.loads(vault.read_text())["providers"]["xai"]["tokens"]["access_token"] == "tok-new"
+
+
+# ------------------------------------------------------------------
+# Adopting a sibling CLI's Codex grant (R3 / F1)
+# ------------------------------------------------------------------
+#
+# The shapes below are those of the real `~/.hermes/auth.json` on this machine,
+# reproduced as fixtures: `providers["openai-codex"]` carries only
+# `tokens`/`last_refresh`/`auth_mode`, while `credential_pool["openai-codex"][0]`
+# carries `base_url`/`source`/`label` and the pair flat. Nothing here reads the
+# real file, and no test ever lets a refresh token leave the machine.
+
+CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+CODEX_TOKEN_ENDPOINT = "https://auth.openai.com/oauth/token"
+CODEX_CLIENT_ID = "app_codex_test"
+
+
+def _jwt(claims: dict) -> str:
+    """A structurally valid JWT whose payload is *claims*."""
+
+    def _segment(obj: dict) -> str:
+        return base64.urlsafe_b64encode(json.dumps(obj).encode()).rstrip(b"=").decode()
+
+    return f"{_segment({'alg': 'RS256', 'typ': 'JWT'})}.{_segment(claims)}.sig"
+
+
+def _codex_access_token(*, iss: str = "https://auth.openai.com", client_id: str = CODEX_CLIENT_ID) -> str:
+    return _jwt({"iss": iss, "client_id": client_id, "exp": int(time.time()) + 86400})
+
+
+def _codex_store(*, access: str | None = None, providers: bool = True, pool: bool = True) -> dict:
+    access = access if access is not None else _codex_access_token()
+    store: dict = {}
+    if providers:
+        store["providers"] = {
+            "openai-codex": {
+                "tokens": {"access_token": access, "refresh_token": "ref-owner"},
+                "last_refresh": "2026-09-15T05:31:37.965237Z",
+                "auth_mode": "chatgpt",
+            }
+        }
+    if pool:
+        store["credential_pool"] = {
+            "openai-codex": [
+                {
+                    "id": "073100",
+                    "label": "device_code",
+                    "auth_type": "oauth",
+                    "priority": 0,
+                    "source": "device_code",
+                    "access_token": access,
+                    "refresh_token": "ref-owner",
+                    "base_url": CODEX_BASE_URL,
+                    "last_refresh": "2026-09-15T05:31:37.965237Z",
+                    "request_count": 0,
+                }
+            ]
+        }
+    return store
+
+
+def _codex_source(store_path: Path):
+    """The real declared source row, pointed at a fixture store instead."""
+    return replace(grant_sources("codex")[0], path=store_path)
+
+
+def _write_store(store_path: Path, store: dict) -> None:
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    store_path.write_text(json.dumps(store, indent=2) + "\n", encoding="utf-8")
+
+
+def _adopted_entry(vault: Path) -> dict:
+    return json.loads(vault.read_text())["providers"]["codex"]
+
+
+def test_adopt_codex_grant_from_the_providers_shape(tmp_path, monkeypatch):
+    """A store that only has `providers[...]` still yields an adoptable grant."""
+    store_path = tmp_path / "hermes.json"
+    access = _codex_access_token()
+    _write_store(store_path, _codex_store(access=access, pool=False))
+    vault = tmp_path / "auth.json"
+    posts: list = []
+    _stub_post(monkeypatch, _refresh_payload(), posts)
+
+    adoption = adopt_grant(_codex_source(store_path), path=vault)
+
+    entry = _adopted_entry(vault)
+    assert entry["auth"] == "codex-oauth"
+    assert entry["imported_from"] == "hermes"
+    assert entry["tokens"]["refresh_token"] == "ref-new"
+    # base_url is nowhere in this shape, so the declaration supplies it.
+    assert adoption.base_url == CODEX_BASE_URL
+
+
+def test_adopt_codex_grant_from_the_credential_pool_shape(tmp_path, monkeypatch):
+    """`base_url` comes off the pool entry, not off `providers[...]`."""
+    store_path = tmp_path / "hermes.json"
+    store = _codex_store()
+    # A decoy on the nodes the pool pointer must win over. The real
+    # `providers["openai-codex"]` carries no base_url at all; the decoy is here
+    # so that reordering the declared pointers fails this test.
+    store["providers"]["openai-codex"]["base_url"] = "https://decoy.invalid/v1"
+    _write_store(store_path, store)
+    vault = tmp_path / "auth.json"
+    posts: list = []
+    _stub_post(monkeypatch, _refresh_payload(), posts)
+
+    adoption = adopt_grant(_codex_source(store_path), path=vault)
+
+    assert adoption.base_url == CODEX_BASE_URL
+    assert _adopted_entry(vault)["tokens"]["refresh_token"] == "ref-new"
+
+
+def test_adopt_records_the_endpoint_and_client_id_from_the_grants_own_claims(tmp_path, monkeypatch):
+    """R4/KTD4: the store names no token endpoint, so the grant's own `iss` and
+    `client_id` claim are what a later refresh will present — and a refresh with
+    no recorded endpoint is refused, so adoption without this step is broken."""
+    store_path = tmp_path / "hermes.json"
+    _write_store(store_path, _codex_store())
+    vault = tmp_path / "auth.json"
+    posts: list = []
+    _stub_post(monkeypatch, _refresh_payload(), posts)
+
+    adopt_grant(_codex_source(store_path), path=vault)
+
+    entry = _adopted_entry(vault)
+    assert entry["discovery"]["token_endpoint"] == CODEX_TOKEN_ENDPOINT
+    assert entry["client_id"] == CODEX_CLIENT_ID
+    # ... and that recorded endpoint is exactly where the refresh was sent.
+    assert posts == [CODEX_TOKEN_ENDPOINT]
+
+
+def test_token_endpoint_follows_the_grants_own_issuer():
+    assert token_endpoint_from_claims({"iss": "https://auth.openai.com"}) == CODEX_TOKEN_ENDPOINT
+    assert token_endpoint_from_claims({"iss": "https://auth.openai.com/"}) == CODEX_TOKEN_ENDPOINT
+    # No issuer, or one that is not an https host, yields nothing: the
+    # derivation follows the credential rather than a vendor default (KTD4).
+    assert token_endpoint_from_claims({}) == ""
+    assert token_endpoint_from_claims({"iss": "http://auth.openai.com"}) == ""
+    assert token_endpoint_from_claims({"iss": "auth.openai.com"}) == ""
+
+
+def test_adopt_refuses_a_grant_that_cannot_yield_a_token_endpoint(tmp_path, monkeypatch):
+    """Better a refusal at adoption than a hard-failing refresh afterwards."""
+    store_path = tmp_path / "hermes.json"
+    _write_store(store_path, _codex_store(access=_jwt({"exp": int(time.time()) + 86400})))
+    vault = tmp_path / "auth.json"
+    posts: list = []
+    _stub_post(monkeypatch, _refresh_payload(), posts)
+
+    with pytest.raises(AuthError, match="token endpoint"):
+        adopt_grant(_codex_source(store_path), path=vault)
+
+    assert posts == []
+    assert not vault.exists(), "a refused adoption must not leave a half-written vault"
+
+
+def test_adopt_without_a_sibling_store_says_so(tmp_path):
+    vault = tmp_path / "auth.json"
+    with pytest.raises(AuthError, match="does not exist"):
+        adopt_grant(_codex_source(tmp_path / "nope.json"), path=vault)
+    assert not vault.exists()
+
+
+def test_adopt_leaves_the_owner_file_byte_identical(tmp_path, monkeypatch):
+    """R3: the owner CLI's file is read, never written."""
+    store_path = tmp_path / "hermes.json"
+    _write_store(store_path, _codex_store())
+    before = store_path.read_bytes()
+    digest = hashlib.sha256(before).hexdigest()
+    vault = tmp_path / "auth.json"
+    posts: list = []
+    _stub_post(monkeypatch, _refresh_payload(), posts)
+
+    adopt_grant(_codex_source(store_path), path=vault)
+
+    assert store_path.read_bytes() == before
+    assert hashlib.sha256(store_path.read_bytes()).hexdigest() == digest
+
+
+def test_adopt_takes_over_the_chain_with_one_immediate_refresh(tmp_path, monkeypatch):
+    """F1: adoption refreshes at once, so the gateway — not the sibling — is the
+    writer that spends the old refresh token. The adopted access token is a
+    valid, unexpired JWT, so an adoption that merely waited for expiry would
+    post nothing here."""
+    store_path = tmp_path / "hermes.json"
+    adopted = _codex_access_token()
+    _write_store(store_path, _codex_store(access=adopted))
+    vault = tmp_path / "auth.json"
+    posts: list = []
+    _stub_post(monkeypatch, _refresh_payload(access_token="tok-handed-over", refresh_token="ref-handed-over"), posts)
+
+    adoption = adopt_grant(_codex_source(store_path), path=vault)
+
+    assert posts == [CODEX_TOKEN_ENDPOINT]
+    assert adoption.bearer == "tok-handed-over"
+    stored = _adopted_entry(vault)
+    assert stored["tokens"]["access_token"] == "tok-handed-over"
+    assert stored["tokens"]["refresh_token"] == "ref-handed-over"
+    # The pair on disk is the refreshed one, and adoption left no ambiguity.
+    assert stored["tokens"]["access_token"] != adopted
+    assert stored["tokens"]["refresh_token"] != "ref-owner"
+    assert "refresh_in_flight" not in stored
+    # The entry adoption left behind is complete enough for the ordinary
+    # resolver: it serves the live token and spends no second exchange.
+    posts.clear()
+    assert resolve_bearer(_codex_provider(), path=vault) == "tok-handed-over"
+    assert posts == []
+
+
+def test_adopt_verb_writes_the_provider_row_and_prints_the_handoff(tmp_path, monkeypatch, capsys):
+    """The CLI verb: one declaration lookup, one provider row, one hand-off."""
+    store_path = tmp_path / "hermes.json"
+    _write_store(store_path, _codex_store())
+    before = store_path.read_bytes()
+    vault = tmp_path / "auth.json"
+    config = tmp_path / "config.yaml"
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(vault))
+    monkeypatch.setattr(
+        "otel_agent.commands.auth_cmd.GRANT_SOURCES",
+        tuple(replace(row, path=store_path) if row.provider == "codex" else row for row in GRANT_SOURCES),
+    )
+    posts: list = []
+    _stub_post(monkeypatch, _refresh_payload(), posts)
+
+    handle_auth(Namespace(auth_action="import-codex", config=str(config)))
+
+    out = capsys.readouterr().out
+    provider = Config(config).get_provider("codex")
+    assert provider is not None
+    assert provider.auth == "codex-oauth"
+    assert provider.base_url == CODEX_BASE_URL
+    assert provider.api_key == ""
+    assert _adopted_entry(vault)["tokens"]["refresh_token"] == "ref-new"
+    assert store_path.read_bytes() == before
+    # F1's closing step is part of the output, not an optional extra.
+    assert "Hand-off" in out
+    assert "gateway" in out
+
+
+def test_adopt_verb_reports_a_missing_sibling_store(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(tmp_path / "auth.json"))
+    monkeypatch.setattr(
+        "otel_agent.commands.auth_cmd.GRANT_SOURCES",
+        tuple(
+            replace(row, path=tmp_path / "nope.json") if row.provider == "codex" else row
+            for row in GRANT_SOURCES
+        ),
+    )
+    with pytest.raises(SystemExit):
+        handle_auth(Namespace(auth_action="import-codex", config=str(tmp_path / "config.yaml")))
+    assert "not signed in" in capsys.readouterr().out
