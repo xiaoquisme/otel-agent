@@ -162,8 +162,13 @@ def token_endpoint_from_claims(claims: dict[str, Any]) -> str:
 
 
 def _load(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"providers": {}}
+    """Read the vault, or an empty one when there is nothing readable there.
+
+    The read is attempted rather than guarded by a prior ``exists()``: that
+    guard is a second ``stat``, and it opens a window in which the file can
+    vanish between the two calls — precisely the case that must not be reported
+    to a caller as an error.
+    """
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -205,7 +210,11 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
-        os.chmod(path, 0o600)
+        # No chmod: mkstemp created the temp file 0o600 and the rename
+        # preserves its mode, so the vault is never group- or world-readable at
+        # any moment — not even in the window a chmod after the rename leaves
+        # open. (0o600 is what mkstemp passes to os.open, so a umask that
+        # strips owner bits is the one case this does not restore.)
         _fsync_directory(path.parent)
     finally:
         if os.path.exists(tmp):
@@ -216,7 +225,9 @@ def _atomic_write(path: Path, data: dict[str, Any]) -> None:
 
 
 @contextmanager
-def _vault_lock(vault: Path, *, timeout: float | None = None) -> Iterator[None]:
+def _vault_lock(
+    vault: Path, *, timeout: float | None = None, provider: str = ""
+) -> Iterator[None]:
     """Hold the vault's exclusive cross-process lock (KTD2).
 
     The lock is taken on a *sibling* file that ``os.replace`` never touches:
@@ -225,8 +236,15 @@ def _vault_lock(vault: Path, *, timeout: float | None = None) -> Iterator[None]:
     killed refresh cannot leave an ownerless lock behind. Each acquisition
     opens its own file description, so threads contend with each other exactly
     as separate processes do.
+
+    *provider* is the subscription the contender was resolving, when it knows
+    one. A timeout raised while holding it can then be answered with that
+    subscription's status rather than a bare message (R12).
     """
     lock_path = vault.with_name(vault.name + ".lock")
+    # The stat below is why this is only affordable now: the read path takes no
+    # lock at all, so a request that only needs a token pays neither this nor
+    # the flock. A caller that reaches here is one a write may follow.
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     limit = _LOCK_TIMEOUT_SECONDS if timeout is None else timeout
     fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
@@ -240,7 +258,8 @@ def _vault_lock(vault: Path, *, timeout: float | None = None) -> Iterator[None]:
                 if time.monotonic() >= deadline:
                     raise AuthError(
                         f"Timed out after {limit:.1f}s waiting for the vault lock at "
-                        f"{lock_path}; another otel-agent process is holding it."
+                        f"{lock_path}; another otel-agent process is holding it.",
+                        provider=provider,
                     )
                 time.sleep(_LOCK_POLL_SECONDS)
         yield
@@ -553,17 +572,57 @@ def _marker_detail(marker: Any) -> str:
         parts.append(f"generation {generation}")
     started_at = marker.get("started_at")
     if isinstance(started_at, (int, float)):
-        parts.append("started " + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_at)))
+        parts.append("started " + _iso_utc(started_at))
     return f" ({', '.join(parts)})" if parts else ""
+
+
+def _interrupted_refresh(name: str, marker: Any) -> AuthError:
+    """The refusal a credential left mid-refresh is answered with (R6/AE3)."""
+    return AuthError(
+        f"An interrupted refresh left '{name}' in an ambiguous state"
+        f"{_marker_detail(marker)}: its refresh token may already have been "
+        f"consumed, so it is not presented again automatically. "
+        f"The credential must be re-adopted.",
+        provider=name,
+    )
+
+
+def _records_this_refusal(entry: dict[str, Any], detail: str) -> bool:
+    """Whether *entry* already records exactly this refusal (R11).
+
+    The detail of a refusal is a fixed fact about the credential — "records no
+    client_id", "records no token endpoint" — and not about the attempt that
+    discovered it, so recording it again says nothing new: only the recorded
+    time would move, at the price of rewriting the vault on every request for a
+    credential that can never refresh.
+
+    An entry carrying an in-flight marker is the exception, and is why this
+    cannot be a plain comparison of details: a failed *exchange* leaves state
+    on disk that the operator must be able to read back, and the marker means
+    the attempt went further than a refusal ever does.
+    """
+    if entry.get("refresh_in_flight"):
+        return False
+    prior = entry.get("last_refresh_result")
+    if not isinstance(prior, dict) or prior.get("ok"):
+        return False
+    return str(prior.get("detail") or "") == detail
 
 
 def resolve_bearer(provider: Provider, *, path: Path | None = None, force: bool = False) -> str:
     """Return a live Bearer secret for *provider*.
 
-    Blocking: it holds the cross-process vault lock and may refresh the
-    credential over the network. Async callers must go through
+    Blocking: it may refresh the credential over the network, and does that
+    holding the cross-process vault lock. Async callers must go through
     ``provider_utils.resolve_bearer_async`` so that a refresh never runs on the
     event loop (KTD1).
+
+    Reading a usable token takes no lock at all: writers publish with
+    ``os.replace``, so ``_load`` always sees a whole file and the common case —
+    a token that does not need refreshing — never contends with anything. The
+    exclusive lock is taken only where a write may follow. The one exposure
+    this buys is a reader that lands mid-``os.replace`` and sees the
+    immediately-preceding token once; it self-corrects on the next request.
 
     *force* refreshes a token that still looks valid. Adoption is the caller
     that needs it (F1): on a single-use rotating chain the point of adopting is
@@ -574,59 +633,70 @@ def resolve_bearer(provider: Provider, *, path: Path | None = None, force: bool 
     if source is None or not source.vault_backed:
         if provider.api_key:
             return provider.api_key
-        raise AuthError(f"Provider '{provider.name}' has no api_key.")
+        raise AuthError(f"Provider '{provider.name}' has no api_key.", provider=provider.name)
 
     vault = path or default_vault_path()
     name = provider.name
-    with _vault_lock(vault):
-        data = _load(vault)
-        entry = data.get("providers", {}).get(name)
-        if not isinstance(entry, dict):
-            if provider.api_key:
-                return provider.api_key
-            raise AuthError(
-                f"No subscription grant for '{name}' in the vault. "
-                f"Run: otel-agent auth login",
-                provider=name,
-            )
-        marker = entry.get("refresh_in_flight")
-        if marker:
-            raise AuthError(
-                f"An interrupted refresh left '{name}' in an ambiguous state"
-                f"{_marker_detail(marker)}: its refresh token may already have been "
-                f"consumed, so it is not presented again automatically. "
-                f"The credential must be re-adopted.",
-                provider=name,
-            )
-        if force or _needs_refresh(entry):
-            # Validate where the token may go *before* recording any intent: a
-            # credential that cannot be refreshed is not an ambiguous one.
-            try:
-                target = _refresh_target(entry)
-                entry = _begin_refresh(entry)
+    data = _load(vault)
+    entry = data.get("providers", {}).get(name)
+    if not isinstance(entry, dict):
+        if provider.api_key:
+            return provider.api_key
+        raise AuthError(
+            f"No subscription grant for '{name}' in the vault. "
+            f"Run: otel-agent auth login",
+            provider=name,
+        )
+    marker = entry.get("refresh_in_flight")
+    if marker:
+        raise _interrupted_refresh(name, marker)
+    if force or _needs_refresh(entry):
+        with _vault_lock(vault, provider=name):
+            # Re-read and re-decide inside the lock, because everything above
+            # was read without it. A caller that lost the race finds the pair
+            # the winner has just committed and skips the exchange (R5); one
+            # that arrives after an attempt that may have spent the refresh
+            # token finds its marker and refuses (R6).
+            data = _load(vault)
+            latest = data.get("providers", {}).get(name)
+            if isinstance(latest, dict):
+                entry = latest
+            marker = entry.get("refresh_in_flight")
+            if marker:
+                raise _interrupted_refresh(name, marker)
+            if force or _needs_refresh(entry):
+                # Validate where the token may go *before* recording any
+                # intent: a credential that cannot be refreshed is not an
+                # ambiguous one.
+                try:
+                    target = _refresh_target(entry)
+                    entry = _begin_refresh(entry)
+                    data["providers"][name] = entry
+                    _atomic_write(vault, data)
+                    payload = _post_refresh(target)
+                    entry = _finish_refresh(entry, payload)
+                except AuthError as exc:
+                    # A refusal is a result too, and the only record of it the
+                    # operator can read afterwards (R11). It is written before
+                    # the error leaves, while the lock that guards the entry is
+                    # held — unless this is the refusal already recorded.
+                    detail = str(exc)
+                    if not _records_this_refusal(entry, detail):
+                        entry = _record_refresh_result(entry, ok=False, detail=detail)
+                        data["providers"][name] = entry
+                        _atomic_write(vault, data)
+                    raise AuthError(detail, provider=name) from exc
+                entry = _record_refresh_result(entry, ok=True)
                 data["providers"][name] = entry
                 _atomic_write(vault, data)
-                payload = _post_refresh(target)
-                entry = _finish_refresh(entry, payload)
-            except AuthError as exc:
-                # A refusal is a result too, and the only record of it the
-                # operator can read afterwards (R11). It is written before the
-                # error leaves, while the lock that guards the entry is held.
-                entry = _record_refresh_result(entry, ok=False, detail=str(exc))
-                data["providers"][name] = entry
-                _atomic_write(vault, data)
-                raise AuthError(str(exc), provider=name) from exc
-            entry = _record_refresh_result(entry, ok=True)
-            data["providers"][name] = entry
-            _atomic_write(vault, data)
-        raw_tokens = entry.get("tokens")
-        tokens: dict[str, Any] = raw_tokens if isinstance(raw_tokens, dict) else {}
-        access = str(tokens.get("access_token", "") or "").strip()
-        if not access:
-            raise AuthError(
-                f"Subscription grant for '{name}' has no access_token.", provider=name
-            )
-        return access
+    raw_tokens = entry.get("tokens")
+    tokens: dict[str, Any] = raw_tokens if isinstance(raw_tokens, dict) else {}
+    access = str(tokens.get("access_token", "") or "").strip()
+    if not access:
+        raise AuthError(
+            f"Subscription grant for '{name}' has no access_token.", provider=name
+        )
+    return access
 
 
 @dataclass(frozen=True)

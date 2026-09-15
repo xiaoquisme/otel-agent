@@ -31,6 +31,12 @@ from otel_agent.router import parse_model, resolve_provider
 
 logger = logging.getLogger(__name__)
 
+#: How much of a request or response body a telemetry row keeps. It is applied
+#: when the row is written, which is what lets an accumulator feeding it stop
+#: at the same point instead of holding a whole stream in memory for a
+#: truncation that would discard it.
+_TELEMETRY_BODY_LIMIT = 500_000
+
 
 def normalize_usage(response: dict | str) -> dict[str, int | None]:
     """Normalize provider usage without estimating token counts."""
@@ -47,7 +53,6 @@ def normalize_usage(response: dict | str) -> dict[str, int | None]:
     return {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens}
 
 from otel_agent.provider_utils import (
-    AUTH_HEADERS,
     build_upstream_url,
     build_image_upstream_url,
     build_image_edit_upstream_url,
@@ -131,10 +136,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         # A Responses-only upstream cannot serve this shape at all. Say so at
         # the client's own shape instead of forwarding and passing on a 404.
         if serves_only_responses(provider):
-            return JSONResponse(
-                {"error": {"message": f"Provider '{provider.name}' serves only the Responses API and is not available on {request.url.path}. POST to /v1/responses with model '{provider.name}/<model>' instead.", "type": "invalid_request_error"}},
-                status_code=400,
-            )
+            return _responses_only_refusal(provider, request)
 
         # Prepare the upstream request body
         upstream_body = dict(body)
@@ -191,10 +193,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         # See the chat-completions route: a Responses-only upstream cannot
         # serve the Anthropic shape either.
         if serves_only_responses(provider):
-            return JSONResponse(
-                {"error": {"message": f"Provider '{provider.name}' serves only the Responses API and is not available on {request.url.path}. POST to /v1/responses with model '{provider.name}/<model>' instead.", "type": "invalid_request_error"}},
-                status_code=400,
-            )
+            return _responses_only_refusal(provider, request)
 
         upstream_body = dict(body)
         upstream_body["model"] = rewrite_upstream_model(provider, upstream_model)
@@ -515,6 +514,24 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     return app
 
 
+def _responses_only_refusal(provider: Provider, request: Request) -> JSONResponse:
+    """Refuse a chat-shaped request to an upstream with only one shape.
+
+    A provider that declares the Responses surface alone cannot serve either
+    of the chat-shaped dialects. The client is told that at its own shape,
+    rather than being forwarded a 404 from the upstream it cannot read.
+    """
+    return JSONResponse(
+        {
+            "error": {
+                "message": f"Provider '{provider.name}' serves only the Responses API and is not available on {request.url.path}. POST to /v1/responses with model '{provider.name}/<model>' instead.",
+                "type": "invalid_request_error",
+            }
+        },
+        status_code=400,
+    )
+
+
 async def _handle_non_streaming(
     client: httpx.AsyncClient,
     url: str,
@@ -596,6 +613,7 @@ async def _handle_streaming(
 
     async def stream_generator() -> AsyncIterator[bytes]:
         collected_chunks: list[str] = []
+        collected_chars = 0
         resp_headers: dict[str, str] = {}
         stream_status = 200
         last_valid_usage: dict | None = None
@@ -677,8 +695,15 @@ async def _handle_streaming(
                                     model_name = candidate["model"]
                                     break
 
-                        # Collect for telemetry
-                        collected_chunks.append(json.dumps(chunk_data))
+                        # Collect for telemetry, and stop at the point the
+                        # row would keep: a stream can run for minutes and
+                        # carry the entire response, so accumulating all of it
+                        # would hold a second copy of the answer, per in-flight
+                        # request, purely to truncate it on the way in.
+                        if collected_chars < _TELEMETRY_BODY_LIMIT:
+                            chunk_text = json.dumps(chunk_data)
+                            collected_chunks.append(chunk_text)
+                            collected_chars += len(chunk_text)
                         # T031: Extract usage from streaming chunks. Same three
                         # places as the model name; prefer the first source that
                         # has a value for each field.
@@ -929,7 +954,7 @@ def _log_telemetry(
             model_name = model_name or None
         else:
             model_name = prefix_model_name(model_name or None, provider.name)
-        stored_body = request_body[:500_000] if log_body else ""
+        stored_body = request_body[:_TELEMETRY_BODY_LIMIT] if log_body else ""
         stored_headers = redact_sensitive_headers(resp_headers) if resp_headers else {}
         stored_request_headers = dict(request.headers)
         if extra_headers:
@@ -941,7 +966,7 @@ def _log_telemetry(
             request_body=stored_body,
             response_status=status_code,
             response_headers=stored_headers,
-            response_body=body_str[:500_000],
+            response_body=body_str[:_TELEMETRY_BODY_LIMIT],
             latency_ms=latency_ms,
             upstream=provider.base_url,
             model_name=model_name,

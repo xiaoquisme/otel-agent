@@ -2,15 +2,10 @@
 
 import socket
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
 from otel_agent.config import Config
-
-
-def _iso_utc(timestamp: float) -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
 
 
 def _epoch_of(iso: str) -> float | None:
@@ -39,7 +34,7 @@ def _warn_on_a_second_writer(provider: str, status: dict) -> None:
     than a hint to be skipped. Most machines have no such store, which is why
     the reader yields nothing rather than an error.
     """
-    from otel_agent.auth_vault import read_owner_last_refresh
+    from otel_agent.auth_vault import _iso_utc, read_owner_last_refresh
     from otel_agent.commands.auth_cmd import grant_sources
 
     gateway_at = _epoch_of(str(status.get("last_refresh") or ""))
@@ -121,7 +116,7 @@ def handle_doctor(args) -> None:
         print("  Config missing  ⚠️")
         print("    → Run: otel-agent init")
 
-    from otel_agent.auth_vault import get_status
+    from otel_agent.auth_vault import _iso_utc, get_status
     from otel_agent.commands.auth_cmd import CODEX_PROVIDER
 
     xai = get_status("xai")
