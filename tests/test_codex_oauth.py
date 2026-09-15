@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from argparse import Namespace
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -105,12 +106,68 @@ def test_request_device_code_floors_a_zero_or_missing_interval():
     assert request_device_code(_Garbage())["interval"] == 1  # type: ignore[arg-type]
 
 
-def test_request_device_code_defaults_the_window_to_fifteen_minutes():
+def test_request_device_code_derives_the_window_from_expires_at():
+    """The host sends an absolute instant; the window is what is left of it."""
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=3600)
+
     class _Client:
+        def post(self, url, **kwargs):
+            return _Resp(200, _device_payload(expires_at=expires_at.isoformat()))
+
+    window = request_device_code(_Client())["expires_in"]  # type: ignore[arg-type]
+    assert 3590 <= window <= 3600
+
+
+def test_request_device_code_reads_expires_at_in_its_own_offset():
+    """``+02:00`` is the same instant as the UTC form, not two hours later."""
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
+    offset = timezone(timedelta(hours=2))
+    encoded = expires_at.astimezone(offset).isoformat()
+
+    class _Client:
+        def post(self, url, **kwargs):
+            return _Resp(200, _device_payload(expires_at=encoded))
+
+    window = request_device_code(_Client())["expires_in"]  # type: ignore[arg-type]
+    assert 590 <= window <= 600
+
+
+def test_request_device_code_falls_back_to_the_constant_without_expires_at():
+    class _Absent:
         def post(self, url, **kwargs):
             return _Resp(200, _device_payload())
 
-    assert request_device_code(_Client())["expires_in"] == CODEX_DEVICE_AUTH_WINDOW_SECONDS  # type: ignore[arg-type]
+    class _Null:
+        def post(self, url, **kwargs):
+            return _Resp(200, _device_payload(expires_at=None))
+
+    class _Empty:
+        def post(self, url, **kwargs):
+            return _Resp(200, _device_payload(expires_at="  "))
+
+    assert request_device_code(_Absent())["expires_in"] == CODEX_DEVICE_AUTH_WINDOW_SECONDS  # type: ignore[arg-type]
+    assert request_device_code(_Null())["expires_in"] == CODEX_DEVICE_AUTH_WINDOW_SECONDS  # type: ignore[arg-type]
+    assert request_device_code(_Empty())["expires_in"] == CODEX_DEVICE_AUTH_WINDOW_SECONDS  # type: ignore[arg-type]
+
+
+def test_request_device_code_falls_back_on_an_unusable_expires_at():
+    class _Garbage:
+        def post(self, url, **kwargs):
+            return _Resp(200, _device_payload(expires_at="next tuesday"))
+
+    class _OutOfRange:
+        def post(self, url, **kwargs):
+            return _Resp(200, _device_payload(expires_at="2026-13-45T99:99:99+00:00"))
+
+    class _NoOffset:
+        # Ambiguous rather than wrong: an offset-less value read in the wrong
+        # zone would set the deadline hours out, so it is not trusted.
+        def post(self, url, **kwargs):
+            return _Resp(200, _device_payload(expires_at="2026-09-15T13:51:24.776245"))
+
+    assert request_device_code(_Garbage())["expires_in"] == CODEX_DEVICE_AUTH_WINDOW_SECONDS  # type: ignore[arg-type]
+    assert request_device_code(_OutOfRange())["expires_in"] == CODEX_DEVICE_AUTH_WINDOW_SECONDS  # type: ignore[arg-type]
+    assert request_device_code(_NoOffset())["expires_in"] == CODEX_DEVICE_AUTH_WINDOW_SECONDS  # type: ignore[arg-type]
 
 
 # --- step 3: the poll loop --------------------------------------------------

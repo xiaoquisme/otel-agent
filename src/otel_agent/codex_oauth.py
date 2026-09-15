@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -34,8 +35,11 @@ CODEX_OAUTH_VERIFICATION_URL = "https://auth.openai.com/codex/device"
 CODEX_OAUTH_REDIRECT_URI = "https://auth.openai.com/deviceauth/callback"
 CODEX_OAUTH_GRANT_TYPE = "authorization_code"
 
-#: How long the operator has to enter the code. The usercode response does not
-#: carry an expiry of its own, so this is the window the poll loop runs for.
+#: Fallback window for the operator to enter the code, for a usercode response
+#: that carries no readable ``expires_at``. The host does send one — an absolute
+#: instant roughly fifteen minutes out, which is what the poll loop runs on —
+#: but a response without it must not leave the loop running unbounded or
+#: failing outright, so the field is read first and this only ever backs it up.
 CODEX_DEVICE_AUTH_WINDOW_SECONDS = 900
 
 #: Ceiling for the ``slow_down`` backoff, as in the device grant RFC.
@@ -60,11 +64,39 @@ def _as_positive_int(value: Any, *, default: int) -> int:
     return max(1, seconds)
 
 
+def _seconds_until(expires_at: Any) -> int | None:
+    """*expires_at* — an absolute ISO-8601 instant — as whole seconds from now.
+
+    ``None`` when it cannot be read as one, which is what makes the caller fall
+    back rather than crash. The host sends the field with a UTC offset; a value
+    with no offset at all is ambiguous, and read in the wrong zone it would put
+    the deadline hours out in either direction, so it counts as unreadable too
+    rather than being guessed at.
+    """
+    text = str(expires_at or "").strip()
+    if not text:
+        return None
+    if text[-1] in ("Z", "z"):
+        # The "Z" form is only accepted by ``fromisoformat`` on 3.11+.
+        text = f"{text[:-1]}+00:00"
+    try:
+        deadline = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if deadline.tzinfo is None:
+        return None
+    return int((deadline - datetime.now(timezone.utc)).total_seconds())
+
+
 def request_device_code(client: httpx.Client) -> dict[str, Any]:
     """Ask for a user code (step 1) and return it already normalized.
 
     ``interval`` and ``expires_in`` are coerced here so both callers and the
     poll loop work in whole seconds regardless of how the host encoded them.
+    ``expires_in`` is the window that remains of the response's own
+    ``expires_at``, and is only the module constant's window for a response
+    that omits that field or encodes it in a form this cannot read. The shape
+    of the returned mapping is unchanged.
     """
     resp = client.post(
         CODEX_OAUTH_DEVICE_CODE_URL,
@@ -90,9 +122,18 @@ def request_device_code(client: httpx.Client) -> dict[str, Any]:
     if missing:
         raise AuthError(f"Codex device-code response missing fields: {', '.join(missing)}")
     payload["interval"] = _as_positive_int(payload.get("interval"), default=1)
-    payload["expires_in"] = _as_positive_int(
-        payload.get("expires_in"), default=CODEX_DEVICE_AUTH_WINDOW_SECONDS
-    )
+    # The host supplies the expiry itself, as an absolute instant, so the
+    # window is derived from it instead of assumed: a local constant would
+    # drift the moment the server changed its mind. A response that omits it,
+    # or sends something unreadable, still gets a bounded window rather than
+    # an unbounded poll.
+    remaining = _seconds_until(payload.get("expires_at"))
+    if remaining is not None:
+        payload["expires_in"] = max(1, remaining)
+    else:
+        payload["expires_in"] = _as_positive_int(
+            payload.get("expires_in"), default=CODEX_DEVICE_AUTH_WINDOW_SECONDS
+        )
     return payload
 
 
