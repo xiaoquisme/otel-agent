@@ -72,13 +72,17 @@ class AuthSource:
     entitlement_hint: bool = False
     """Upstream entitlement 403 bodies get the vendor hint appended."""
 
+    responses_only: bool = False
+    """The upstream serves only the Responses API surface, so the chat-shaped
+    routes must refuse this provider rather than forward and pass on its 404."""
+
 
 #: Auth mode -> declaration. This table is the only place a subscription mode
 #: is named; everything else looks the mode up.
 AUTH_SOURCES: dict[str, AuthSource] = {
     "": AuthSource(),
     AUTH_XAI_OAUTH: AuthSource(keyless=True, vault_backed=True, entitlement_hint=True),
-    AUTH_CODEX_OAUTH: AuthSource(keyless=True, vault_backed=True),
+    AUTH_CODEX_OAUTH: AuthSource(keyless=True, vault_backed=True, responses_only=True),
 }
 
 VALID_AUTH_MODES = tuple(AUTH_SOURCES)

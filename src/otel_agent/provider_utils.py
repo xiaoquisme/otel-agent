@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
-from otel_agent.config import Provider
+from otel_agent.config import Provider, auth_source
 
 # Auth header patterns per provider API format
 AUTH_HEADERS = {
@@ -21,6 +21,26 @@ def build_upstream_url(provider: Provider) -> str:
             base = f"{base}/v1"
         return f"{base}/messages"
     return f"{base}/chat/completions"
+
+
+def build_responses_upstream_url(provider: Provider) -> str:
+    """Build the upstream URL for the Responses API.
+
+    Deliberately separate from ``build_upstream_url``, which appends
+    ``/chat/completions`` to every openai-format provider.
+    """
+    base = provider.base_url.rstrip("/")
+    return f"{base}/responses"
+
+
+def serves_only_responses(provider: Provider) -> bool:
+    """True when the provider's upstream serves only the Responses API.
+
+    The auth declaration decides, so this asks the table rather than a
+    provider name or an api_format.
+    """
+    source = auth_source(provider.auth)
+    return bool(source is not None and source.responses_only)
 
 
 def build_image_upstream_url(provider: Provider) -> str:

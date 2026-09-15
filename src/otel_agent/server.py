@@ -51,8 +51,10 @@ from otel_agent.provider_utils import (
     build_image_upstream_url,
     build_image_edit_upstream_url,
     build_request_headers,
+    build_responses_upstream_url,
     prefix_model_name,
     rewrite_upstream_model,
+    serves_only_responses,
 )
 
 
@@ -97,6 +99,14 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             provider = resolve_provider(provider_name, config)
         except ValueError as e:
             return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        # A Responses-only upstream cannot serve this shape at all. Say so at
+        # the client's own shape instead of forwarding and passing on a 404.
+        if serves_only_responses(provider):
+            return JSONResponse(
+                {"error": {"message": f"Provider '{provider.name}' serves only the Responses API and is not available on {request.url.path}. POST to /v1/responses with model '{provider.name}/<model>' instead.", "type": "invalid_request_error"}},
+                status_code=400,
+            )
 
         # Prepare the upstream request body
         upstream_body = dict(body)
@@ -150,6 +160,14 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         except ValueError as e:
             return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
 
+        # See the chat-completions route: a Responses-only upstream cannot
+        # serve the Anthropic shape either.
+        if serves_only_responses(provider):
+            return JSONResponse(
+                {"error": {"message": f"Provider '{provider.name}' serves only the Responses API and is not available on {request.url.path}. POST to /v1/responses with model '{provider.name}/<model>' instead.", "type": "invalid_request_error"}},
+                status_code=400,
+            )
+
         upstream_body = dict(body)
         upstream_body["model"] = rewrite_upstream_model(provider, upstream_model)
 
@@ -177,6 +195,80 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             client, url, headers, upstream_body,
             provider, telemetry, request, start_time,
             source_format="anthropic", target_format=provider.api_format,
+            request_body=original_body, log_body=log_body,
+        )
+
+    # ------------------------------------------------------------------
+    # Responses-native endpoint (pass-through, no protocol translation)
+    # ------------------------------------------------------------------
+    @app.post("/v1/responses", response_model=None)
+    async def responses(request: Request):
+        """Responses-native endpoint, passed straight through to the upstream.
+
+        No converter is installed, so the dialect's ``event:`` lines and blank
+        separators reach the client as they arrive. The gateway's whole
+        accommodation of this upstream is the normalization below.
+        """
+        body = await request.json()
+        model = body.get("model", "")
+
+        try:
+            provider_name, upstream_model = parse_model(model)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        try:
+            provider = resolve_provider(provider_name, config)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        # The normalization below is written for this upstream, so the route is
+        # served only for a provider that declares a Responses surface.
+        if not serves_only_responses(provider):
+            return JSONResponse(
+                {"error": {"message": f"Provider '{provider.name}' does not serve the Responses API. Route to a provider that declares one, or use /v1/chat/completions.", "type": "invalid_request_error"}},
+                status_code=400,
+            )
+
+        # Continuation is deliberately not supported: the upstream rejects
+        # previous_response_id and keeps no server-side state. Stripping it
+        # would hand a client that depends on continuation a successful but
+        # contextless answer, so it is refused distinguishably instead.
+        if body.get("previous_response_id"):
+            return JSONResponse(
+                {"error": {"message": f"Provider '{provider.name}' is stateless: 'previous_response_id' is not supported. Send the whole conversation in 'input' instead.", "type": "invalid_request_error"}},
+                status_code=400,
+            )
+
+        upstream_body = dict(body)
+        upstream_body["model"] = rewrite_upstream_model(provider, upstream_model)
+        # store/include are overwritten whatever the client asked for — a
+        # default injected only when missing would forward a client's explicit
+        # store: true and leave the conversation on the owner's account.
+        upstream_body["stream"] = True
+        upstream_body["store"] = False
+        upstream_body["include"] = ["reasoning.encrypted_content"]
+        # Parameters this upstream rejects outright.
+        upstream_body.pop("max_output_tokens", None)
+        upstream_body.pop("temperature", None)
+
+        # No identity headers ride along: the upstream treats originator,
+        # User-Agent and ChatGPT-Account-ID as optional, and forwarding a
+        # client's own values would only invite impersonation.
+        url = build_responses_upstream_url(provider)
+        headers = await build_request_headers(provider)
+
+        start_time = time.monotonic()
+        original_body = json.dumps(body)
+        log_body = config.log_request_body
+
+        # The upstream accepts only streaming, so this route does too. The
+        # non-streaming handler serves a client that asked for a single
+        # response by aggregating this stream.
+        return await _handle_streaming(
+            client, url, headers, upstream_body,
+            provider, telemetry, request, start_time,
+            source_format="responses", target_format="responses",
             request_body=original_body, log_body=log_body,
         )
 
@@ -458,6 +550,14 @@ async def _handle_streaming(
                 content_type = resp.headers.get("content-type", "")
                 if resp.status_code >= 400 and "text/event-stream" not in content_type:
                     error_body = (await resp.aread()).decode("utf-8", errors="replace")
+                    if source_format == "responses":
+                        # A Responses client cannot read the bare data frame
+                        # below, so it would see an unparsable frame or a dead
+                        # stream instead of the upstream's rejection.
+                        yield _responses_error_frame(
+                            f"Upstream error {resp.status_code}: {_upstream_error_message(error_body)}"
+                        )
+                        return
                     try:
                         error_data = json.loads(error_body)
                         error_msg = json.dumps(error_data)
@@ -507,21 +607,29 @@ async def _handle_streaming(
                             for event in openai_to_anthropic.feed(chunk_data):
                                 yield event.encode()
 
-                        # Extract model name from first chunk
+                        # Extract model name from first chunk. Chat completions
+                        # carry it at the top level, Anthropic nests it in
+                        # `message`, the Responses API in `response`.
                         if model_name is None:
-                            model_name = chunk_data.get("model") or chunk_data.get("message", {}).get("model")
+                            for candidate in (chunk_data, chunk_data.get("message"), chunk_data.get("response")):
+                                if isinstance(candidate, dict) and candidate.get("model"):
+                                    model_name = candidate["model"]
+                                    break
 
                         # Collect for telemetry
                         collected_chunks.append(json.dumps(chunk_data))
-                        # T031: Extract usage from streaming chunks
-                        # Anthropic message_start nests usage inside message.usage
-                        chunk_usage = normalize_usage(chunk_data)
-                        nested_usage = normalize_usage(chunk_data.get("message", {}))
-                        # Merge: prefer non-None values from either source
-                        merged = {
-                            k: chunk_usage[k] if chunk_usage[k] is not None else nested_usage[k]
-                            for k in chunk_usage
-                        }
+                        # T031: Extract usage from streaming chunks. Same three
+                        # places as the model name; prefer the first source that
+                        # has a value for each field.
+                        merged = normalize_usage(chunk_data)
+                        for nested in (chunk_data.get("message"), chunk_data.get("response")):
+                            if not isinstance(nested, dict):
+                                continue
+                            nested_usage = normalize_usage(nested)
+                            merged = {
+                                k: merged[k] if merged[k] is not None else nested_usage[k]
+                                for k in merged
+                            }
                         if any(v is not None for v in merged.values()):
                             if last_valid_usage is None:
                                 last_valid_usage = merged
@@ -545,12 +653,18 @@ async def _handle_streaming(
 
         except httpx.ConnectError as e:
             stream_status = 502
-            error_msg = json.dumps({"error": {"message": f"Connection failed: {e}", "type": "server_error"}})
-            yield f"data: {error_msg}\n\n".encode()
+            message = f"Connection failed: {e}"
+            if source_format == "responses":
+                yield _responses_error_frame(message)
+            else:
+                yield f"data: {json.dumps({'error': {'message': message, 'type': 'server_error'}})}\n\n".encode()
         except httpx.TimeoutException:
             stream_status = 504
-            error_msg = json.dumps({"error": {"message": "Timeout", "type": "server_error"}})
-            yield f"data: {error_msg}\n\n".encode()
+            message = "Timeout"
+            if source_format == "responses":
+                yield _responses_error_frame(message)
+            else:
+                yield f"data: {json.dumps({'error': {'message': message, 'type': 'server_error'}})}\n\n".encode()
         finally:
             latency_ms = (time.monotonic() - start_time) * 1000
             resp_body: dict = {"streamed": True, "preview": "".join(collected_chunks), "model": model_name}
@@ -579,6 +693,41 @@ async def _handle_streaming(
 
     media_type = "text/event-stream"
     return StreamingResponse(stream_generator(), media_type=media_type)
+
+
+def _responses_error_frame(message: str) -> bytes:
+    """Frame an upstream failure the way a Responses client expects it.
+
+    The shared handler's bare ``data:`` frame carries no ``event:`` line, so a
+    Responses-native client cannot read a rejection out of it.
+    """
+    payload = {
+        "type": "error",
+        "code": None,
+        "message": message,
+        "param": None,
+        # A single frame, and nothing preceded it in this stream.
+        "sequence_number": 0,
+    }
+    return f"event: error\ndata: {json.dumps(payload)}\n\n".encode()
+
+
+def _upstream_error_message(body: str) -> str:
+    """Pull the human-readable half out of an upstream error body."""
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return body
+    if isinstance(parsed, dict):
+        detail = parsed.get("detail")
+        if isinstance(detail, str) and detail:
+            return detail
+        error = parsed.get("error")
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            return error["message"]
+        if isinstance(error, str) and error:
+            return error
+    return body
 
 
 def _log_telemetry(

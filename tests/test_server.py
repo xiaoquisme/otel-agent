@@ -1233,9 +1233,11 @@ async def test_streaming_request_uses_the_vault_bearer(tmp_path, monkeypatch):
         with patch("httpx.AsyncClient.stream", mock_stream):
             from httpx import ASGITransport
             async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                # The Responses route, not chat/completions: a Responses-only
+                # provider is refused on the chat-shaped routes by design.
                 resp = await client.post(
-                    "/v1/chat/completions",
-                    json={"model": "codex/gpt-5", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5", "input": "hi"},
                 )
                 await resp.aread()
 
@@ -1334,3 +1336,476 @@ async def test_bearer_resolution_does_not_block_the_event_loop(tmp_path, monkeyp
         beat.cancel()
 
     assert ticks >= 3, f"the event loop was blocked during the refresh ({ticks} ticks)"
+
+
+# ------------------------------------------------------------------
+# U4: Responses passthrough route
+# ------------------------------------------------------------------
+#
+# The subscription upstream serves only the Responses API, and only as a
+# stream. This route is therefore a passthrough: no converter is installed,
+# so the `event:` lines and blank separators of the upstream dialect survive
+# to the client, and the normalization below is the whole of the gateway's
+# vendor accommodation.
+
+
+class _FakeLineStream:
+    """SSE stub that yields a *line list* rather than a chunk-dict list.
+
+    ``_FakeSSEStream`` cannot express this dialect: it hardcodes the
+    ``data: `` prefix and appends ``[DONE]``, while a Responses stream's
+    meaning lives in the ``event:`` lines.
+    """
+
+    def __init__(
+        self,
+        lines: list[str],
+        *,
+        status_code: int = 200,
+        content_type: str = "text/event-stream",
+        body: bytes = b"",
+    ) -> None:
+        self._lines = lines
+        self._body = body
+        self.status_code = status_code
+        self.headers = {"content-type": content_type}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    async def aread(self) -> bytes:
+        return self._body
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _RecordingLineStreamMethod:
+    """Sync mock for httpx.AsyncClient.stream() that records what was sent.
+
+    ``stream()`` is a sync method returning an async context manager, so
+    ``__call__`` must be sync (see ``_FakeStreamMethod``).
+    """
+
+    def __init__(self, stream: _FakeLineStream, seen: dict) -> None:
+        self._stream = stream
+        self._seen = seen
+
+    def __call__(self, *args, **kwargs):
+        if len(args) >= 2:
+            self._seen["method"], self._seen["url"] = args[0], args[1]
+        else:
+            self._seen["method"] = kwargs.get("method")
+            self._seen["url"] = kwargs.get("url")
+        self._seen["headers"] = kwargs.get("headers")
+        self._seen["json"] = kwargs.get("json")
+        return self._stream
+
+
+def _responses_lines(*, model: str = "gpt-5-codex", usage: dict | None = None) -> list[str]:
+    """A plain-text Responses turn — the 9 event types the live probe saw."""
+    final_response: dict = {"id": "resp_1", "model": model, "status": "completed"}
+    if usage is not None:
+        final_response["usage"] = usage
+    events: list[tuple[str, dict]] = [
+        ("response.created", {"type": "response.created", "sequence_number": 0, "response": {"id": "resp_1", "model": model, "status": "in_progress"}}),
+        ("response.in_progress", {"type": "response.in_progress", "sequence_number": 1, "response": {"id": "resp_1", "model": model, "status": "in_progress"}}),
+        ("response.output_item.added", {"type": "response.output_item.added", "sequence_number": 2, "output_index": 0, "item": {"type": "message", "id": "msg_1", "status": "in_progress"}}),
+        ("response.content_part.added", {"type": "response.content_part.added", "sequence_number": 3, "item_id": "msg_1", "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": ""}}),
+        ("response.output_text.delta", {"type": "response.output_text.delta", "sequence_number": 4, "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "Hello"}),
+        ("response.output_text.done", {"type": "response.output_text.done", "sequence_number": 5, "item_id": "msg_1", "output_index": 0, "content_index": 0, "text": "Hello"}),
+        ("response.content_part.done", {"type": "response.content_part.done", "sequence_number": 6, "item_id": "msg_1", "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "Hello"}}),
+        ("response.output_item.done", {"type": "response.output_item.done", "sequence_number": 7, "output_index": 0, "item": {"type": "message", "id": "msg_1", "status": "completed"}}),
+        ("response.completed", {"type": "response.completed", "sequence_number": 8, "response": final_response}),
+    ]
+    lines: list[str] = []
+    for name, payload in events:
+        lines.append(f"event: {name}")
+        lines.append(f"data: {json.dumps(payload)}")
+        lines.append("")
+    return lines
+
+
+def _nonempty_lines(body: str) -> list[str]:
+    return [line for line in body.split("\n") if line.strip()]
+
+
+@pytest.mark.anyio
+async def test_responses_route_normalizes_request_without_rewriting_semantics(tmp_path, monkeypatch):
+    """Passthrough + normalization: the client's input survives, the vendor
+    accommodation is applied, and nothing else about the body is touched."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        seen: dict = {}
+        mock_stream = _RecordingLineStreamMethod(_FakeLineStream(_responses_lines()), seen)
+
+        sent_input = [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={
+                        "model": "codex/gpt-5-codex",
+                        "input": sent_input,
+                        "stream": False,
+                        "store": True,
+                        "include": ["message.output_text.logprobs"],
+                        "max_output_tokens": 64,
+                        "temperature": 0.5,
+                        "instructions": "be brief",
+                    },
+                )
+                await resp.aread()
+                health = await client.get("/health")
+
+        telemetry.close()
+
+        assert seen["method"] == "POST"
+        assert seen["url"] == "https://chatgpt.com/backend-api/codex/responses", seen["url"]
+        forwarded = seen["json"]
+
+        # Normalization: stream forced, store/include overridden whatever the
+        # client asked for, and the two parameters this upstream rejects gone.
+        assert forwarded["stream"] is True
+        assert forwarded["store"] is False
+        assert forwarded["include"] == ["reasoning.encrypted_content"]
+        assert "max_output_tokens" not in forwarded
+        assert "temperature" not in forwarded
+
+        # No rewrite of semantics: everything else is verbatim.
+        assert forwarded["input"] == sent_input
+        assert forwarded["instructions"] == "be brief"
+        assert forwarded["model"] == "gpt-5-codex"
+
+        # No identity headers ride along with the subscription bearer.
+        assert set(seen["headers"]) == {"Authorization", "Content-Type"}
+
+        # Regression: the new route must not disturb the JSON endpoints.
+        assert health.headers["content-type"].startswith("application/json")
+        assert health.json() == {"status": "ok"}
+
+
+@pytest.mark.anyio
+async def test_responses_route_preserves_event_lines_and_blank_separators(tmp_path, monkeypatch):
+    """Event fidelity: `event:` lines and their blank separators reach the client."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        upstream_lines = _responses_lines()
+        mock_stream = _RecordingLineStreamMethod(_FakeLineStream(upstream_lines), {})
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "hi"},
+                )
+                body = resp.text
+
+        telemetry.close()
+
+        # Every upstream line that carries meaning survives, in order. `data:`
+        # lines are re-serialized (JSON, so equivalent); `event:` lines are
+        # byte-identical.
+        upstream_nonempty = [line for line in upstream_lines if line.strip()]
+        assert _nonempty_lines(body) == upstream_nonempty, body[:800]
+
+        # Each event is delivered: an `event: <name>` line, its `data:` line,
+        # and a blank separator.
+        for name in (
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.completed",
+        ):
+            assert f"event: {name}\n" in body, f"missing event line for {name}"
+
+        assert "\n\n" in body, "blank separators were dropped"
+        delta = json.loads(body.split("event: response.output_text.delta\n")[1].split("data: ", 1)[1].split("\n", 1)[0])
+        assert delta["delta"] == "Hello"
+        assert delta["type"] == "response.output_text.delta"
+
+
+@pytest.mark.anyio
+async def test_responses_route_does_not_synthesize_done(tmp_path, monkeypatch):
+    """A Responses stream ends at `response.completed` — no `[DONE]` sentinel."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        mock_stream = _RecordingLineStreamMethod(_FakeLineStream(_responses_lines()), {})
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "hi"},
+                )
+                body = resp.text
+
+        telemetry.close()
+
+        assert "[DONE]" not in body, "a [DONE] sentinel was synthesized for a Responses client"
+        assert _nonempty_lines(body)[-2] == "event: response.completed"
+
+
+@pytest.mark.anyio
+async def test_responses_route_upstream_rejection_becomes_an_error_event(tmp_path, monkeypatch):
+    """R12: an upstream refusal must reach a Responses client as a parseable
+    error event, not as a bare data frame or a dead stream."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        # The shape the live upstream uses for a rejected parameter.
+        upstream_body = json.dumps({"detail": "Unsupported parameter: temperature"}).encode()
+        mock_stream = _RecordingLineStreamMethod(
+            _FakeLineStream([], status_code=400, content_type="application/json", body=upstream_body),
+            {},
+        )
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "hi"},
+                )
+                body = resp.text
+
+        telemetry.close()
+
+        assert body.startswith("event: error\n"), body[:400]
+        assert "data: [DONE]" not in body, "a Responses client must not be handed a chat sentinel"
+        payload = json.loads(body.split("data: ", 1)[1])
+        assert payload["type"] == "error"
+        assert "Unsupported parameter: temperature" in payload["message"]
+
+
+@pytest.mark.anyio
+async def test_responses_telemetry_uses_responses_usage_and_model(tmp_path, monkeypatch):
+    """KTD7: usage and model live inside the `response` object, not at the
+    top level, so the chat-shaped extraction logs nothing for this stream."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        lines = _responses_lines(
+            usage={"input_tokens": 1200, "output_tokens": 40, "total_tokens": 1240}
+        )
+        mock_stream = _RecordingLineStreamMethod(_FakeLineStream(lines), {})
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "hi"},
+                )
+                await resp.aread()
+
+        telemetry.close()
+
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT model_name, input_tokens, output_tokens, total_tokens, format FROM requests"
+        ).fetchone()
+        conn.close()
+
+        assert row is not None, "No telemetry record found"
+        assert row[0] == "codex/gpt-5-codex", f"Expected the Responses model name, got {row[0]!r}"
+        assert row[1] == 1200
+        assert row[2] == 40
+        assert row[3] == 1240
+        assert row[4] == "responses", f"Expected format 'responses', got {row[4]!r}"
+
+
+class _FailingStreamMethod:
+    """Mock for httpx.AsyncClient.stream() that fails before any stream opens."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def __call__(self, *args, **kwargs):
+        raise self._exc
+
+
+@pytest.mark.anyio
+async def test_responses_route_connection_failure_is_an_error_event(tmp_path, monkeypatch):
+    """R12's other half: a failure before the upstream answers is still a
+    Responses-shaped error event, not a bare frame or a dead stream."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        with patch("httpx.AsyncClient.stream", _FailingStreamMethod(httpx.ConnectError("boom"))):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "hi"},
+                )
+                body = resp.text
+
+        telemetry.close()
+
+        assert body.startswith("event: error\n"), body[:400]
+        payload = json.loads(body.split("data: ", 1)[1])
+        assert payload["type"] == "error"
+        assert "Connection failed" in payload["message"]
+        assert "boom" in payload["message"]
+
+
+@pytest.mark.anyio
+async def test_responses_route_passes_unknown_event_types_untouched(tmp_path, monkeypatch):
+    """Tool-call event shapes were never probed, so the route must not depend
+    on knowing the event vocabulary: an event it has never seen passes
+    through verbatim."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        tool_lines = [
+            "event: response.function_call_arguments.delta",
+            'data: {"type": "response.function_call_arguments.delta", "sequence_number": 9, "item_id": "fc_1", "output_index": 0, "delta": "{\\"city\\":\\"SF\\"}"}',
+            "",
+            "event: response.function_call_arguments.done",
+            'data: {"type": "response.function_call_arguments.done", "sequence_number": 10, "item_id": "fc_1", "output_index": 0, "arguments": "{\\"city\\":\\"SF\\"}"}',
+            "",
+        ]
+        mock_stream = _RecordingLineStreamMethod(
+            _FakeLineStream(_responses_lines() + tool_lines), {}
+        )
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "weather in SF?"},
+                )
+                body = resp.text
+
+        telemetry.close()
+
+        for line in tool_lines:
+            if line.strip():
+                assert line in body, f"upstream line was altered or dropped: {line!r}"
+
+
+def test_chat_shaped_routes_refuse_a_responses_only_provider(tmp_path):
+    """The subscription upstream serves only the Responses surface, so the
+    chat-shaped routes refuse it by declaration instead of forwarding."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.stream") as stream, patch("httpx.AsyncClient.post") as post:
+                chat = client.post(
+                    "/v1/chat/completions",
+                    json={"model": "codex/gpt-5-codex", "messages": [{"role": "user", "content": "hi"}]},
+                )
+                messages = client.post(
+                    "/v1/messages",
+                    json={"model": "codex/gpt-5-codex", "messages": [{"role": "user", "content": "hi"}]},
+                )
+        telemetry.close()
+
+    for resp, endpoint in ((chat, "/v1/chat/completions"), (messages, "/v1/messages")):
+        assert resp.status_code == 400, f"{endpoint} forwarded instead of refusing"
+        body = resp.json()
+        assert body["error"]["type"] == "invalid_request_error"
+        assert "codex" in body["error"]["message"]
+        assert "Responses" in body["error"]["message"], body["error"]["message"]
+        assert "/v1/responses" in body["error"]["message"], body["error"]["message"]
+    assert not stream.called, "a chat-shaped refusal must not reach the upstream"
+    assert not post.called, "a chat-shaped refusal must not reach the upstream"
+
+
+def test_responses_route_declines_providers_without_a_responses_surface(tmp_path):
+    """The route's normalization is this upstream's accommodation, so it is
+    only served for a provider that declares a Responses surface."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.stream") as stream:
+                resp = client.post(
+                    "/v1/responses",
+                    json={"model": "openai/gpt-5", "input": "hi"},
+                )
+        telemetry.close()
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["type"] == "invalid_request_error"
+    assert "openai" in resp.json()["error"]["message"]
+    assert not stream.called
+
+
+def test_responses_previous_response_id_is_rejected_as_stateless(tmp_path):
+    """R8: continuation is deliberately unsupported. Stripping the parameter
+    would hand a state-dependent client a successful, contextless answer, so
+    it is refused distinguishably instead."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.stream") as stream:
+                resp = client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "and then?", "previous_response_id": "resp_abc"},
+                )
+        telemetry.close()
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["type"] == "invalid_request_error"
+    assert "previous_response_id" in body["error"]["message"]
+    assert "stateless" in body["error"]["message"].lower()
+    assert "input" in body["error"]["message"]
+    assert not stream.called, "the parameter must be refused, not forwarded"
