@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import tempfile
 import subprocess
@@ -6,6 +7,10 @@ import time
 from pathlib import Path
 import pytest
 import requests
+
+# The spawned `otel-agent` subprocess imports the package from the checkout,
+# not from an installed wheel, so the child needs this on its PYTHONPATH.
+src_dir = str(Path(__file__).resolve().parent.parent / "src")
 
 
 
