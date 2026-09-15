@@ -104,16 +104,16 @@ def build_parser() -> argparse.ArgumentParser:
     logs_p.add_argument("-n", "--lines", type=int, default=50, help="Number of recent lines (default: 50)")
 
     # --- auth ---
-    auth_p = sub.add_parser("auth", help="Sign in to SuperGrok / xAI OAuth")
+    auth_p = sub.add_parser("auth", help="Sign in to SuperGrok / xAI OAuth or Codex")
     auth_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
     auth_p.add_argument(
         "--no-browser", action="store_true",
-        help="Do not open a browser during auth login",
+        help="Do not open a browser during auth login or login-codex",
     )
     auth_p.add_argument(
         "auth_action", nargs="?", default="status",
-        choices=["status", "login", "import-xai", "import-codex"],
-        help="status (default), login (device-code), import-xai, or import-codex",
+        choices=["status", "login", "login-codex", "import-xai", "import-codex"],
+        help="status (default), login (xAI device-code), login-codex, import-xai, or import-codex",
     )
 
     return parser
