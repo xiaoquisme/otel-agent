@@ -13,11 +13,20 @@ from otel_agent.auth_vault import (
     save_grant,
 )
 from otel_agent.config import Provider
-from otel_agent.xai_errors import HINT, rewrite_xai_error
+from otel_agent.xai_errors import HINT, is_xai_provider, rewrite_xai_error
 
 
 def _oauth_provider() -> Provider:
     return Provider(name="xai", base_url="https://api.x.ai/v1", api_key="", auth="xai-oauth")
+
+
+def _codex_provider() -> Provider:
+    return Provider(
+        name="codex",
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_key="",
+        auth="codex-oauth",
+    )
 
 
 def test_save_and_resolve_without_refresh(tmp_path, monkeypatch):
@@ -27,6 +36,7 @@ def test_save_and_resolve_without_refresh(tmp_path, monkeypatch):
     save_grant(
         "xai",
         {"access_token": "tok-live", "refresh_token": "ref-1", "expires_in": 21600},
+        auth="xai-oauth",
         path=vault,
         imported_from="hermes",
     )
@@ -45,6 +55,7 @@ def test_refresh_writes_vault_not_hermes(tmp_path, monkeypatch):
     save_grant(
         "xai",
         {"access_token": "tok-old", "refresh_token": "ref-old", "expires_in": 1},
+        auth="xai-oauth",
         path=vault,
     )
 
@@ -55,6 +66,7 @@ def test_refresh_writes_vault_not_hermes(tmp_path, monkeypatch):
             return {"access_token": "tok-new", "refresh_token": "ref-new", "expires_in": 21600}
 
     monkeypatch.setattr("otel_agent.auth_vault._needs_refresh", lambda tokens: True)
+    monkeypatch.setattr("otel_agent.auth_vault._token_endpoint", lambda entry: "https://auth.x.ai/oauth2/token")
     monkeypatch.setattr("otel_agent.auth_vault.httpx.post", lambda *a, **k: _Resp())
     assert resolve_bearer(_oauth_provider(), path=vault) == "tok-new"
     stored = json.loads(vault.read_text())
@@ -96,6 +108,54 @@ def test_missing_grant_raises(tmp_path):
         resolve_bearer(_oauth_provider(), path=vault)
 
 
+def test_save_grant_records_declared_auth_and_merges(tmp_path):
+    vault = tmp_path / "auth.json"
+    vault.write_text(json.dumps({
+        "providers": {
+            "codex": {
+                "auth": "codex-oauth",
+                "tokens": {"access_token": "tok-old", "refresh_token": "ref-old", "expires_at": 1},
+                "discovery": {"token_endpoint": "https://auth.openai.com/oauth/token"},
+                "plan_type": "plus",
+                "last_refresh": "2026-09-15T00:00:00Z",
+            }
+        }
+    }))
+    save_grant(
+        "codex",
+        {"access_token": "tok-new", "refresh_token": "ref-new", "expires_in": 21600},
+        auth="codex-oauth",
+        path=vault,
+    )
+    entry = json.loads(vault.read_text())["providers"]["codex"]
+    assert entry["auth"] == "codex-oauth"
+    assert entry["tokens"]["access_token"] == "tok-new"
+    # Fields this writer did not set stay put: the plan claim and the recorded
+    # token endpoint both live on this entry and outlive a re-login.
+    assert entry["plan_type"] == "plus"
+    assert entry["last_refresh"] == "2026-09-15T00:00:00Z"
+    assert entry["discovery"]["token_endpoint"] == "https://auth.openai.com/oauth/token"
+
+
+def test_non_xai_subscription_provider_resolves_bearer(tmp_path, monkeypatch):
+    vault = tmp_path / "auth.json"
+    save_grant(
+        "codex",
+        {"access_token": "tok-codex", "refresh_token": "ref-codex", "expires_in": 21600},
+        auth="codex-oauth",
+        path=vault,
+    )
+    monkeypatch.setattr("otel_agent.auth_vault._needs_refresh", lambda tokens: False)
+    assert resolve_bearer(_codex_provider(), path=vault) == "tok-codex"
+
+
+def test_undeclared_auth_mode_never_reads_the_vault(tmp_path):
+    vault = tmp_path / "auth.json"
+    vault.write_text(json.dumps({"providers": {"xai": {"tokens": {"access_token": "tok"}}}}))
+    provider = Provider(name="xai", base_url="https://api.x.ai/v1", api_key="key", auth="mystery")
+    assert resolve_bearer(provider, path=vault) == "key"
+
+
 def test_rewrite_entitlement_403():
     body = {
         "code": "The caller does not have permission to execute the specified operation",
@@ -104,3 +164,11 @@ def test_rewrite_entitlement_403():
     out = rewrite_xai_error(403, body)
     assert HINT in out["error"]
     assert rewrite_xai_error(401, body)["error"] == body["error"]
+
+
+def test_error_rewrite_follows_the_declaration():
+    assert is_xai_provider(_oauth_provider())
+    # A declared subscription source without the hint is not rewritten.
+    assert not is_xai_provider(_codex_provider())
+    # No declaration: the api.x.ai host is still recognised.
+    assert is_xai_provider(Provider(name="grok", base_url="https://api.x.ai/v1", api_key="k"))

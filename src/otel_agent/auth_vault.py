@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from otel_agent.config import AUTH_XAI_OAUTH, Provider
+from otel_agent.config import Provider, auth_source
 
 DEFAULT_VAULT_PATH = Path.home() / ".otel-agent" / "auth.json"
 XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828"
@@ -84,11 +84,19 @@ def save_grant(
     provider_name: str,
     tokens: dict[str, Any],
     *,
+    auth: str,
     discovery: dict[str, Any] | None = None,
     imported_from: str = "",
     path: Path | None = None,
 ) -> None:
-    """Persist a copied grant into the sidecar vault."""
+    """Persist a copied grant into the sidecar vault.
+
+    *auth* is the writer's declared credential source; it is recorded on the
+    entry so refresh policy is read from the declaration rather than inferred
+    from the provider name. The entry is merged into, not replaced: fields this
+    caller does not set (status written by the refresh path, plan claims, a
+    token endpoint recorded at import time) survive.
+    """
     vault = path or default_vault_path()
     access = str(tokens.get("access_token", "") or "").strip()
     refresh = str(tokens.get("refresh_token", "") or "").strip()
@@ -103,17 +111,21 @@ def save_grant(
             expires_at = 0
     with _lock:
         data = _load(vault)
-        data["providers"][provider_name] = {
-            "auth": AUTH_XAI_OAUTH,
-            "tokens": {
-                "access_token": access,
-                "refresh_token": refresh,
-                "token_type": str(tokens.get("token_type") or "Bearer"),
-                "expires_at": expires_at,
-            },
-            "discovery": discovery or {},
-            "imported_from": imported_from,
+        providers: dict[str, Any] = data.setdefault("providers", {})
+        prior = providers.get(provider_name)
+        entry: dict[str, Any] = dict(prior) if isinstance(prior, dict) else {}
+        entry["auth"] = auth
+        entry["tokens"] = {
+            "access_token": access,
+            "refresh_token": refresh,
+            "token_type": str(tokens.get("token_type") or "Bearer"),
+            "expires_at": expires_at,
         }
+        if discovery or not isinstance(entry.get("discovery"), dict):
+            entry["discovery"] = discovery or {}
+        if imported_from or "imported_from" not in entry:
+            entry["imported_from"] = imported_from
+        providers[provider_name] = entry
         _atomic_write(vault, data)
 
 
@@ -206,7 +218,8 @@ def _refresh(entry: dict[str, Any]) -> dict[str, Any]:
 
 def resolve_bearer(provider: Provider, *, path: Path | None = None) -> str:
     """Return a live Bearer secret for *provider*."""
-    if provider.auth != AUTH_XAI_OAUTH:
+    source = auth_source(provider.auth)
+    if source is None or not source.vault_backed:
         if provider.api_key:
             return provider.api_key
         raise AuthError(f"Provider '{provider.name}' has no api_key.")
@@ -219,7 +232,8 @@ def resolve_bearer(provider: Provider, *, path: Path | None = None) -> str:
             if provider.api_key:
                 return provider.api_key
             raise AuthError(
-                f"No xAI OAuth grant for '{provider.name}'. Run: otel-agent auth login"
+                f"No subscription grant for '{provider.name}' in the vault. "
+                f"Run: otel-agent auth login"
             )
         raw_tokens = entry.get("tokens")
         tokens: dict[str, Any] = raw_tokens if isinstance(raw_tokens, dict) else {}
@@ -231,7 +245,7 @@ def resolve_bearer(provider: Provider, *, path: Path | None = None) -> str:
             tokens = refreshed if isinstance(refreshed, dict) else {}
         access = str(tokens.get("access_token", "") or "").strip()
         if not access:
-            raise AuthError(f"xAI OAuth grant for '{provider.name}' has no access_token.")
+            raise AuthError(f"Subscription grant for '{provider.name}' has no access_token.")
         return access
 
 

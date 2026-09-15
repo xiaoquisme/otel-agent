@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
-from otel_agent.config import AUTH_XAI_OAUTH, Provider
+from otel_agent.config import Provider, auth_source
 
 USAGE_URL = "https://grok.com/?_s=usage"
 HINT = (
@@ -14,7 +14,13 @@ HINT = (
 
 
 def is_xai_provider(provider: Provider) -> bool:
-    if provider.auth == AUTH_XAI_OAUTH:
+    """True when this provider's declaration asks for the SuperGrok hint.
+
+    The auth declaration decides; the host check stays as a fallback for an
+    api.x.ai provider configured with a plain api_key.
+    """
+    source = auth_source(provider.auth)
+    if source is not None and source.entitlement_hint:
         return True
     host = (urlparse(provider.base_url).hostname or "").lower()
     return host == "api.x.ai" or host.endswith(".x.ai")

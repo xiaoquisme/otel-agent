@@ -106,7 +106,13 @@ def _login(args) -> None:
         print(f"Login failed: {exc}")
         raise SystemExit(1) from exc
 
-    save_grant(DEFAULT_PROVIDER, tokens, discovery=discovery, imported_from="device-code")
+    save_grant(
+        DEFAULT_PROVIDER,
+        tokens,
+        auth=AUTH_XAI_OAUTH,
+        discovery=discovery,
+        imported_from="device-code",
+    )
     _upsert_xai_provider(config_path)
     print()
     print("Login successful.")
@@ -132,7 +138,13 @@ def _import_xai(args) -> None:
             continue
         tokens, discovery = grant
         imported_from = "hermes" if source == HERMES_AUTH else "grok-cli"
-        save_grant(DEFAULT_PROVIDER, tokens, discovery=discovery, imported_from=imported_from)
+        save_grant(
+            DEFAULT_PROVIDER,
+            tokens,
+            auth=AUTH_XAI_OAUTH,
+            discovery=discovery,
+            imported_from=imported_from,
+        )
         _upsert_xai_provider(config_path)
         print(f"Imported SuperGrok grant from {source}")
         print(f"  provider: {DEFAULT_PROVIDER}  (use model xai/grok-4.6)")
