@@ -16,6 +16,15 @@ from otel_agent.auth_vault import (
     read_grant_source,
     save_grant,
 )
+from otel_agent.codex_oauth import (
+    CODEX_OAUTH_CLIENT_ID,
+    CODEX_OAUTH_DEVICE_TOKEN_URL,
+    CODEX_OAUTH_TOKEN_URL,
+    CODEX_OAUTH_VERIFICATION_URL,
+    exchange_authorization_code,
+    poll_device_token as poll_codex_device_token,
+    request_device_code as request_codex_device_code,
+)
 from otel_agent.config import AUTH_CODEX_OAUTH, AUTH_XAI_OAUTH, upsert_provider
 from otel_agent.xai_oauth import (
     fetch_discovery,
@@ -78,6 +87,8 @@ def handle_auth(args) -> None:
     action = getattr(args, "auth_action", None) or "status"
     if action == "login":
         _login(args)
+    elif action == "login-codex":
+        _login_codex(args)
     elif action == "import-xai":
         _import_xai(args)
     elif action == "import-codex":
@@ -167,6 +178,77 @@ def _login(args) -> None:
     print("Login successful.")
     print(f"  provider: {DEFAULT_PROVIDER}  (use model xai/grok-4.6)")
     print(f"  config:   {config_path}")
+
+
+def _login_codex(args) -> None:
+    """Mint a Codex chain this gateway owns outright.
+
+    Deliberately not an adoption: no sibling CLI is read, so nothing Hermes
+    holds is refreshed, consumed, or revoked. The cost is one device-code
+    approval by the human; the benefit is a chain with exactly one writer.
+    """
+    config_path = Path(getattr(args, "config", "~/.otel-agent/config.yaml")).expanduser()
+    open_browser = not getattr(args, "no_browser", False)
+    if is_remote_session():
+        open_browser = False
+
+    print("Signing in to Codex (ChatGPT subscription)...")
+    print("This mints a new grant chain for this gateway — no other CLI is touched.")
+    print("Tokens stay in ~/.otel-agent/auth.json.")
+    try:
+        with httpx.Client(timeout=20.0, headers={"Accept": "application/json"}) as client:
+            device = request_codex_device_code(client)
+            user_code = str(device["user_code"])
+            print()
+            print("To continue:")
+            print(f"  1. Open: {CODEX_OAUTH_VERIFICATION_URL}")
+            print(f"  2. Enter code: {user_code}")
+            if open_browser:
+                try:
+                    opened = webbrowser.open(CODEX_OAUTH_VERIFICATION_URL)
+                except Exception:
+                    opened = False
+                if opened:
+                    print("  (Opened browser for verification)")
+                else:
+                    print("  Could not open browser automatically — use the URL above.")
+            print()
+            print("Waiting for authorization...")
+            challenge = poll_codex_device_token(
+                client,
+                token_endpoint=CODEX_OAUTH_DEVICE_TOKEN_URL,
+                device_auth_id=str(device["device_auth_id"]),
+                user_code=user_code,
+                expires_in=int(device["expires_in"]),
+                poll_interval=int(device["interval"]),
+            )
+            tokens = exchange_authorization_code(
+                client,
+                token_endpoint=CODEX_OAUTH_TOKEN_URL,
+                authorization_code=str(challenge["authorization_code"]),
+                code_verifier=str(challenge["code_verifier"]),
+            )
+    except AuthError as exc:
+        print(f"Login failed: {exc}")
+        raise SystemExit(1) from exc
+    except httpx.HTTPError as exc:
+        print(f"Login failed: {exc}")
+        raise SystemExit(1) from exc
+
+    save_grant(
+        CODEX_PROVIDER,
+        tokens,
+        auth=AUTH_CODEX_OAUTH,
+        discovery={"token_endpoint": CODEX_OAUTH_TOKEN_URL},
+        client_id=CODEX_OAUTH_CLIENT_ID,
+        imported_from="device-code",
+    )
+    _upsert_codex_provider(config_path, DEFAULT_CODEX_BASE_URL)
+    print()
+    print("Login successful.")
+    print(f"  provider: {CODEX_PROVIDER}  (use model codex/gpt-5)")
+    print(f"  config:   {config_path}")
+    print("  This chain is this gateway's own — no sibling CLI was read or modified.")
 
 
 def _import_xai(args) -> None:
