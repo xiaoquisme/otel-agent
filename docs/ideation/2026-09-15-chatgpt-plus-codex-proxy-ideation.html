@@ -1,0 +1,1118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: 通过 otel-agent 代理 ChatGPT Plus / Codex 订阅</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #fbfbfa;
+    --surface: #ffffff;
+    --surface-soft: #f4f4f2;
+    --text: #1c1c1a;
+    --muted: #6a6a66;
+    --line: #e2e2de;
+    --accent: #2f5d50;
+    --accent-soft: #e6f0ec;
+    --accent-text: #1f4239;
+    --warn-soft: #fdf3e3;
+    --warn-text: #7a4f12;
+    --info-soft: #eaf0f7;
+    --info-text: #2c4a6b;
+    --radius: 10px;
+    --measure: 70ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --bg: #16171a;
+      --surface: #1d1f23;
+      --surface-soft: #24262b;
+      --text: #e8e8e4;
+      --muted: #a0a09a;
+      --line: #33363c;
+      --accent: #8fb9a8;
+      --accent-soft: #22322c;
+      --accent-text: #b9d8cb;
+      --warn-soft: #35291a;
+      --warn-text: #e3bd7d;
+      --info-soft: #1f2a36;
+      --info-text: #a8c3de;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 920px; margin-inline: auto; padding: 40px 20px 72px; }
+  p, li { max-width: var(--measure); }
+  h1 { font-size: 1.7rem; line-height: 1.3; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 1.15rem; margin: 44px 0 14px; padding-top: 18px;
+    border-top: 1px solid var(--line); letter-spacing: -0.005em;
+  }
+  h3 { font-size: 1.02rem; margin: 0; line-height: 1.45; }
+  a { color: var(--accent); }
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.87em; background: var(--surface-soft);
+    padding: 1px 5px; border-radius: 4px;
+  }
+  strong { color: inherit; font-weight: 650; }
+
+  .docmeta { margin: 14px 0 0; }
+  .docmeta dl { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 0; }
+  .docmeta dt {
+    font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); margin: 0;
+  }
+  .docmeta dd { margin: 2px 0 0; font-size: 0.88rem; }
+  .docmeta > dl > div { display: block; }
+
+  .stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 26px 0 0; padding: 0; list-style: none; }
+  .stats li {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 9px 14px; font-size: 0.82rem; color: var(--muted);
+  }
+  .stats b { display: block; font-size: 1.15rem; color: var(--text); font-weight: 650; }
+
+  .axes { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+  .axes li {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 11px 14px; font-size: 0.9rem;
+  }
+  .axes code { background: none; padding: 0; color: var(--accent-text); font-weight: 650; }
+
+  .jump { list-style: none; padding: 0; margin: 0 0 22px; display: grid; gap: 5px; }
+  .jump a { text-decoration: none; font-size: 0.9rem; }
+  .jump a:hover { text-decoration: underline; }
+  .jump .n { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 8px; }
+
+  .idea {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 20px 22px; margin: 0 0 18px;
+  }
+  .idea > header { display: flex; gap: 12px; align-items: baseline; margin-bottom: 14px; }
+  .rank {
+    flex: none; font-size: 0.78rem; font-weight: 700; color: var(--accent-text);
+    background: var(--accent-soft); border-radius: 6px; padding: 3px 9px;
+    font-variant-numeric: tabular-nums;
+  }
+  .fields { margin: 0; }
+  .fields dt {
+    font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); margin: 15px 0 4px;
+  }
+  .fields dt:first-child { margin-top: 0; }
+  .fields dd { margin: 0; max-width: var(--measure); }
+  .fields dd p { margin: 0 0 8px; }
+  .fields dd p:last-child { margin-bottom: 0; }
+
+  .tag {
+    display: inline-block; font-size: 0.74rem; font-weight: 650;
+    border-radius: 6px; padding: 1px 7px; margin-right: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .tag-direct { background: var(--accent-soft); color: var(--accent-text); }
+  .tag-external { background: var(--info-soft); color: var(--info-text); }
+  .tag-reasoned { background: var(--warn-soft); color: var(--warn-text); }
+
+  .meta-strip { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 15px; padding: 0; list-style: none; }
+  .meta-strip li {
+    font-size: 0.76rem; border: 1px solid var(--line); background: var(--surface-soft);
+    border-radius: 6px; padding: 2px 9px; color: var(--muted);
+  }
+  .meta-strip b { color: var(--text); font-weight: 650; }
+
+  figure { margin: 18px 0 4px; }
+  figure svg { display: block; width: 100%; height: auto; max-width: 100%; }
+  figcaption { font-size: 0.8rem; color: var(--muted); margin-top: 8px; max-width: var(--measure); }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 18px 0 4px; }
+  .split > div { border: 1px solid var(--line); border-radius: var(--radius); padding: 13px 15px; }
+  .split .split-head {
+    font-size: 0.72rem; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 8px;
+  }
+  .split ul { margin: 0; padding-left: 18px; font-size: 0.87rem; }
+  .split li { margin-bottom: 5px; }
+  .split .shipped { background: var(--warn-soft); }
+  .split .shipped .split-head { color: var(--warn-text); }
+  @media (max-width: 640px) { .split { grid-template-columns: 1fr; } }
+
+  table { border-collapse: collapse; width: 100%; font-size: 0.87rem; margin-top: 6px; }
+  th, td { text-align: left; padding: 9px 11px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 0.7rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
+  td:first-child { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .table-scroll { overflow-x: auto; }
+
+  .callout {
+    background: var(--info-soft); border-radius: var(--radius);
+    padding: 13px 16px; margin: 20px 0 0; font-size: 0.89rem;
+  }
+  .callout .eyebrow {
+    display: block; font-size: 0.68rem; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--info-text); font-weight: 700; margin-bottom: 5px;
+  }
+  .callout p { margin: 0 0 7px; }
+  .callout p:last-child { margin-bottom: 0; }
+
+  footer.composition-signal {
+    margin-top: 52px; padding-top: 16px; border-top: 1px solid var(--line);
+    font-size: 0.8rem; color: var(--muted); max-width: var(--measure);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>通过 otel-agent 代理 ChatGPT Plus / Codex 订阅</h1>
+    <div class="docmeta">
+      <dl>
+        <div><dt>Date</dt><dd><time datetime="2026-09-15">2026-09-15</time></dd></div>
+        <div><dt>Topic</dt><dd><code>chatgpt-plus-codex-proxy</code></dd></div>
+        <div><dt>Focus</dt><dd>将 otel-agent 也能代理 ChatGPT Plus 订阅，像 hermes agent 那样</dd></div>
+        <div><dt>Mode</dt><dd>repo-grounded</dd></div>
+      </dl>
+    </div>
+    <ul class="stats">
+      <li><b>40</b>原始想法</li>
+      <li><b>21</b>合并后候选</li>
+      <li><b>7</b>存活</li>
+      <li><b>5</b>话题轴</li>
+      <li><b>2</b>被证伪</li>
+    </ul>
+  </header>
+
+  <section id="codebase-context">
+    <h2>Codebase Context</h2>
+
+    <p>otel-agent 是一个本地 LLM 网关（Python + React dashboard），按 <code>provider/model</code>
+    前缀把请求路由到 OpenAI 或 Anthropic 形状的上游，带 telemetry 记录与后台 proxy 守护进程。</p>
+
+    <dl class="fields">
+      <dt>已有的订阅 / OAuth 机制（xAI SuperGrok）</dt>
+      <dd>
+        <p><code>config.py:52-54</code> 声明 <code>VALID_API_FORMATS=("openai","anthropic")</code> 与
+        <code>VALID_AUTH_MODES=("", AUTH_XAI_OAUTH)</code>；<code>:133</code> 只为一种 auth 模式豁免
+        <code>api_key</code>。Sidecar Auth Vault 落在 <code>~/.otel-agent/auth.json</code>：原子 0600 写
+        （<code>auth_vault.py:64-80</code>）、<code>_jwt_exp</code>（<code>:36</code>）、3600s skew 的
+        <code>_needs_refresh</code>（<code>:134</code>）、<code>_token_endpoint</code>（<code>:147</code>，
+        <strong>拒绝任何非 <code>*.x.ai</code> 的 host</strong>）、<code>_refresh</code>（<code>:167</code>，
+        form-encoded + 硬编码 xAI client_id）、<code>resolve_bearer</code>（<code>:207</code>，
+        <strong>单模式特判</strong>）、Hermes 导入（<code>:238</code>）。刷新在热路径上发生：
+        <code>provider_utils.build_request_headers:36</code> → <code>resolve_bearer</code>。</p>
+        <p>设备码登录在 <code>xai_oauth.py</code>（<code>:18-21,55,84</code>），CLI 入口
+        <code>cli.py:107-115</code>（<code>status|login|import-xai</code>），
+        <code>commands/auth_cmd.py:64,117</code>，<code>doctor.py:72-77</code> 与 <code>auth_cmd.py:27</code>
+        只认识 <code>xai</code>。</p>
+      </dd>
+
+      <dt>Sidecar 先例（Cursor）</dt>
+      <dd>
+        <p><code>cursor_sidecar.py:98</code> 用 Popen + <code>start_new_session</code> 拉起伴生进程，
+        PID/port/log 三件套在 <code>process.py:18-20</code>，随网关起停
+        （<code>commands/proxy.py:107,145,158,163,175,198</code>）。<strong>唯一的健康信号是
+        <code>_is_port_in_use</code>（<code>:93/115</code>），没有 HTTP 探活。</strong>
+        回环判定是 <code>provider.name == "cursor"</code> 且 host ∈ (127.0.0.1, localhost)，
+        <strong>同一段判据在三个文件里各有一份</strong>。</p>
+      </dd>
+
+      <dt>今天的协议翻译</dt>
+      <dd><p><code>converter.py</code> 只做 chat-completions ↔ Anthropic messages：4 个纯
+      dict→dict 函数 + 1 个有状态的 <code>OpenAIToAnthropicStreamConverter</code>，反向流没有对应的类；
+      <code>convert_openai_chunk_to_anthropic</code> 是死代码，只有测试可达。<strong>从没有构造过
+      <code>tool_calls</code> 数组</strong>——只有 <code>finish_reason</code>→<code>stop_reason</code>
+      的映射。</p></dd>
+
+      <dt>缺失的部分</dt>
+      <dd><p>没有 <code>/v1/responses</code> 路由（<code>server.py</code> 的路由恰好是
+      <code>:84</code> chat/completions、<code>:136</code> messages、<code>:186</code>/<code>:234</code>
+      images、<code>:319</code> models、<code>:348</code> health、<code>:352</code> SPA）；
+      <code>src/</code> 里没有任何 Responses 形状的代码；没有 <code>chatgpt-account-id</code> /
+      <code>OpenAI-Beta</code> 头（<code>AUTH_HEADERS</code> 在 <code>provider_utils.py:7-10</code>
+      只有 Bearer 或 x-api-key）；<code>src/</code> 里 <code>originator</code> 与
+      <code>ChatGPT-Account-ID</code> 出现 0 次。</p></dd>
+
+      <dt>必须改变形状、而不只是加一个取值的地方</dt>
+      <dd>
+        <ol>
+          <li><code>resolve_bearer:209</code> 对单一模式特判；<code>_refresh:167-183</code> 硬编码
+          form-encoded 与 xAI client id；<code>_token_endpoint:153</code> 拒绝非 <code>*.x.ai</code>
+          host → 刷新必须变成 per-mode 策略。</li>
+          <li><code>save_grant:107</code> 无条件写死 <code>"auth": AUTH_XAI_OAUTH</code> → 需要把模式传进去。</li>
+          <li><code>config.py:133</code> 只为一种模式豁免 <code>api_key</code> → 要泛化成 keyless 模式集合。</li>
+          <li><code>provider_utils.build_upstream_url:13-21</code> 对所有 <code>api_format: openai</code>
+          的上游无条件追加 <code>/chat/completions</code>，而 <code>AUTH_HEADERS</code> 按 api_format 索引
+          → 「surface」必须从 api_format 里独立出来成为一个 provider 概念。</li>
+          <li>Codex 只有 Responses，所以要让 chat/completions 与 <code>/v1/messages</code> 客户端可用，
+          就必须新写 Responses↔chat 翻译与 Responses-SSE→Anthropic 流转换。</li>
+          <li>今天唯一存在的 per-provider 钩子是一次名字比较，
+          <code>provider_utils.rewrite_upstream_model:58</code>（<code>provider.name == "cursor"</code>）
+          ——是 per-provider 微调的先例，但只管 model id，扛不了 URL / header / surface 的分歧。</li>
+        </ol>
+      </dd>
+
+      <dt>仓库里已经写下的产品边界</dt>
+      <dd>
+        <p><code>docs/plans/2026-08-17-004</code> 的 Scope Boundaries 把
+        <strong>「Responses/<code>codex_responses</code> adapter」列为 out of scope</strong>，并 defer 了
+        「generic <code>auth_type</code> registry for <strong>Codex</strong>/Qwen」与
+        「consumer OAuth 的 loopback-only bind」；<code>2026-08-17-005:104</code> 重申。
+        plan 004 <strong>KTD1</strong> =「Token-consumer, not OAuth-client」（导入既有 grant，不注册新 app），
+        理由是 Hermes <code>auth.py</code> 记录了「两个写者共享 refresh 链会换来
+        <code>invalid_grant</code>」；plan 005 <strong>改写了 KTD1</strong>，允许对着兄弟 CLI 的公开
+        client_id 跑 device-code。KTD2 = copy-on-import 进 <code>~/.otel-agent/auth.json</code>，
+        永不 refresh-write Hermes 的轮换 token。</p>
+      </dd>
+
+      <dt>本机现场事实（本轮读取 <code>~/.hermes/auth.json</code>）</dt>
+      <dd>
+        <p>已经存在 <code>providers["openai-codex"]</code>，带 <code>auth_mode: "chatgpt"</code>、
+        <code>tokens: {access_token, refresh_token}</code> 与 <code>last_refresh</code>。</p>
+        <p class="note"><strong>注意一处更正：</strong><code>source: "device_code"</code>、
+        <code>label</code> 与 <code>base_url: https://chatgpt.com/backend-api/codex</code>
+        <em>不在</em> <code>providers</code> 条目上，而在
+        <code>credential_pool["openai-codex"][0]</code> 上——任何导入表都要把 json pointer 指进
+        pool 条目，只读 <code>providers[...]</code> 拿不到 base_url。</p>
+        <p>access token 是 JWT（<code>iss=https://auth.openai.com</code>、
+        <code>aud=["https://api.openai.com/v1"]</code>），命名空间 claim
+        <code>https://api.openai.com/auth</code> 里带 <code>chatgpt_plan_type: prolite</code> 与
+        <code>chatgpt_account_id</code>。token dict <strong>没有</strong>
+        <code>expires_in</code>/<code>id_token</code>/<code>token_type</code>，所以 xAI 形状的 token 校验
+        不能照搬（<code>_jwt_exp()</code> 仍可用）。Hermes 的 <code>credential_pool</code> 还带
+        <code>priority</code>、<code>request_count</code>、<code>last_error_code</code>/
+        <code>last_error_reset_at</code>——它已经建模了多账号池化与每条 grant 的配额重置状态；池注册表里
+        同时已有 <code>copilot</code>、<code>xiaomi</code>、<code>openrouter</code>、<code>xai-oauth</code>。</p>
+      </dd>
+
+      <dt>Past learnings</dt>
+      <dd>
+        <ol>
+          <li><code>docs/solutions/architecture-patterns/import-supergrok-oauth-sidecar-vault.md</code>（2026-08-17）
+          ——最直接的类比。copy-on-import 进单写者 vault；永不 refresh-write 兄弟 CLI 的文件；轮换 refresh
+          token 不能进 mtime 热加载的 <code>config.yaml</code>；解析发生在热路径而非 config 加载期；
+          <strong>OAuth 是一种 auth 模式，不是第二个 provider 名</strong>；entitlement 403 是给人改写的，
+          不该让 breaker 跳闸。边界原话：<em>「在 import-from-sibling-CLI 不够用之前，不要发明新的
+          device-code 客户端。」</em><strong>该文写于 Cursor sidecar 存在之前</strong>，且其中
+          <code>:27</code>「网关不需要 Responses adapter」与 <code>:35</code>「breaker」两条已被后续事实
+          超越或推翻。</li>
+          <li>Cursor sidecar 先例（<code>cursor_sidecar.py</code>、README §Cursor、提交 #27-#30）
+          ——本仓库自己对「上游不是 chat-completions host」的答案。两次被记录下来的失误，都在三个提交内修掉：
+          镜像 sidecar 那份过期模型清单（#28、#29——模型必须取自 agent CLI），以及发明一个合成的
+          <code>auto</code> 模型加一整套路由栈、随后<strong>被删掉</strong>（#30）。<strong>这件事从未
+          compound 进 <code>docs/solutions/</code>。</strong></li>
+          <li><code>dashboard-render-delegation-pattern.md</code>（2026-07-13）——被记录的失败模式是格式知识
+          跨<strong>进程与语言边界</strong>重复、漂移、反复产生 bug。原话：<em>「根因不是粗心，而是一种
+          让漂移不可避免的架构。」</em><strong>这条与上一条直接冲突。</strong></li>
+          <li><code>dashboard-own-pid-files.md</code>（2026-08-17）——每个守护进程一套独立 PID/port/log，
+          绝不共用；<code>applies_when</code> 字面就是「紧挨着 proxy 的任何新的长生命周期 CLI 守护进程」。</li>
+          <li><code>streaming-format-detection-priority.md</code> 与
+          <code>streaming-json-chunk-parser-string-boundary.md</code>——按 body 内容决定解析策略，
+          绝不按 <code>format</code> 标签；手写 JSON 走查需要 <code>in_string</code> +
+          <code>escape_next</code>。</li>
+          <li><code>sqlite-default-storage.md</code>（2026-08-02）——存储是 SQLite WAL 以便多进程共存；
+          <strong>proxy 是唯一写者，任何新伴生进程都不得写 telemetry DB。</strong></li>
+        </ol>
+      </dd>
+
+      <dt>External context（2026-09-15，研究价值：高）</dt>
+      <dd>
+        <p><strong>上游面：</strong><code>POST https://chatgpt.com/backend-api/codex/responses</code>
+        ——Responses API，不是 chat/completions。</p>
+        <p><strong>请求头全部吃重：</strong><code>Authorization: Bearer</code>；
+        <code>ChatGPT-Account-ID</code>（规范 PascalCase，值取自 JWT 的
+        <code>chatgpt_account_id</code> claim）；<code>originator</code> + <code>User-Agent</code>
+        ——Cloudflare 只放行 <code>codex_cli_rs</code> / <code>codex_vscode</code> /
+        <code>codex_sdk_ts</code> / 任何以 <code>Codex </code> 开头的值，第三方取值即使 token 有效也会拿到
+        <strong>403 + <code>cf-mitigated: challenge</code></strong>。</p>
+        <p><strong>body 约束：</strong>强制 <code>store: false</code>，并要求
+        <code>include: ["reasoning.encrypted_content"]</code> 才能在轮次间携带状态；端点
+        <strong>拒绝 <code>max_output_tokens</code> 与 <code>temperature</code></strong>（400）。</p>
+        <p><strong>凭证：</strong>refresh token <strong>一次性、每次刷新即轮换；出示已消费的 token 会触发
+        复用检测并撤销整个 grant family</strong>。Hermes 自己的 #22903/#7806 记录了这个：它导入了
+        <code>~/.codex/auth.json</code> 的 refresh token 并自行刷新，「偷走了另一个客户端的刷新回合」，
+        永久废掉了 Codex CLI 与 VS Code 的会话；它的修法是自持
+        <code>~/.hermes/auth.json</code>、绝不触碰 <code>~/.codex/auth.json</code>。同类做法：CodexBar
+        用只读 token + CLI 独占刷新；OpenClaw 用「token sink」（唯一所有者，外部 CLI 材料只做一次性
+        bootstrap）；LangChain 的 ChatGPT OAuth 故意把 token 路径与 <code>~/.codex/auth.json</code> 分开。
+        登录回调端口 1455 与 Codex CLI、opencode 相撞。</p>
+        <p><strong>先例：</strong>CLIProxyAPI（Go，参考实现）、wowyuarm/codex-proxy、
+        @pikoloo/codex-proxy、<code>opencode-openai-codex-auth</code>（注册成 provider
+        <code>codex</code> 而非 <code>openai</code> 以避开冲突）、go-llm-proxy、CodexBar。主流做法是
+        <strong>直接复用 OAuth token 走 HTTP，绝不 shell out</strong>。</p>
+        <p><strong>对比 Anthropic：</strong>Anthropic 禁止第三方使用 Claude.ai Free/Pro/Max 凭证，其
+        2026-02-19 的消费者 ToS 更新禁止为第三方工具提取 OAuth token；那个生态的答案是架构性的——
+        <strong>把 CLI 作为子进程拉起</strong>（<code>claude --print</code>），而不是复用它的 token。
+        OpenAI 的立场不同，所以同一个问题按厂商有两个相反的解法。</p>
+        <p><strong>服务条款：</strong>2026-08-21 Codex/ChatGPT 负责人 Thibault Sottiaux 回应额度抱怨时表示，
+        受影响的用户多数在用 <strong>「sub2api」</strong>（订阅转 API 再分发），这违反 ToS 并触发反欺诈；
+        而通过「Sign in With ChatGPT」使用订阅是没问题的，<strong>第三方开源客户端（点名 Pi 与
+        OpenCode）也在内</strong>。界线是：<strong>个人代理可以，多用户分发不行。</strong></p>
+        <p><strong>限额：</strong>OpenAI 于 <strong>2026-08-25 恢复</strong>了 Plus 的 5 小时滚动 Codex
+        上限（六周前刚取消），Pro 层暂免（来源互相冲突）。</p>
+        <p><strong>研究可信度：</strong>本轮研究环境无法直连 GitHub 与 raw.githubusercontent，
+        代码级断言（header 大小写、翻译表、PR 史）均为二手，实现前需用一次真实抓包核实；
+        <code>gpt-5.6-sol-900k</code> 在任何公开来源中都查不到，疑似 Hermes 本地别名，<strong>不可硬编码</strong>。</p>
+      </dd>
+    </dl>
+
+    <div class="callout">
+      <span class="eyebrow">两条 grounding 之间的张力，本文件不替你选边</span>
+      <p>「翻译留在网关进程内」（delegation 学习）与「用一个 sidecar 桥接不合规上游」（Cursor 已落地）
+      在语料里从未被调和过。下面第 6 条明确选边并给出理由；如果你不同意那个理由，第 6 条就不成立，
+      但第 1、2、3 条不受影响。</p>
+    </div>
+  </section>
+
+  <section id="topic-axes">
+    <h2>Topic Axes</h2>
+    <ul class="axes">
+      <li><code>credential-lifecycle</code> 凭证生命周期——grant 从哪来（导入兄弟 CLI 的共享旋转链 vs 自己跑 device-code 拿独立链）、vault 契约与单写者、JWT expiry、Codex token 形状与 xAI 的差异、refresh 端点差异</li>
+      <li><code>protocol-surface</code> 协议面——Responses ↔ chat/completions ↔ messages 翻译、<code>encrypted_content</code> 保真、SSE 流转换、<code>store:false</code>、被拒参数</li>
+      <li><code>upstream-identity</code> 上游身份——<code>originator</code>/<code>User-Agent</code>/<code>ChatGPT-Account-ID</code> 指纹、Cloudflare 挑战、与按 api_format 索引的 <code>AUTH_HEADERS</code> 的关系、403 与 401 的语义</li>
+      <li><code>bridge-placement</code> 落地形态——网关内适配器 vs sidecar 进程 vs 包 CLI 子进程；与 delegation 学习的冲突；PID/port/log 三件套；健康检查；打包与 <code>uv tool install</code> 地雷</li>
+      <li><code>entitlement-boundary</code> 合规与用量边界——<code>chatgpt_plan_type: prolite</code>、5 小时滚动配额与重置状态、sub2api 红线（个人 vs 转发）、<code>0.0.0.0</code> 暴露、403/429 改写与 breaker 已删除的现状</li>
+    </ul>
+  </section>
+
+  <section id="live-probe">
+    <h2>Live Probe（2026-09-15，本机实测）</h2>
+    <p>本文件初稿把四条吃重事实标为「二手、实现前需核实」。随后用本机 Hermes 已有的
+    <code>openai-codex</code> grant 做了一轮活体探针（<strong>只读 access token，全程未触碰 refresh
+    token</strong>——消费它会废掉 Codex CLI 与 VS Code 的会话）。结果推翻了一条被标为「实现风险最高」的
+    断言，并把另外几条从假设变成事实。</p>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>断言</th><th>初稿依据</th><th>实测结果</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>originator</code> / <code>User-Agent</code> 白名单</td>
+            <td>二手研究，「实现风险最高」</td>
+            <td><strong>不成立。</strong>以 <code>originator: otel-agent</code> +
+            <code>User-Agent: otel-agent/0.1</code>（明确的第三方身份）请求，得到
+            <strong>200 与完整 SSE 流</strong>；删掉该头、换成第三方值的对照请求拿到的是应用层 400
+            （<code>Stream must be set to true</code>）而不是 403，也没有
+            <code>cf-mitigated: challenge</code></td>
+          </tr>
+          <tr>
+            <td><code>ChatGPT-Account-ID</code> 必需</td>
+            <td>二手研究</td>
+            <td><strong>不成立。</strong>完全省略该头，仍得 200 与完整流（单账号场景下它是可选的）</td>
+          </tr>
+          <tr>
+            <td>端点支持非流式</td>
+            <td>未假设</td>
+            <td><strong>不成立——端点只接受流式。</strong>非流式请求被拒：
+            <code>{"detail":"Stream must be set to true"}</code>。因此任何非流式客户端都必须由网关聚合 SSE
+            来服务</td>
+          </tr>
+          <tr>
+            <td><code>max_output_tokens</code> / <code>temperature</code> 被拒</td>
+            <td>二手研究</td>
+            <td><strong>成立。</strong>分别得到 <code>400 Unsupported parameter: max_output_tokens</code>
+            与 <code>…: temperature</code></td>
+          </tr>
+          <tr>
+            <td><code>previous_response_id</code> 可用</td>
+            <td>未假设</td>
+            <td><strong>不成立。</strong><code>400 Unsupported parameter: previous_response_id</code>
+            ——服务端强制无状态，续接只能靠不透明的 reasoning item</td>
+          </tr>
+          <tr>
+            <td><code>/models</code> 可作模型目录源</td>
+            <td>未假设</td>
+            <td><strong>不成立。</strong><code>GET /models?client_version=0.50.0</code> 返回 200 但
+            <code>{"models":[]}</code>——目录是空的，与 Cursor 那次「模型取自 agent CLI」的教训一致</td>
+          </tr>
+          <tr>
+            <td><code>gpt-5.6-sol-900k</code> 是否真实 id</td>
+            <td>研究称「任何公开来源都查不到」</td>
+            <td><strong>id 真实，后缀是本地的。</strong>响应回显 <code>"model":"gpt-5.6-sol"</code>
+            且请求成功——<code>-900k</code> 是 Hermes 的本地别名，不是上游 id</td>
+          </tr>
+          <tr>
+            <td>Responses SSE 事件表</td>
+            <td>二手研究</td>
+            <td><strong>已取得。</strong>一个纯文本回合产生 9 个事件类型：
+            <code>response.created</code>、<code>response.in_progress</code>、
+            <code>response.output_item.added</code>、<code>response.content_part.added</code>、
+            <code>response.output_text.delta</code>、<code>response.output_text.done</code>、
+            <code>response.content_part.done</code>、<code>response.output_item.done</code>、
+            <code>response.completed</code>（整段流 7,997 字节，已完整读完）</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <span class="eyebrow">这对下面的想法意味着什么</span>
+      <p><strong>第 5 条被削掉一半。</strong>它的指纹一半（伪造/派生 <code>originator</code>、
+      按 <code>cf-mitigated</code> 分诊 403）建立在一条经实测不存在的门槛上——这部分作为独立方向不成立。
+      它的另一半（credential 变成 record、身份与凭证同源派生、claim 缺失就省略该头）不受影响，仍然有效，
+      因为「账户头与 bearer 来自同一次解析」是纯粹的本地正确性主张，不依赖任何 Cloudflare 事实。</p>
+      <p><strong>第 4 条从假设变成具体。</strong>「薄薄的面归一化」现在有确切清单：强制
+      <code>stream: true</code>、注入 <code>store: false</code> 与
+      <code>include: ["reasoning.encrypted_content"]</code>、剥掉
+      <code>max_output_tokens</code>/<code>temperature</code>/<code>previous_response_id</code>，
+      并为 9 个已知事件类型写映射。</p>
+      <p><strong>第 1、2、3 条完全不受影响</strong>——它们的所有依据都是本地代码，本轮没有一条被触动。</p>
+    </div>
+  </section>
+
+  <section id="ranked-ideas">
+    <h2>Ranked Ideas</h2>
+
+    <ul class="jump">
+      <li><span class="n">1</span><a href="#i1">请求腿的 header 未经脱敏就入库：把 telemetry 改成正名单</a></li>
+      <li><span class="n">2</span><a href="#i2">让刷新路径对「一次性轮换 token」安全</a></li>
+      <li><span class="n">3</span><a href="#i3">把 Codex 做成 grant-source 注册表里的一行：采用，而不是重新实现</a></li>
+      <li><span class="n">4</span><a href="#i4">先原生加 /v1/responses，什么都不翻译</a></li>
+      <li><span class="n">5</span><a href="#i5">身份与凭证同源派生并验证：credential 从字符串变成一个 record</a></li>
+      <li><span class="n">6</span><a href="#i6">零新进程：翻译留在网关内，用抓来的语料验证</a></li>
+      <li><span class="n">7</span><a href="#i7">配额成为一等状态：类型化 ledger + 按重置时间准入</a></li>
+    </ul>
+
+    <article class="idea" id="i1">
+      <header><span class="rank">1</span><h3>请求腿的 header 未经脱敏就入库：把 telemetry 改成正名单</h3></header>
+      <ul class="meta-strip">
+        <li>Axis <b>upstream-identity</b></li>
+        <li>Confidence <b>92%</b></li>
+        <li>Complexity <b>Low</b></li>
+      </ul>
+      <dl class="fields">
+        <dt>Description</dt>
+        <dd>
+          <p>这是一个<strong>今天就存在、且与 Codex 无关的缺陷</strong>：<code>server.py:622</code> 的响应腿
+          会过 <code>redact_sensitive_headers</code>，而 <code>:623</code> 的请求腿直接把
+          <code>dict(request.headers)</code> 原样落库；脱敏名单本身也只是一张三名黑名单
+          （<code>logger.py:8</code>：<code>authorization</code>、<code>x-api-key</code>、
+          <code>set-cookie</code>）。所以客户端发来的 <code>Authorization</code>、
+          <code>originator</code> 或 <code>chatgpt-account-id</code> 会一字不改地进 SQLite，
+          而 dashboard 绑在 <code>0.0.0.0</code> 且没有登录（dashboard login 是明确 out of scope）。
+          修数据泄漏与修策略形状是同一件事：把存储改成<strong>正名单</strong>（只存有人声明的 header），
+          把身份性 header 名补进集合，并把出站身份做成<strong>单向阀</strong>——网关从 vault 自己设
+          <code>originator</code>/<code>User-Agent</code>/<code>ChatGPT-Account-ID</code>/
+          <code>OpenAI-Beta</code>，丢弃入站值（客户端自带的 <code>originator</code> 既是伪造向量，
+          也是封号向量）。同时 telemetry 仍要能回答「我们实际上游发了什么」。</p>
+        </dd>
+        <dt>Basis</dt>
+        <dd>
+          <p><span class="tag tag-direct">direct:</span><code>server.py:622-625</code>
+          （<code>stored_headers = redact_sensitive_headers(resp_headers)</code> 对请求腿不适用，
+          <code>stored_request_headers = dict(request.headers)</code> 原样）；
+          <code>logger.py:8,11-17</code> 三名黑名单与替换函数；
+          <code>server.py:62</code> 的 httpx 客户端未设默认 header（出站 UA 是 httpx 自己的）；
+          <code>tests/test_server.py:108-119</code> 只覆盖响应腿。</p>
+          <p><span class="tag tag-external">external:</span>account id 是一个稳定的账号标识符，
+          即 credential-adjacent——它不是「某个 key 被花掉了」，而是「这个 grant 失去了匿名性」。</p>
+        </dd>
+        <dt>Rationale</dt>
+        <dd><p>黑名单只保护「有人记得住」的那些 header，而记录 schema 正要长出新的敏感名字。而且这条不依赖
+        任何 Codex 假设：即便这次 Codex 一行不写，泄漏也已经在发生。它是<strong>唯一一条头条本身就是可现场
+        复现缺陷</strong>的候选——验证者独立读过 <code>server.py:622-623</code> 与
+        <code>tests/test_server.py:108-119</code>，并指出它比陈述更严重：客户端 <code>Authorization</code>
+        同样明文入库。</p></dd>
+        <dt>Downsides</dt>
+        <dd><p>正名单会让历史库里已有的列语义发生变化，dashboard 的 header 视图可能少显示一些今天能看到的东西
+        ——这是有意的，但需要在 UI 上说清楚。把身份 header 补进正名单后，「我们发了什么」只能靠出站侧单独记录，
+        不能靠入站副本。</p></dd>
+      </dl>
+      <figure>
+        <svg viewBox="0 0 780 200" role="img" aria-label="响应腿经过脱敏函数，请求腿直接原样入库">
+          <defs>
+            <marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <text x="12" y="66" font-size="13" fill="currentColor">响应腿</text>
+          <rect x="96" y="40" width="250" height="44" rx="8" fill="var(--surface-soft)" stroke="var(--line)"/>
+          <text x="221" y="67" font-size="12.5" text-anchor="middle" fill="currentColor">redact_sensitive_headers()</text>
+          <line x1="346" y1="62" x2="368" y2="62" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar1)"/>
+          <rect x="372" y="40" width="180" height="44" rx="8" fill="var(--accent-soft)" stroke="var(--line)"/>
+          <text x="462" y="67" font-size="12.5" text-anchor="middle" fill="var(--accent-text)">已脱敏</text>
+
+          <text x="12" y="136" font-size="13" fill="currentColor">请求腿</text>
+          <rect x="96" y="110" width="250" height="44" rx="8" fill="var(--surface-soft)" stroke="var(--line)"/>
+          <text x="221" y="137" font-size="12.5" text-anchor="middle" fill="currentColor">dict(request.headers)</text>
+          <line x1="346" y1="132" x2="368" y2="132" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar1)"/>
+          <rect x="372" y="110" width="180" height="44" rx="8" fill="var(--warn-soft)" stroke="var(--line)"/>
+          <text x="462" y="137" font-size="12.5" text-anchor="middle" fill="var(--warn-text)">原样入库</text>
+
+          <text x="390" y="184" font-size="12.5" text-anchor="middle" fill="var(--muted)">同一个函数在两个腿上走了两条不同的路</text>
+        </svg>
+        <figcaption>两条腿的不对称：脱敏只挂在响应侧，请求侧直通 SQLite。</figcaption>
+      </figure>
+    </article>
+
+    <article class="idea" id="i2">
+      <header><span class="rank">2</span><h3>让刷新路径对「一次性轮换 token」安全</h3></header>
+      <ul class="meta-strip">
+        <li>Axis <b>credential-lifecycle</b></li>
+        <li>Confidence <b>88%</b></li>
+        <li>Complexity <b>Medium</b></li>
+      </ul>
+      <dl class="fields">
+        <dt>Description</dt>
+        <dd>
+          <p>对 xAI 那套约 6 小时寿命的 token，今天的刷新够用；对 Codex 的一次性轮换 token，它是
+          <strong>会永久毁掉账号状态</strong>的。三件事必须一起做：</p>
+          <p><strong>(a) host 绑定。</strong><code>_token_endpoint</code> 只在 host 以 <code>x.ai</code>
+          结尾时才采用存储的 endpoint，否则重跑 xAI discovery 并最终硬编码
+          <code>https://auth.x.ai/oauth2/token</code>。一条 Codex grant 的刷新 POST——
+          <strong>连同 refresh token</strong>——因此被发往另一个厂商的 auth host，而失败信息还是 xAI 措辞的。
+          必须拒绝把 refresh token 发往任何非「保存时记录的」host，永不回落到厂商默认值。</p>
+          <p><strong>(b) 单飞 + fencing + 持久化提交。</strong>今天刷新是
+          <code>with _lock:</code> 里一次同步 <code>httpx.post</code>，<em>在</em>
+          <code>_atomic_write</code> 之前；<code>_lock</code> 是模块级进程内锁。窗口里崩溃、<code>proxy
+          restart</code> 时的 SIGTERM、磁盘写满、20s 超时——任何一种都会让 vault 停在一个已经在上游被消费掉的
+          refresh token 上，下一次刷新就触发复用检测、撤销整个 grant family。改成异步单飞（一个刷新者、N 个
+          等待者）+ vault 里持久化的 <code>generation</code> + 「比盘上旧就不写」的 CAS。顺带修掉
+          <code>:190</code> 的 <code>new_refresh = ... or refresh</code>：上游若没在响应里带回新的 refresh
+          token，这行会<strong>静默保留那个已被消费的</strong>。并给一个明确的<em>惰性</em>模式：
+          <code>expires_at &lt;= 0</code> 今天已经意味着「永不刷新」，但 <code>save_grant</code> 恰好拒绝
+          没有 refresh token 的 grant，所以这个最安全的模式反而不可达。</p>
+        </dd>
+        <dt>Basis</dt>
+        <dd>
+          <p><span class="tag tag-direct">direct:</span><code>auth_vault.py:24</code>（模块级
+          <code>threading.Lock()</code>）、<code>:95-96</code>（无 refresh 即拒绝）、
+          <code>:142-143</code>（<code>if expires_at &lt;= 0: return False</code>）、
+          <code>:150-164</code>（host 判定与硬编码回落）、<code>:184-187</code>（xAI 措辞的失败串）、
+          <code>:190</code>（静默沿用旧 refresh）、<code>:214-229</code>（锁横跨网络调用，写在其后）；
+          <code>AGENTS.md:15</code>（install 不 restart 仍是旧进程——本仓库有文档化的双进程现实）。</p>
+          <p><span class="tag tag-external">external:</span>Hermes #22903/#7806（导入
+          <code>~/.codex/auth.json</code> 的 refresh token 并自行刷新，永久废掉 Codex CLI 与 VS Code 会话）；
+          token sink 模式；OAuth 2.1 的单次使用轮换语义。</p>
+          <p><span class="tag tag-reasoned">reasoned:</span>一次性轮换 refresh token 是教科书式的
+          lost-update 问题。进程内锁能串行化写者，却无法让一个只存在于内存里的结果变得持久——而这里的丢失是
+          <em>不可重试</em>的：你无法「再刷一次」，因为旧 token 已经作废、新的还没落盘。</p>
+        </dd>
+        <dt>Rationale</dt>
+        <dd><p>这是全套里唯一一个后果<strong>不可恢复</strong>、且<strong>伤害范围超出 otel-agent 本身</strong>
+        的失败——它会把操作者其它设备上的 Codex 登录一起注销，且无法靠重新登录 otel-agent 修复。
+        验证者逐条核对了它的五个 <code>direct:</code> 引用，全部精确。</p></dd>
+        <dt>Downsides</dt>
+        <dd><p>改的是 plan 005 KTD2 签过字的 vault 记录 schema 与刷新契约，必须是一次有意识的重新决策而不是
+        实现细节。跨进程 lease 在<em>今天</em>略超前于证据（目前只有 CLI 会是第二个写者），但同进程的崩溃窗口
+        不需要这个假设就成立——可以先只做进程内单飞 + 持久化 generation，把 flock 留到真有第二个写者时。</p></dd>
+      </dl>
+      <figure>
+        <svg viewBox="0 0 780 190" role="img" aria-label="刷新成功后写回前崩溃，vault 停在已消费 token 上">
+          <defs>
+            <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <rect x="12" y="44" width="170" height="54" rx="8" fill="var(--surface-soft)" stroke="var(--line)"/>
+          <text x="97" y="67" font-size="12.5" text-anchor="middle" fill="currentColor">刷新成功（200）</text>
+          <text x="97" y="85" font-size="12.5" text-anchor="middle" fill="var(--warn-text)">旧 token 已消费</text>
+
+          <line x1="182" y1="71" x2="200" y2="71" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar2)"/>
+          <rect x="204" y="44" width="170" height="54" rx="8" fill="var(--warn-soft)" stroke="var(--warn-text)" stroke-dasharray="4 3"/>
+          <text x="289" y="67" font-size="12.5" text-anchor="middle" fill="var(--warn-text)">写回前窗口</text>
+          <text x="289" y="85" font-size="12.5" text-anchor="middle" fill="var(--warn-text)">只在内存 dict 里</text>
+
+          <line x1="374" y1="71" x2="392" y2="71" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar2)"/>
+          <rect x="396" y="44" width="170" height="54" rx="8" fill="var(--surface-soft)" stroke="var(--line)"/>
+          <text x="481" y="67" font-size="12.5" text-anchor="middle" fill="currentColor">崩溃 / SIGTERM</text>
+          <text x="481" y="85" font-size="12.5" text-anchor="middle" fill="currentColor">磁盘满 / 20s 超时</text>
+
+          <line x1="566" y1="71" x2="584" y2="71" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar2)"/>
+          <rect x="588" y="44" width="170" height="54" rx="8" fill="var(--surface-soft)" stroke="var(--line)"/>
+          <text x="673" y="67" font-size="12.5" text-anchor="middle" fill="currentColor">vault 停在</text>
+          <text x="673" y="85" font-size="12.5" text-anchor="middle" fill="currentColor">已消费 token</text>
+
+          <rect x="12" y="128" width="746" height="46" rx="8" fill="var(--warn-soft)"/>
+          <text x="385" y="156" font-size="13" text-anchor="middle" fill="var(--warn-text)">下一次刷新 → 复用检测 → 整个 grant family 被撤销（不可恢复）</text>
+        </svg>
+        <figcaption>关键不在「锁不够多」，而在「结果只在内存里、而旧 token 已经作废」。</figcaption>
+      </figure>
+    </article>
+
+    <article class="idea" id="i3">
+      <header><span class="rank">3</span><h3>把 Codex 做成 grant-source 注册表里的一行：采用，而不是重新实现</h3></header>
+      <ul class="meta-strip">
+        <li>Axis <b>credential-lifecycle</b></li>
+        <li>Confidence <b>85%</b></li>
+        <li>Complexity <b>Low</b></li>
+      </ul>
+      <dl class="fields">
+        <dt>Description</dt>
+        <dd>
+          <p>导入其实<strong>已经可行</strong>：本机 Hermes 就持有一条 <code>openai-codex</code> grant，
+          而且两种被接受的形状都有。导入器找不到它，只因为 <code>extract_hermes_xai_grant</code> 把
+          <code>"xai-oauth"</code> 写成了字面量，而 <code>_import_xai</code> 走的是硬编码的
+          <code>[HERMES_AUTH, GROK_AUTH]</code> 加 <code>DEFAULT_PROVIDER = "xai"</code>。
+          把<em>来源</em>一侧泛化成一张声明表
+          <code>{mode, sibling file, json pointer, default provider, default base_url}</code>，
+          Codex 就变成一行；随后 <code>status|login|import-xai</code>、
+          <code>DEFAULT_PROVIDER</code>、<code>doctor</code> 里那句 <code>get_status("xai")</code>
+          都变成对同一张表的循环。当不存在可采用的 grant 时，就执行已安装的属主 CLI 自己的登录再采用结果，
+          而不是把 <code>xai_oauth.py</code> 复制成第二个 device-code 客户端。</p>
+          <p><strong>必须注意 json pointer 的位置</strong>：<code>providers["openai-codex"]</code> 上
+          <em>没有</em> <code>base_url</code>；<code>base_url</code>/<code>source</code>/<code>label</code>
+          在 <code>credential_pool["openai-codex"][0]</code> 上。表里那一列要指进 pool 条目。</p>
+        </dd>
+        <dt>Basis</dt>
+        <dd>
+          <p><span class="tag tag-direct">direct:</span><code>auth_cmd.py:25-27</code>
+          （<code>HERMES_AUTH</code>/<code>GROK_AUTH</code>/<code>DEFAULT_PROVIDER</code>）、
+          <code>:52-61</code>（只写四个固定 key）、<code>:119</code>（硬编码候选列表）、
+          <code>:134</code>（按来源文件判定 <code>imported_from</code>）；
+          <code>auth_vault.py:240-260</code>（按字面量 <code>"xai-oauth"</code> 取
+          <code>providers</code> 与 <code>credential_pool</code>）；<code>config.py:52-54</code>；
+          <code>doctor.py:73</code>；<code>import-supergrok-oauth-sidecar-vault.md:41-43</code>
+          （「在 import 不够用之前不要发明新的 device-code 客户端」）。
+          本机现场：Hermes 的 <code>credential_pool</code> 里已经有 <code>copilot</code>、<code>xiaomi</code>、
+          <code>openrouter</code>、<code>xai-oauth</code>，各带 <code>priority</code>/
+          <code>request_count</code>/<code>last_error_reset_at</code>。</p>
+          <p><span class="tag tag-external">external:</span>Anthropic 生态的答案是子进程包装；
+          登录回调端口 1455 与 Codex CLI、opencode 相撞——自己再实现一个 device-code 客户端等于去抢那个端口。</p>
+          <p><span class="tag tag-reasoned">reasoned:</span>仓库自己的规则给的是<strong>触发条件</strong>
+          而不是偏好：「直到 import 不够用为止」——而它<em>今天、在这台机器上</em>就是够用的。一个克隆要重新
+          实现的那些东西（client_id、PKCE、轮换策略）是<strong>属主方</strong>的属性，所以克隆等于制造第二个
+          所有者，然后悄悄漂移。</p>
+        </dd>
+        <dt>Rationale</dt>
+        <dd><p>这是唯一一条<strong>今天就能跑起来</strong>的路径：不需要新 OAuth client、不需要 device-code
+        流程、也不会去碰复用一个旋转链的风险。验证者独立复现了它的现场断言（两种形状都存在、只是挂在错的
+        key 下），并把它列为最强三条之一。</p></dd>
+        <dt>Downsides</dt>
+        <dd><p>它<em>依赖兄弟 CLI 存在且已登录</em>——对没有 Hermes 的机器，仍然要回到 device-code，那时
+        plan 005 修订过的 KTD1 重新适用。另外它把「谁是属主」这件事绑到了 Hermes 身上：如果 Hermes 哪天改了
+        auth 存储格式，表里那一行的 json pointer 会失效（这正是把它做成数据而不是代码的好处——失效时改一行，
+        不用发版）。</p></dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="i4">
+      <header><span class="rank">4</span><h3>先原生加 /v1/responses，什么都不翻译</h3></header>
+      <ul class="meta-strip">
+        <li>Axis <b>protocol-surface</b></li>
+        <li>Confidence <b>84%</b></li>
+        <li>Complexity <b>Low</b></li>
+      </ul>
+      <dl class="fields">
+        <dt>Description</dt>
+        <dd>
+          <p>客户端方言是第三个独立维度。Responses 原生客户端根本不需要翻译：直通到
+          <code>{base}/responses</code>，只做薄薄的<strong>面归一化</strong>——缺省时注入
+          <code>store: false</code> 与 <code>include: ["reasoning.encrypted_content"]</code>，
+          并剥掉端点会以 400 拒绝的 <code>max_output_tokens</code> 与 <code>temperature</code>。</p>
+          <p>这同时也是<strong>保真度最高</strong>的一条路：本仓库<strong>从没构造过
+          <code>tool_calls</code> 数组</strong>（只有 <code>finish_reason</code>→<code>stop_reason</code>
+          映射，Anthropic 的 tool block 只是原样「剩」下来的内容），所以一个 Responses→chat 翻译器必须在
+          能跑通第一个请求<em>之前</em>，先在两个方向上把工具调用构造发明出来。</p>
+          <p>排序上的意义：凭证、身份、配额——<strong>所有被报告出来的失败其实都住在这一半</strong>
+          （403 挑战、复用撤销、5 小时窗口）——可以在<em>翻译器完全不在环上</em>的情况下先端到端验证一遍；
+          翻译器随后变成一个可单独评审、可单独回退的第二步。</p>
+        </dd>
+        <dt>Basis</dt>
+        <dd>
+          <p><span class="tag tag-direct">direct:</span><code>server.py:84,136</code>（今天只有两条 chat
+          路由）、<code>:122</code> 与 <code>:172</code>（<code>source_format</code>/<code>target_format</code>
+          是每条路由写死的字面量）、<code>:106</code>、<code>:407-411</code>（响应腿的方向反转）；
+          <code>converter.py:171-172</code>（工具调用只有 finish_reason 映射）；
+          <strong><code>docs/plans/2026-08-17-004:15</code> 记录了一次现场探针：xAI 的 Bearer 在
+          <code>POST /v1/responses</code> 上返回 200</strong>——所以这条路由不是 Codex 专属。</p>
+          <p><span class="tag tag-external">external:</span>端点强制 <code>store:false</code> 与
+          <code>include: ["reasoning.encrypted_content"]</code>；<code>max_output_tokens</code> 与
+          <code>temperature</code> 被 400 拒绝（二手，见文末待核实清单）。</p>
+          <p><span class="tag tag-reasoned">reasoned:</span>把「我们到底能不能认证」和「我们能不能翻译」
+          分开，是标准的风险排序。研究里报告的每一个失败模式都在前一半，而后一半是机械工作——机械工作最适合
+          作为独立的一个 diff 落地。</p>
+        </dd>
+        <dt>Rationale</dt>
+        <dd><p>以最小改动去化解最大的未知，并且让网关在遇到<em>下一个</em>说 Responses 的客户端或上游时
+        是个开关而不是转换器。</p></dd>
+        <dt>Downsides</dt>
+        <dd><p>它<strong>不</strong>让 Claude Code 之类的 chat/completions 客户端受益——那些客户端仍要等
+        翻译器。所以这是一条排序决策，不是终局：第 6 条讨论的语料库正是为了让第二步可验证。另外
+        <code>OpenAI-Beta</code> 的确切取值目前两手来源冲突（见待核实清单第 2 条），实现前需要一次真实抓包。</p></dd>
+      </dl>
+    </article>
+
+    <article class="idea" id="i5">
+      <header><span class="rank">5</span><h3>身份与凭证同源派生：credential 从字符串变成一个 record</h3></header>
+      <ul class="meta-strip">
+        <li>Axis <b>upstream-identity</b></li>
+        <li>Confidence <b>64%</b>（活体探针后下调）</li>
+        <li>Complexity <b>Medium</b></li>
+      </ul>
+      <dl class="fields">
+        <dt>Description</dt>
+        <dd>
+          <p>Codex 要 <code>originator</code>/<code>User-Agent</code>（Cloudflare 只放行
+          <code>codex_cli_rs</code>/<code>codex_vscode</code>/<code>codex_sdk_ts</code>/<code>Codex </code>
+          开头的值）与 <code>ChatGPT-Account-ID</code>，这三样今天都表达不出来：
+          <code>AUTH_HEADERS</code> 是按 api_format 索引的两项字典、只返回
+          <code>{"Authorization"}</code>；<code>build_request_headers(provider)</code> 没有第二个参数；
+          <code>models.py:83</code> 另外<strong>另建了一份</strong>
+          <code>{"Authorization": f"Bearer {resolve_bearer(provider)}"}</code> 绕开注册表（所以
+          <code>/v1/models</code> 会不带任何身份头出去）；而且<strong>没有任何测试断言过发往上游的
+          header</strong>。把凭证解析改成返回一个 record——<code>{bearer, claims, generation}</code>——
+          在保存时解析一次、并把一块<strong>非秘密的 identity 块</strong>持久化在 token 旁边，这样任何展示面
+          都不必触碰秘密。账号头与 bearer 从同一次解析<strong>同源派生</strong>，因此永远不可能互相不一致；
+          当 claim 缺失或畸形时<strong>直接不发这个头</strong>，让上游回 401，而不是让网关呈现一个看似合理
+          的身份、然后换来一个误导性的 403。</p>
+          <p>指纹本身从<em>已安装的属主 CLI 版本</em>派生，而不是写成字面量——升级时指纹跟着动，而不是要发版
+          （把 #28/#29 的教训平移到 header 上）。再加每类 provider 的黄金 header 测试，以及登录时与
+          <code>doctor</code> 里的一次真实探针。403 按 <code>cf-mitigated</code> 分诊：带挑战说明
+          <strong>我们的指纹被拒</strong>，不带才是 entitlement。策略立场：<strong>绝不静默伪造</strong>
+          第一方指纹——客户端自带的值若已在白名单里就转发，否则把这个选择显式化、可读化。</p>
+        </dd>
+        <dt>Basis</dt>
+        <dd>
+          <p><span class="tag tag-direct">direct:</span><code>provider_utils.py:7-10,36,41</code>（两项
+          <code>AUTH_HEADERS</code>、builder 签名、按 api_format 直接索引）；<code>models.py:83</code>
+          （分叉的第二份 header 构造）；<code>logger.py:8</code>；<code>auth_vault.py:36-46</code>
+          （唯一的 JWT 解码器只读 <code>exp</code>）；<code>src/</code> 里 <code>originator</code> 与
+          <code>ChatGPT-Account-ID</code> 出现 0 次；<code>build_request_headers</code> 在
+          <code>tests/</code> 里 0 命中（验证者独立确认）。现场：token 里确有
+          <code>chatgpt_plan_type=prolite</code>、<code>chatgpt_account_id</code>、<code>client_id</code>、
+          <code>scp</code>，今天全部被丢弃。</p>
+          <p><span class="tag tag-external">external:</span>Cloudflare 的 originator 白名单与
+          <code>cf-mitigated: challenge</code>（<strong>二手；白名单取值经独立检索互证，但无一手源</strong>）；
+          TLS-JA3 / UA 门控的同类结构——伪造第一方指纹在指纹轮换之前有效，而它正是「非官方使用」最容易被读到的
+          信号。</p>
+          <p><span class="tag tag-reasoned">reasoned:</span>身份与凭证是同一次解析的两个视图。任何让它们
+          分开旅行的设计，都允许「两者不一致」这个 bug 存在，而上游对这种不一致给出的错误，
+          与「你的订阅没有权限」无法区分——恰恰是这个功能最不能搞错的那句话。一个佐证：
+          token 的 <code>aud</code> 是 <code>https://api.openai.com/v1</code>，而 surface 是
+          <code>chatgpt.com/backend-api/codex</code>，所以身份 claim 与端点<em>不能</em>互相推导，
+          必须一起携带。</p>
+        </dd>
+        <dt>Rationale</dt>
+        <dd><p>这是整套里被 grounding 自己称作「实现风险最高」的一项，而 <code>models.py:83</code> 那处分叉
+        是 Codex provider 第一天就会踩到的潜伏 bug（<code>/v1/models</code> 不带身份头出去），
+        同时这个面又是全仓库覆盖率最低的——没有任何测试碰过它。</p></dd>
+        <dt>Downsides</dt>
+        <dd><p>把解析结果持久化成 record 会动 vault 记录 schema（与第 2 条同一处），两件事应该合并成一次
+        schema 决策。</p></dd>
+      </dl>
+
+      <div class="callout">
+        <span class="eyebrow">活体探针后修订——本条被削掉一半</span>
+        <p>初稿把这一条列为「grounding 自己称作实现风险最高」的一项，理由是 Cloudflare 的
+        <code>originator</code>/<code>User-Agent</code> 白名单会让第三方身份即使持有效 token 也吃到 403。
+        本机实测<strong>否证了这条门槛</strong>：以 <code>originator: otel-agent</code> +
+        <code>User-Agent: otel-agent/0.1</code> 请求得到 200 与完整 SSE 流，无
+        <code>cf-mitigated: challenge</code>；而且连 <code>ChatGPT-Account-ID</code> 都可以省略。</p>
+        <p>因此本条的<strong>指纹一半不成立</strong>：不需要从属主 CLI 派生指纹，不需要为指纹轮换做黄金
+        header 测试，也不需要按 <code>cf-mitigated</code> 分诊 403（那套分诊的对象在实测中不存在）。
+        保留下来的是与 Cloudflare 无关的另一半，而且它<em>仍然值得做</em>：<code>resolve_bearer</code>
+        返回 <code>{bearer, claims, generation}</code>，身份与凭证同源派生因而永不互相矛盾；claim 缺失时
+        省略该头而不是编造一个。这三条是本地正确性主张，本轮实测没有触动其中任何一条。</p>
+        <p>复杂度随之下降（不再需要指纹派生与对应测试），但置信度也下调到 64%——不是因为这一半变弱了，
+        而是因为本条原来的<em>风险叙事</em>被证伪，它现在是一条普通的本地重构，不再是「最高风险项」。</p>
+      </div>
+    </article>
+
+    <article class="idea" id="i6">
+      <header><span class="rank">6</span><h3>零新进程：翻译留在网关内，用抓来的语料验证</h3></header>
+      <ul class="meta-strip">
+        <li>Axis <b>bridge-placement</b></li>
+        <li>Confidence <b>78%</b></li>
+        <li>Complexity <b>Medium</b></li>
+      </ul>
+      <dl class="fields">
+        <dt>Description</dt>
+        <dd>
+          <p>Cursor 之后，「新订阅 ⇒ 起一个 sidecar」成了条件反射，但两件事并不相似，而差异就是结论：
+          Cursor 需要桥接，是因为 <code>POST https://api.cursor.com/v1/chat/completions</code> 是 404——
+          根本不存在那个 host。Codex 的上游<em>就是</em>一个 Bearer 能直接打的 HTTP API；<strong>需要桥接
+          的是一个「格式」，而格式处理属于那个已经拥有 <code>converter.py</code>、telemetry 和 dashboard
+          的进程。</strong></p>
+          <p>而且 Codex 的 sidecar 会是同一条一次性轮换 refresh 链上的<strong>第二个写者</strong>——正是 vault
+          学习里记录的那个失败，只不过这次的「兄弟」是 otel-agent 自己。它还会继承 Cursor 那套已被记录的缺口：
+          启动后没有监督循环（<code>start_cursor_sidecar</code> 全仓库只被调用两次）、被采用（adopted）的
+          sidecar 返回 <code>{"pid": 0}</code> 因而对 <code>status</code>/<code>stop</code> 不可见、
+          活性只有 <code>os.kill(pid,0)</code> 而没有任何 HTTP 探活、以及 AGENTS.md 那条「install 不 restart
+          仍是旧进程」的地雷。</p>
+          <p>替代方案：既然每个请求与响应体本来就已落库，就把它<strong>正式化成一个 fixture 语料</strong>
+          ——从 telemetry 收割真实的上游对白，加一套差分 harness，把每个 fixture 跑过每一组方言并断言语义等价，
+          以厂商自己的 CLI 作为测试期的 oracle。<strong>这同时解决了两条冲突的 grounding</strong>：
+          格式知识留在一个进程里（delegation 学习），而另一种实现退化成测试期 oracle 而不是运行时依赖。</p>
+        </dd>
+        <dt>Basis</dt>
+        <dd>
+          <p><span class="tag tag-direct">direct:</span><code>cursor_sidecar.py:98,116</code>；
+          <code>models.py:72-80</code>、<code>provider_utils.py:51-59</code>、<code>cursor_sidecar.py:75-83</code>
+          （同一段回环判据的三份拷贝）；<code>dashboard-own-pid-files.md:39</code>；
+          <code>dashboard-render-delegation-pattern.md:108-113,117</code>（原话：「格式知识跨语言边界重复……
+          它们漂移时，dashboard 渲染 bug 就出现——而且反复出现」）；<code>AGENTS.md:15</code>；
+          <code>server.py:621,633</code>（body 落库）；<code>sqlite-default-storage.md</code>
+          （proxy 是唯一写者）。验证者独立确认 <code>start_cursor_sidecar</code> 恰好被调用两次
+          （<code>proxy.py:107,145</code>）。</p>
+          <p><span class="tag tag-external">external:</span>差分测试与 compiler torture suite 的传统；
+          record/replay fixture（VCR/cassette）；以及先例事实——主流做法是直接复用 OAuth token 走 HTTP，
+          从不 shell out。</p>
+          <p><span class="tag tag-reasoned">reasoned:</span>两条 groundful 学习在这里是<strong>真冲突</strong>的
+          （delegation 说格式知识留在进程内，已落地的 Cursor 先例是 sidecar）。把「翻译在哪」变成一个显式默认
+          （进程内）+ 一个可配置例外（sidecar），而不是一个名字比较的副产品，是这个冲突唯一能收敛的方式。</p>
+        </dd>
+        <dt>Rationale</dt>
+        <dd><p>它防止本仓库在一个比模型清单更难检视的面上重演 Cursor 那条弧线（三个补丁修一个桥，且从未
+        compound 进 <code>docs/solutions/</code>），并且明确说出<em>替代做法是什么</em>——用真实客户端的语料
+        做 fixtures，而不是靠手推。</p></dd>
+        <dt>Downsides</dt>
+        <dd><p>语料那一半有个真实前提：<code>server.py:621</code> 的 body 落库受
+          <code>config.log_request_body</code> 开关约束，关掉时写空串；而且今天流式请求存的是合成的
+          <code>{"streamed": true, "preview": ...}</code> 而不是原始帧——所以「收割语料」要先加一条
+          <strong>原始帧捕获通道</strong>，这是这个方案里唯一非平凡的成本。另外，如果研究里提到的
+          WebSocket 变体成为主流，或指纹开始轮换，落地形态的问题会重新打开。</p></dd>
+      </dl>
+      <div class="split">
+        <div class="shipped">
+          <p class="split-head">Sidecar（Cursor 形状）会继承什么</p>
+          <ul>
+            <li>启动后没有监督 / 重启循环</li>
+            <li>adopted 进程 <code>{"pid": 0}</code>，<code>status</code>/<code>stop</code> 看不到</li>
+            <li>只有 <code>os.kill(pid,0)</code>，没有 HTTP 探活</li>
+            <li>同一旋转链上的第二个写者（撤销整个 family 的风险）</li>
+            <li>又一次 install-不-restart 地雷</li>
+          </ul>
+        </div>
+        <div>
+          <p class="split-head">进程内保留了什么</p>
+          <ul>
+            <li><code>converter.py</code> 作为格式知识的唯一来源</li>
+            <li>唯一写者不变式（proxy 独占 DB）</li>
+            <li>凭证与翻译在同一条锁 / 生命周期里</li>
+            <li>vendor CLI 退化为测试期 oracle</li>
+            <li>telemetry 同时是语料收割面</li>
+          </ul>
+        </div>
+      </div>
+    </article>
+
+    <article class="idea" id="i7">
+      <header><span class="rank">7</span><h3>配额成为一等状态：类型化 ledger + 按重置时间准入</h3></header>
+      <ul class="meta-strip">
+        <li>Axis <b>entitlement-boundary</b></li>
+        <li>Confidence <b>80%</b></li>
+        <li>Complexity <b>High</b></li>
+      </ul>
+      <dl class="fields">
+        <dt>Description</dt>
+        <dd>
+          <p>今天是「entitlement 只是展示」：<code>rewrite_xai_error</code> 被
+          <code>status != 403</code> 挡住，所以 <strong>429 在任何地方都没有被分类过</strong>；流式路径
+          连改写都没有，把上游的 error body 原样塞进 SSE 帧。而一条 Codex 请求可以用<strong>五种方式</strong>
+          失败，全都表现为同一个不加区分的 403——token 已死、账号没有 Codex 权限、Cloudflare 指纹挑战
+          （<em>它会带着一个完全有效的 token 到来</em>）、plan 档位不满足、区域限制——外加 5 小时滚动上限带来的 429。</p>
+          <p>在请求行上加 <code>grant_id</code>/<code>auth_mode</code> 列与一个<strong>类型化结果</strong>
+          （<code>entitlement_denied</code> / <code>quota_window_exhausted</code>（带
+          <code>reset_at</code>）/ <code>fingerprint_challenged</code> / <code>transport</code>），
+          在上游响应被看到的那一处<strong>只分类一次</strong>，并且在任何改写<em>之前</em>记录，
+          让记录保持为证据。然后使用它：每条 grant 一个
+          <code>{until, reason, source}</code> 门，其截止时间学自上游自己的
+          <code>Retry-After</code>／重置时间戳；处于门内时网关<strong>停止发送</strong>并立即带着重置时间回答
+          ——这是<strong>忙音，不是断路器</strong>（断路器数失败次数，这个存的是上游告知的截止时间）。
+          2026-08-25 恢复的 5 小时上限是一个真实会重置的资源，它会以未分类的 429 形式出现；Hermes 已经把这个
+          形状写下来了（<code>last_error_code</code>/<code>last_error_reset_at</code>）。</p>
+        </dd>
+        <dt>Basis</dt>
+        <dd>
+          <p><span class="tag tag-direct">direct:</span><code>xai_errors.py:23-34</code>
+          （<code>if status != 403 or not isinstance(body, dict): return body</code>，三条 Grok 子串匹配）；
+          <code>server.py:420-425</code>（非流式路径）与 <code>:455-471</code>（流式路径无改写钩子）；
+          <code>storage/sqlite.py:57-70,81,225</code>（<code>requests</code> 列里没有 grant/账号列，
+          <code>GROUP BY model_name</code> 聚合）；<code>auth_vault.py:120-132</code>
+          （<code>get_status</code> 只有 <code>logged_in</code>/<code>path</code>/<code>imported_from</code>/
+          <code>expires_at</code>）；<code>commands/doctor.py:73-77</code>；
+          plan 004 <code>:99,118,120</code>（KTD5「403 改写只是展示」+ defer 掉的 live entitlement probe）；
+          <code>specs/020:104</code>（配额明确 out of scope）；<code>c5d4a0e</code>（breaker 真的被删了）。</p>
+          <p><span class="tag tag-external">external:</span>电话网 trunk-group 忙音（呼叫方学到的是
+          「忙到什么时候」，不是「呼叫失败」）；RFC 9110 <code>Retry-After</code>；
+          Envoy outlier detection（按<em>时长</em>弹出而不是按次数）；5 小时上限恢复。</p>
+          <p><span class="tag tag-reasoned">reasoned:</span>对一个按时计费的 key，重试 429 几乎免费；
+          对一个跑在滚动窗口上的订阅 grant，重试花的正是它等待的那份预算。<strong>「出错就重试」的反射在这里
+          是有害的</strong>，而合适的工具是带过期时间的状态，不是带阈值的计数器。</p>
+        </dd>
+        <dt>Rationale</dt>
+        <dd><p>它把最令人困惑的用户可见结果——「一小时前还好好的，现在什么都 403，重新登录也没用」
+          （README 已经不得不用一整句散文去解释它）——变成一个自解释、自清除的状态。这也是唯一一条让
+          <em>网关</em>成为比裸 CLI 更好的订阅客户端的想法。它有意<strong>不</strong>复活
+          <code>c5d4a0e</code> 删掉的断路器：那是按次数开闸，这个是存上游给的截止时间。</p></dd>
+        <dt>Downsides</dt>
+        <dd><p>这是全套里最贵的一条（新列 + 分类器 + 门状态 + UI 暴露），而且存在范围滑移的风险——
+          「ledger 离 router 只有一步，而 router 刚被有意删掉」。另外它要用的 <code>doctor --probe</code>
+          已被第 5 条吸收（那条的探针同时解决指纹分诊），所以这里的净增量是 ledger 与准入控制。
+          前提事实（5 小时上限及其按账号范围）两手来源对 Pro 层自相冲突，见待核实清单第 6 条。</p></dd>
+      </dl>
+      <figure>
+        <svg viewBox="0 0 780 230" role="img" aria-label="一个上游 403 对应五种不同原因">
+          <defs>
+            <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+          <rect x="10" y="93" width="104" height="44" rx="8" fill="var(--surface-soft)" stroke="var(--line)"/>
+          <text x="62" y="112" font-size="12.5" text-anchor="middle" fill="currentColor">上游</text>
+          <text x="62" y="129" font-size="12.5" text-anchor="middle" fill="currentColor">403</text>
+
+          <line x1="114" y1="115" x2="204" y2="29" stroke="currentColor" stroke-width="1.2" marker-end="url(#ar4)"/>
+          <line x1="114" y1="115" x2="204" y2="67" stroke="currentColor" stroke-width="1.2" marker-end="url(#ar4)"/>
+          <line x1="114" y1="115" x2="204" y2="105" stroke="currentColor" stroke-width="1.2" marker-end="url(#ar4)"/>
+          <line x1="114" y1="115" x2="204" y2="143" stroke="currentColor" stroke-width="1.2" marker-end="url(#ar4)"/>
+          <line x1="114" y1="115" x2="204" y2="181" stroke="currentColor" stroke-width="1.2" marker-end="url(#ar4)"/>
+
+          <rect x="210" y="14" width="380" height="30" rx="6" fill="var(--surface-soft)" stroke="var(--line)"/>
+          <text x="222" y="34" font-size="12" fill="currentColor">token 已死 / 已过期</text>
+          <rect x="210" y="52" width="380" height="30" rx="6" fill="var(--surface-soft)" stroke="var(--line)"/>
+          <text x="222" y="72" font-size="12" fill="currentColor">账号没有 Codex 权限</text>
+          <rect x="210" y="90" width="380" height="30" rx="6" fill="var(--warn-soft)" stroke="var(--warn-text)"/>
+          <text x="222" y="110" font-size="12" fill="var(--warn-text)">Cloudflare 指纹挑战（token 有效也会中）</text>
+          <rect x="210" y="128" width="380" height="30" rx="6" fill="var(--surface-soft)" stroke="var(--line)"/>
+          <text x="222" y="148" font-size="12" fill="currentColor">plan 档位不满足（prolite）</text>
+          <rect x="210" y="166" width="380" height="30" rx="6" fill="var(--surface-soft)" stroke="var(--line)"/>
+          <text x="222" y="186" font-size="12" fill="currentColor">区域限制</text>
+
+          <text x="390" y="220" font-size="12.5" text-anchor="middle" fill="var(--muted)">今天五者都表现为同一个 403，且流式路径连改写都没有</text>
+        </svg>
+        <figcaption>分类是控制流的正交面：不改 breaker 决策，只把「为什么」说出来。</figcaption>
+      </figure>
+    </article>
+  </section>
+
+  <section id="rejection-summary">
+    <h2>Rejection Summary</h2>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>#</th><th>Idea</th><th>Reason Rejected</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>8</td>
+            <td>声明式 surface：provider 行自己描述路径 / header / bridge</td>
+            <td><strong>basis refuted（部分推翻）</strong>——两条机制断言都误读了代码：<code>api_format</code>
+            是被校验的（<code>config.py:138-142</code>），不是「请求期裸 KeyError」；
+            <code>_reload</code> 在 mtime 未变时提前 return（<code>:89-90</code>），校验不发生在每请求。
+            架构论点（api_format 同时承担三种含义、三份回环判据拷贝）本身仍成立，但它作为 Codex 的使能项
+            证据不足 → 留给后续一次显式的重构决策，而不是搭在本次功能里顺手做</td>
+          </tr>
+          <tr>
+            <td>9</td>
+            <td>pivot IR + sealed lane，Responses 作 hub</td>
+            <td>证据成立但<strong>明显大于本课题</strong>：五个框架里三个独立提出，说明它是对的；
+            但 #30 刚删掉过一层抽象栈，先让第一个真实请求跑通再谈中心化</td>
+          </tr>
+          <tr>
+            <td>10</td>
+            <td>续接状态：客户端回显 + 网关侧存储</td>
+            <td>weak——两个机制都不成立：回显通道假设客户端会回传一个它从未收到过的不透明块；
+            存储侧没有耐久底座（body 落盘受 <code>log_request_body</code> 开关约束，
+            且 <code>requests</code> 表是 telemetry 不是状态存储）</td>
+          </tr>
+          <tr>
+            <td>11</td>
+            <td>流式 dispatcher 全量化 + 零内容 watchdog</td>
+            <td>weak——所引先例被误读：<code>specs/019-streaming-telemetry-bug</code> 讲的是
+            <em>telemetry 缺行</em>，其自述「bug 不在 streaming proxy logic 本身」；且四组方言今天都已覆盖，
+            误路由不可达</td>
+          </tr>
+          <tr>
+            <td>12</td>
+            <td>liveness vs readiness：<code>/health</code> 回答了一个它答不了的问题</td>
+            <td>sound 但作为独立议题低于门槛；<code>/health</code> 恒返回 <code>{"status":"ok"}</code>
+            且正被 <code>dashboard/api.py:76</code> 当作可达性信号消费。readiness 的框架性内容已并入
+            第 6 条的落地决策，而不是单独占一个方向</td>
+          </tr>
+          <tr>
+            <td>13</td>
+            <td>只锁 grant，不锁 bind（按 <code>request.client.host</code> 准入）</td>
+            <td>weak——论证不完整：<code>resolve_bearer(provider, *, path=None)</code> 拿不到调用方上下文，
+            <code>src/</code> 里没有任何 <code>request.client.host</code> 的使用，四个
+            <code>build_request_headers</code> 调用点与 <code>fetch_provider_models</code> 都需要新管道。
+            合规方向仍然值得做，但它是独立于 Codex 的一个管道工程，不是本课题的顺手项</td>
+          </tr>
+          <tr>
+            <td>14</td>
+            <td>多账号池化：每个账号各自保有独立的刷新链</td>
+            <td><strong>meeting-test 未过</strong>——在本机只有一个 grant、且第 2 条尚未修好的前提下，
+            池化只是把一个不可恢复的失败模式<em>乘起来</em>；与 plan 005 KTD5「One SuperGrok grant per
+            gateway … do not keep a pool in this slice」直接冲突；且这是 next-slice 议题，不是本次讨论项</td>
+          </tr>
+          <tr>
+            <td>15</td>
+            <td>X1：一个 <code>grant_id</code> 贯穿 record / ledger / loopback 门</td>
+            <td>组合了三个候选，其中两个（#10 与 #13）已被裁掉；剩下的 ledger 部分已包含在第 7 条里</td>
+          </tr>
+          <tr>
+            <td>16</td>
+            <td>X2：声明式 surface 让新路由变成配置行</td>
+            <td>建立在 #8 被推翻的前提上，且过度声称——Responses surface 仍然需要那条路由、
+            <code>store:false</code>/<code>include</code> 注入与参数剥离，不是「不需要新代码」</td>
+          </tr>
+          <tr>
+            <td>17</td>
+            <td>X3：语料库让 force-with-lease 变得可测</td>
+            <td><strong>basis refuted</strong>——链接不存在：刷新发生在凭证路径上，不产生任何 telemetry 记录，
+            所以 body 语料无法演练 lease 争用；且「唯一现实的测试手段」为假——一个带假 vault、
+            打桩 token endpoint 的多线程单测就能直接覆盖</td>
+          </tr>
+          <tr>
+            <td>18</td>
+            <td>X4：绝不把凭证或身份发给非签发方</td>
+            <td>weak——两半不是同一个原则：第 2 条是「不重定向一个秘密」，第 5 条是指纹伪装，
+            而后者恰好<em>通过</em>了该测试（Cloudflare 确实在期待 <code>codex_cli_rs</code>）</td>
+          </tr>
+          <tr>
+            <td>19</td>
+            <td>X5：sealed lane 保证续接状态存活</td>
+            <td>weak——继承 #10 未被证实的机制；「保证」实际上只是测试强制出来的约定</td>
+          </tr>
+          <tr>
+            <td>20</td>
+            <td>硬编码 Codex 模型清单</td>
+            <td>生成期即被丢弃：<code>gpt-5.6-sol-900k</code> 在任何公开来源都查不到，疑似 Hermes 本地别名；
+            且 Cursor 已经演过一遍（#28 加 34-id 清单 → #29 一个提交后删除）</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <span class="eyebrow">轴覆盖：无空轴</span>
+      <p>存活集覆盖全部五轴——credential-lifecycle ×2、upstream-identity ×2、protocol-surface ×1、
+      bridge-placement ×1、entitlement-boundary ×1。没有出现零存活的轴，因此没有需要记录的覆盖缺口。</p>
+    </div>
+
+    <div class="callout">
+      <span class="eyebrow">二手来源清单——探针后的结算</span>
+      <p><strong>已由本轮探针解决：</strong>① <code>originator</code>/<code>User-Agent</code> 白名单
+      ——<em>不存在</em>，无需核实；② <code>OpenAI-Beta</code>——<em>非必需</em>，全程未发送该头仍拿到
+      SSE 流；③ <code>max_output_tokens</code>/<code>temperature</code>——确认 400 拒绝；
+      ④ SSE 事件表——纯文本回合的 9 个事件类型已取得（整段流完整读毕）。</p>
+      <p><strong>仍未核实：</strong>Responses→chat 翻译表里<em>工具调用</em>那一半
+      （<code>function_call</code> 合并、item 顺序、可丢弃项）——本轮探针只跑了纯文本回合，没跑
+      tool-call 回合，而本仓库目前根本不构造 <code>tool_calls</code> 数组，所以这是实现第 4 条时第一个
+      会撞上、也第一个该测的东西。<code>store:false</code> + <code>include</code> 是否<em>必需</em>也没单独
+      证否——本轮是带上它们发的，两者都被接受。</p>
+      <p><strong>与本课题无关、但仍是二手的：</strong>轮换 refresh + 复用检测撤销整个 grant family
+      （机制属 OAuth 2.1 标准轮换，所引 issue 号未核实）；Plus 5 小时上限的恢复与按账号范围（来源对 Pro
+      自相冲突）；Sottiaux 的 sub2api 表态（媒体来源，作为红线前需一手核实）；
+      <code>chatgpt_plan_type: prolite</code> 的<em>含义</em>（取值已现场确认，语义无文档）。</p>
+    </div>
+  </section>
+
+  <footer class="composition-signal">
+    Composed 2026-09-15T06:23Z by ce-ideate (run 3615d638) from a user request to proxy a ChatGPT Plus /
+    Codex subscription through otel-agent the way the Hermes agent CLI does.
+  </footer>
+
+</div>
+</body>
+</html>
