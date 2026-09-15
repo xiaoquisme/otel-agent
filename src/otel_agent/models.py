@@ -67,7 +67,7 @@ async def fetch_provider_models(
     """
     from urllib.parse import urlparse
 
-    from otel_agent.auth_vault import resolve_bearer
+    from otel_agent.provider_utils import resolve_bearer_async
 
     host = (urlparse(provider.base_url).hostname or "").lower()
     if provider.name == "cursor" and host in ("127.0.0.1", "localhost"):
@@ -80,7 +80,7 @@ async def fetch_provider_models(
         ]
 
     url = f"{provider.base_url.rstrip('/')}/models"
-    headers = {"Authorization": f"Bearer {resolve_bearer(provider)}"}
+    headers = {"Authorization": f"Bearer {await resolve_bearer_async(provider)}"}
 
     try:
         resp = await client.get(url, headers=headers, timeout=10.0)

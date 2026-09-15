@@ -1159,3 +1159,178 @@ async def test_anthropic_stream_from_openai_emits_message_start():
         assert "event: content_block_delta" in body
         assert "event: message_stop" in body
         assert '"text": "Hi"' in body
+
+
+# ------------------------------------------------------------------
+# Vault-backed subscription credentials on the async request path (KTD1)
+# ------------------------------------------------------------------
+#
+# Both of these exercise a bearer that comes from the vault rather than from
+# provider.api_key, so they fail if a call site still resolves it synchronously
+# (which would blow up with "coroutine was never awaited") or if resolution
+# blocks the loop.
+
+
+def _make_vault_config(td: str) -> Config:
+    """A Config whose only provider is a subscription provider (no api_key)."""
+    config_path = Path(td) / "config.yaml"
+    config_path.write_text(
+        "providers:\n"
+        "  - name: codex\n"
+        "    base_url: https://chatgpt.com/backend-api/codex\n"
+        "    auth: codex-oauth\n"
+        "    api_format: openai\n"
+    )
+    return Config(config_path)
+
+
+def _seed_vault(tmp_path, monkeypatch) -> Path:
+    from otel_agent.auth_vault import save_grant
+
+    vault = tmp_path / "auth.json"
+    save_grant(
+        "codex",
+        {"access_token": "tok-vault", "refresh_token": "ref-vault", "expires_in": 21600},
+        auth="codex-oauth",
+        discovery={"token_endpoint": "https://auth.openai.com/oauth/token"},
+        path=vault,
+    )
+    # The client_id a refresh needs is recorded with the credential (U3 reads it
+    # off the adopted grant); without it there is nothing to refresh with.
+    stored = json.loads(vault.read_text())
+    stored["providers"]["codex"]["client_id"] = "app_codex_test"
+    vault.write_text(json.dumps(stored))
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(vault))
+    return vault
+
+
+class _RecordingStreamMethod:
+    """Like _FakeStreamMethod, but records the headers the route sent upstream."""
+
+    def __init__(self, chunks: list[dict], seen: dict):
+        self._stream = _FakeSSEStream(chunks)
+        self._seen = seen
+
+    def __call__(self, *args, **kwargs):
+        self._seen["headers"] = kwargs.get("headers")
+        return self._stream
+
+
+@pytest.mark.anyio
+async def test_streaming_request_uses_the_vault_bearer(tmp_path, monkeypatch):
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        seen: dict = {}
+        mock_stream = _RecordingStreamMethod(
+            [{"choices": [{"delta": {"content": "Hi"}, "index": 0}]}], seen
+        )
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/chat/completions",
+                    json={"model": "codex/gpt-5", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                )
+                await resp.aread()
+
+        telemetry.close()
+
+        assert seen["headers"]["Authorization"] == "Bearer tok-vault"
+
+
+@pytest.mark.anyio
+async def test_models_endpoint_uses_the_vault_bearer(tmp_path, monkeypatch):
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        seen: dict = {}
+
+        class _ModelsResponse:
+            status_code = 200
+
+            def json(self):
+                return {"data": [{"id": "gpt-5", "object": "model"}]}
+
+        real_get = httpx.AsyncClient.get
+
+        async def _get(self, url, **kwargs):
+            # Only the upstream model fetch is intercepted; the test client's own
+            # GET of /v1/models must reach the app.
+            if "chatgpt.com" in str(url):
+                seen["url"] = url
+                seen["headers"] = kwargs.get("headers")
+                return _ModelsResponse()
+            return await real_get(self, url, **kwargs)
+
+        with patch("httpx.AsyncClient.get", _get):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.get("/v1/models")
+
+        telemetry.close()
+
+        assert resp.status_code == 200
+        assert seen["headers"] == {"Authorization": "Bearer tok-vault"}
+        assert resp.json()["data"][0]["id"] == "codex/gpt-5"
+
+
+@pytest.mark.anyio
+async def test_bearer_resolution_does_not_block_the_event_loop(tmp_path, monkeypatch):
+    """KTD1: a refresh runs off the loop. With resolution inlined on the loop,
+    the heartbeat below could not tick while the exchange is in flight."""
+    import asyncio
+    import time as _time
+
+    _seed_vault(tmp_path, monkeypatch)
+    vault = tmp_path / "auth.json"
+    stored = json.loads(vault.read_text())
+    stored["providers"]["codex"]["tokens"]["expires_at"] = 0  # due for refresh
+    vault.write_text(json.dumps(stored))
+
+    class _RefreshResponse:
+        status_code = 200
+
+        def json(self):
+            return {"access_token": "tok-new", "refresh_token": "ref-new", "expires_in": 21600}
+
+    def _slow_post(*args, **kwargs):
+        _time.sleep(0.3)
+        return _RefreshResponse()
+
+    monkeypatch.setattr("otel_agent.auth_vault.httpx.post", _slow_post)
+
+    from otel_agent.config import Provider
+    from otel_agent.provider_utils import resolve_bearer_async
+
+    provider = Provider(
+        name="codex",
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_key="",
+        auth="codex-oauth",
+    )
+
+    ticks = 0
+
+    async def _heartbeat() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    beat = asyncio.create_task(_heartbeat())
+    try:
+        assert await resolve_bearer_async(provider) == "tok-new"
+    finally:
+        beat.cancel()
+
+    assert ticks >= 3, f"the event loop was blocked during the refresh ({ticks} ticks)"

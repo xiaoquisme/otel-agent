@@ -1,6 +1,8 @@
 """Shared provider utilities — URL building, auth headers, model name prefixing."""
 from __future__ import annotations
 
+import asyncio
+
 from otel_agent.config import Provider
 
 # Auth header patterns per provider API format
@@ -33,11 +35,22 @@ def build_image_edit_upstream_url(provider: Provider) -> str:
     return f"{base}/images/edits"
 
 
-def build_request_headers(provider: Provider) -> dict[str, str]:
-    """Build auth + content-type headers for a provider."""
+async def resolve_bearer_async(provider: Provider) -> str:
+    """Resolve a provider's bearer without blocking the event loop (KTD1).
+
+    Resolution may refresh a subscription credential over the network, and the
+    vault's read-modify-write is deliberately blocking — it holds a
+    cross-process file lock across the exchange — so it runs in a worker
+    thread rather than on the loop.
+    """
     from otel_agent.auth_vault import resolve_bearer
 
-    key = resolve_bearer(provider)
+    return await asyncio.to_thread(resolve_bearer, provider)
+
+
+async def build_request_headers(provider: Provider) -> dict[str, str]:
+    """Build auth + content-type headers for a provider."""
+    key = await resolve_bearer_async(provider)
     headers = AUTH_HEADERS[provider.api_format](key)
     headers["Content-Type"] = "application/json"
     return headers

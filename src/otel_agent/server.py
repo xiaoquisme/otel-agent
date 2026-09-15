@@ -109,7 +109,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             upstream_body = openai_to_anthropic_request(upstream_body)
 
         url = build_upstream_url(provider)
-        headers = build_request_headers(provider)
+        headers = await build_request_headers(provider)
 
         start_time = time.monotonic()
         original_body = json.dumps(body)
@@ -159,7 +159,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             upstream_body = anthropic_to_openai_request(upstream_body)
 
         url = build_upstream_url(provider)
-        headers = build_request_headers(provider)
+        headers = await build_request_headers(provider)
 
         start_time = time.monotonic()
         original_body = json.dumps(body)
@@ -216,7 +216,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             upstream_body["model"] = upstream_model
 
         url = build_image_upstream_url(provider)
-        headers = build_request_headers(provider)
+        headers = await build_request_headers(provider)
         start_time = time.monotonic()
         original_body = json.dumps(body)
         log_body = config.log_request_body
@@ -282,7 +282,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
                     data[key] = val
 
         url = build_image_edit_upstream_url(provider)
-        headers = build_request_headers(provider)
+        headers = await build_request_headers(provider)
         # Remove Content-Type for multipart (httpx sets it with boundary)
         headers.pop("Content-Type", None)
         start_time = time.monotonic()
