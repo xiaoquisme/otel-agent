@@ -51,7 +51,46 @@ providers:
 
 VALID_API_FORMATS = ("openai", "anthropic")
 AUTH_XAI_OAUTH = "xai-oauth"
-VALID_AUTH_MODES = ("", AUTH_XAI_OAUTH)
+AUTH_CODEX_OAUTH = "codex-oauth"
+
+
+@dataclass(frozen=True)
+class AuthSource:
+    """How a provider's credential is sourced, declared per auth mode.
+
+    Code that would otherwise branch on a specific auth mode (or on a provider
+    name) reads these flags instead, so adding a second subscription is a new
+    table row rather than a new special case.
+    """
+
+    keyless: bool = False
+    """api_key may be left empty — the credential comes from elsewhere."""
+
+    vault_backed: bool = False
+    """The bearer is resolved from the sidecar vault, not from api_key."""
+
+    entitlement_hint: bool = False
+    """Upstream entitlement 403 bodies get the vendor hint appended."""
+
+    responses_only: bool = False
+    """The upstream serves only the Responses API surface, so the chat-shaped
+    routes must refuse this provider rather than forward and pass on its 404."""
+
+
+#: Auth mode -> declaration. This table is the only place a subscription mode
+#: is named; everything else looks the mode up.
+AUTH_SOURCES: dict[str, AuthSource] = {
+    "": AuthSource(),
+    AUTH_XAI_OAUTH: AuthSource(keyless=True, vault_backed=True, entitlement_hint=True),
+    AUTH_CODEX_OAUTH: AuthSource(keyless=True, vault_backed=True, responses_only=True),
+}
+
+VALID_AUTH_MODES = tuple(AUTH_SOURCES)
+
+
+def auth_source(mode: str) -> AuthSource | None:
+    """Return the declaration for *mode*, or None when it is not declared."""
+    return AUTH_SOURCES.get(mode)
 
 
 @dataclass
@@ -125,12 +164,13 @@ class Config:
                     f"Provider '{name}' must have a base_url. "
                     f"Add a valid URL to the provider config."
                 )
-            if provider.auth not in VALID_AUTH_MODES:
+            source = auth_source(provider.auth)
+            if source is None:
                 raise ValueError(
                     f"Provider '{name}' has invalid auth '{provider.auth}'. "
                     f"Must be one of: {', '.join(repr(v) for v in VALID_AUTH_MODES if v) or 'empty'}."
                 )
-            if not provider.api_key and provider.auth != AUTH_XAI_OAUTH:
+            if not provider.api_key and not source.keyless:
                 raise ValueError(
                     f"Provider '{name}' must have an api_key. "
                     f"Add a valid API key to the provider config."

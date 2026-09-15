@@ -1159,3 +1159,1114 @@ async def test_anthropic_stream_from_openai_emits_message_start():
         assert "event: content_block_delta" in body
         assert "event: message_stop" in body
         assert '"text": "Hi"' in body
+
+
+# ------------------------------------------------------------------
+# Vault-backed subscription credentials on the async request path (KTD1)
+# ------------------------------------------------------------------
+#
+# Both of these exercise a bearer that comes from the vault rather than from
+# provider.api_key, so they fail if a call site still resolves it synchronously
+# (which would blow up with "coroutine was never awaited") or if resolution
+# blocks the loop.
+
+
+def _make_vault_config(td: str) -> Config:
+    """A Config whose only provider is a subscription provider (no api_key)."""
+    config_path = Path(td) / "config.yaml"
+    config_path.write_text(
+        "providers:\n"
+        "  - name: codex\n"
+        "    base_url: https://chatgpt.com/backend-api/codex\n"
+        "    auth: codex-oauth\n"
+        "    api_format: openai\n"
+    )
+    return Config(config_path)
+
+
+def _seed_vault(tmp_path, monkeypatch) -> Path:
+    from otel_agent.auth_vault import save_grant
+
+    vault = tmp_path / "auth.json"
+    save_grant(
+        "codex",
+        {"access_token": "tok-vault", "refresh_token": "ref-vault", "expires_in": 21600},
+        auth="codex-oauth",
+        discovery={"token_endpoint": "https://auth.openai.com/oauth/token"},
+        path=vault,
+    )
+    # The client_id a refresh needs is recorded with the credential (U3 reads it
+    # off the adopted grant); without it there is nothing to refresh with.
+    stored = json.loads(vault.read_text())
+    stored["providers"]["codex"]["client_id"] = "app_codex_test"
+    vault.write_text(json.dumps(stored))
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(vault))
+    return vault
+
+
+class _RecordingStreamMethod:
+    """Like _FakeStreamMethod, but records the headers the route sent upstream."""
+
+    def __init__(self, chunks: list[dict], seen: dict):
+        self._stream = _FakeSSEStream(chunks)
+        self._seen = seen
+
+    def __call__(self, *args, **kwargs):
+        self._seen["headers"] = kwargs.get("headers")
+        return self._stream
+
+
+@pytest.mark.anyio
+async def test_streaming_request_uses_the_vault_bearer(tmp_path, monkeypatch):
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        seen: dict = {}
+        mock_stream = _RecordingStreamMethod(
+            [{"choices": [{"delta": {"content": "Hi"}, "index": 0}]}], seen
+        )
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                # The Responses route, not chat/completions: a Responses-only
+                # provider is refused on the chat-shaped routes by design.
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5", "input": "hi"},
+                )
+                await resp.aread()
+
+        telemetry.close()
+
+        assert seen["headers"]["Authorization"] == "Bearer tok-vault"
+
+
+@pytest.mark.anyio
+async def test_models_endpoint_uses_the_vault_bearer(tmp_path, monkeypatch):
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        seen: dict = {}
+
+        class _ModelsResponse:
+            status_code = 200
+
+            def json(self):
+                return {"data": [{"id": "gpt-5", "object": "model"}]}
+
+        real_get = httpx.AsyncClient.get
+
+        async def _get(self, url, **kwargs):
+            # Only the upstream model fetch is intercepted; the test client's own
+            # GET of /v1/models must reach the app.
+            if "chatgpt.com" in str(url):
+                seen["url"] = url
+                seen["headers"] = kwargs.get("headers")
+                return _ModelsResponse()
+            return await real_get(self, url, **kwargs)
+
+        with patch("httpx.AsyncClient.get", _get):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.get("/v1/models")
+
+        telemetry.close()
+
+        assert resp.status_code == 200
+        assert seen["headers"] == {"Authorization": "Bearer tok-vault"}
+        assert resp.json()["data"][0]["id"] == "codex/gpt-5"
+
+
+@pytest.mark.anyio
+async def test_bearer_resolution_does_not_block_the_event_loop(tmp_path, monkeypatch):
+    """KTD1: a refresh runs off the loop. With resolution inlined on the loop,
+    the heartbeat below could not tick while the exchange is in flight."""
+    import asyncio
+    import time as _time
+
+    _seed_vault(tmp_path, monkeypatch)
+    vault = tmp_path / "auth.json"
+    stored = json.loads(vault.read_text())
+    stored["providers"]["codex"]["tokens"]["expires_at"] = 0  # due for refresh
+    vault.write_text(json.dumps(stored))
+
+    class _RefreshResponse:
+        status_code = 200
+
+        def json(self):
+            return {"access_token": "tok-new", "refresh_token": "ref-new", "expires_in": 21600}
+
+    def _slow_post(*args, **kwargs):
+        _time.sleep(0.3)
+        return _RefreshResponse()
+
+    monkeypatch.setattr("otel_agent.auth_vault.httpx.post", _slow_post)
+
+    from otel_agent.config import Provider
+    from otel_agent.provider_utils import resolve_bearer_async
+
+    provider = Provider(
+        name="codex",
+        base_url="https://chatgpt.com/backend-api/codex",
+        api_key="",
+        auth="codex-oauth",
+    )
+
+    ticks = 0
+
+    async def _heartbeat() -> None:
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    beat = asyncio.create_task(_heartbeat())
+    try:
+        assert await resolve_bearer_async(provider) == "tok-new"
+    finally:
+        beat.cancel()
+
+    assert ticks >= 3, f"the event loop was blocked during the refresh ({ticks} ticks)"
+
+
+# ------------------------------------------------------------------
+# U4: Responses passthrough route
+# ------------------------------------------------------------------
+#
+# The subscription upstream serves only the Responses API, and only as a
+# stream. This route is therefore a passthrough: no converter is installed,
+# so the `event:` lines and blank separators of the upstream dialect survive
+# to the client, and the normalization below is the whole of the gateway's
+# vendor accommodation.
+
+
+class _FakeLineStream:
+    """SSE stub that yields a *line list* rather than a chunk-dict list.
+
+    ``_FakeSSEStream`` cannot express this dialect: it hardcodes the
+    ``data: `` prefix and appends ``[DONE]``, while a Responses stream's
+    meaning lives in the ``event:`` lines.
+    """
+
+    def __init__(
+        self,
+        lines: list[str],
+        *,
+        status_code: int = 200,
+        content_type: str = "text/event-stream",
+        body: bytes = b"",
+    ) -> None:
+        self._lines = lines
+        self._body = body
+        self.status_code = status_code
+        self.headers = {"content-type": content_type}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    async def aread(self) -> bytes:
+        return self._body
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _RecordingLineStreamMethod:
+    """Sync mock for httpx.AsyncClient.stream() that records what was sent.
+
+    ``stream()`` is a sync method returning an async context manager, so
+    ``__call__`` must be sync (see ``_FakeStreamMethod``).
+    """
+
+    def __init__(self, stream: _FakeLineStream, seen: dict) -> None:
+        self._stream = stream
+        self._seen = seen
+
+    def __call__(self, *args, **kwargs):
+        if len(args) >= 2:
+            self._seen["method"], self._seen["url"] = args[0], args[1]
+        else:
+            self._seen["method"] = kwargs.get("method")
+            self._seen["url"] = kwargs.get("url")
+        self._seen["headers"] = kwargs.get("headers")
+        self._seen["json"] = kwargs.get("json")
+        return self._stream
+
+
+def _responses_lines(
+    *, model: str = "gpt-5-codex", usage: dict | None = None, extra: dict | None = None,
+) -> list[str]:
+    """A plain-text Responses turn — the 9 event types the live probe saw.
+
+    ``extra`` adds fields to the terminal envelope (``object``, ``output``, …)
+    for callers that assert on the shape of the assembled response.
+    """
+    final_response: dict = {"id": "resp_1", "model": model, "status": "completed"}
+    if usage is not None:
+        final_response["usage"] = usage
+    if extra is not None:
+        final_response.update(extra)
+    events: list[tuple[str, dict]] = [
+        ("response.created", {"type": "response.created", "sequence_number": 0, "response": {"id": "resp_1", "model": model, "status": "in_progress"}}),
+        ("response.in_progress", {"type": "response.in_progress", "sequence_number": 1, "response": {"id": "resp_1", "model": model, "status": "in_progress"}}),
+        ("response.output_item.added", {"type": "response.output_item.added", "sequence_number": 2, "output_index": 0, "item": {"type": "message", "id": "msg_1", "status": "in_progress"}}),
+        ("response.content_part.added", {"type": "response.content_part.added", "sequence_number": 3, "item_id": "msg_1", "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": ""}}),
+        ("response.output_text.delta", {"type": "response.output_text.delta", "sequence_number": 4, "item_id": "msg_1", "output_index": 0, "content_index": 0, "delta": "Hello"}),
+        ("response.output_text.done", {"type": "response.output_text.done", "sequence_number": 5, "item_id": "msg_1", "output_index": 0, "content_index": 0, "text": "Hello"}),
+        ("response.content_part.done", {"type": "response.content_part.done", "sequence_number": 6, "item_id": "msg_1", "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "Hello"}}),
+        ("response.output_item.done", {"type": "response.output_item.done", "sequence_number": 7, "output_index": 0, "item": {"type": "message", "id": "msg_1", "status": "completed"}}),
+        ("response.completed", {"type": "response.completed", "sequence_number": 8, "response": final_response}),
+    ]
+    lines: list[str] = []
+    for name, payload in events:
+        lines.append(f"event: {name}")
+        lines.append(f"data: {json.dumps(payload)}")
+        lines.append("")
+    return lines
+
+
+def _nonempty_lines(body: str) -> list[str]:
+    return [line for line in body.split("\n") if line.strip()]
+
+
+@pytest.mark.anyio
+async def test_responses_route_normalizes_request_without_rewriting_semantics(tmp_path, monkeypatch):
+    """Passthrough + normalization: the client's input survives, the vendor
+    accommodation is applied, and nothing else about the body is touched."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        seen: dict = {}
+        mock_stream = _RecordingLineStreamMethod(_FakeLineStream(_responses_lines()), seen)
+
+        sent_input = [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}]
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={
+                        "model": "codex/gpt-5-codex",
+                        "input": sent_input,
+                        "stream": False,
+                        "store": True,
+                        "include": ["message.output_text.logprobs"],
+                        "max_output_tokens": 64,
+                        "temperature": 0.5,
+                        "instructions": "be brief",
+                    },
+                )
+                await resp.aread()
+                health = await client.get("/health")
+
+        telemetry.close()
+
+        assert seen["method"] == "POST"
+        assert seen["url"] == "https://chatgpt.com/backend-api/codex/responses", seen["url"]
+        forwarded = seen["json"]
+
+        # Normalization: stream forced, store/include overridden whatever the
+        # client asked for, and the two parameters this upstream rejects gone.
+        assert forwarded["stream"] is True
+        assert forwarded["store"] is False
+        assert forwarded["include"] == ["reasoning.encrypted_content"]
+        assert "max_output_tokens" not in forwarded
+        assert "temperature" not in forwarded
+
+        # No rewrite of semantics: everything else is verbatim.
+        assert forwarded["input"] == sent_input
+        assert forwarded["instructions"] == "be brief"
+        assert forwarded["model"] == "gpt-5-codex"
+
+        # No identity headers ride along with the subscription bearer.
+        assert set(seen["headers"]) == {"Authorization", "Content-Type"}
+
+        # Regression: the new route must not disturb the JSON endpoints.
+        assert health.headers["content-type"].startswith("application/json")
+        assert health.json() == {"status": "ok"}
+
+
+@pytest.mark.anyio
+async def test_responses_route_preserves_event_lines_and_blank_separators(tmp_path, monkeypatch):
+    """Event fidelity: `event:` lines and their blank separators reach the client."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        upstream_lines = _responses_lines()
+        mock_stream = _RecordingLineStreamMethod(_FakeLineStream(upstream_lines), {})
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "hi", "stream": True},
+                )
+                body = resp.text
+
+        telemetry.close()
+
+        # Every upstream line that carries meaning survives, in order. `data:`
+        # lines are re-serialized (JSON, so equivalent); `event:` lines are
+        # byte-identical.
+        upstream_nonempty = [line for line in upstream_lines if line.strip()]
+        assert _nonempty_lines(body) == upstream_nonempty, body[:800]
+
+        # Each event is delivered: an `event: <name>` line, its `data:` line,
+        # and a blank separator.
+        for name in (
+            "response.created",
+            "response.in_progress",
+            "response.output_item.added",
+            "response.content_part.added",
+            "response.output_text.delta",
+            "response.output_text.done",
+            "response.content_part.done",
+            "response.output_item.done",
+            "response.completed",
+        ):
+            assert f"event: {name}\n" in body, f"missing event line for {name}"
+
+        assert "\n\n" in body, "blank separators were dropped"
+        delta = json.loads(body.split("event: response.output_text.delta\n")[1].split("data: ", 1)[1].split("\n", 1)[0])
+        assert delta["delta"] == "Hello"
+        assert delta["type"] == "response.output_text.delta"
+
+
+@pytest.mark.anyio
+async def test_responses_route_does_not_synthesize_done(tmp_path, monkeypatch):
+    """A Responses stream ends at `response.completed` — no `[DONE]` sentinel."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        mock_stream = _RecordingLineStreamMethod(_FakeLineStream(_responses_lines()), {})
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "hi", "stream": True},
+                )
+                body = resp.text
+
+        telemetry.close()
+
+        assert "[DONE]" not in body, "a [DONE] sentinel was synthesized for a Responses client"
+        assert _nonempty_lines(body)[-2] == "event: response.completed"
+
+
+@pytest.mark.anyio
+async def test_responses_route_upstream_rejection_becomes_an_error_event(tmp_path, monkeypatch):
+    """R12: an upstream refusal must reach a Responses client as a parseable
+    error event, not as a bare data frame or a dead stream."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        # The shape the live upstream uses for a rejected parameter.
+        upstream_body = json.dumps({"detail": "Unsupported parameter: temperature"}).encode()
+        mock_stream = _RecordingLineStreamMethod(
+            _FakeLineStream([], status_code=400, content_type="application/json", body=upstream_body),
+            {},
+        )
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "hi", "stream": True},
+                )
+                body = resp.text
+
+        telemetry.close()
+
+        assert body.startswith("event: error\n"), body[:400]
+        assert "data: [DONE]" not in body, "a Responses client must not be handed a chat sentinel"
+        payload = json.loads(body.split("data: ", 1)[1])
+        assert payload["type"] == "error"
+        assert "Unsupported parameter: temperature" in payload["message"]
+
+
+@pytest.mark.anyio
+async def test_responses_telemetry_uses_responses_usage_and_model(tmp_path, monkeypatch):
+    """KTD7: usage and model live inside the `response` object, not at the
+    top level, so the chat-shaped extraction logs nothing for this stream."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        lines = _responses_lines(
+            usage={"input_tokens": 1200, "output_tokens": 40, "total_tokens": 1240}
+        )
+        mock_stream = _RecordingLineStreamMethod(_FakeLineStream(lines), {})
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "hi", "stream": True},
+                )
+                await resp.aread()
+
+        telemetry.close()
+
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT model_name, input_tokens, output_tokens, total_tokens, format FROM requests"
+        ).fetchone()
+        conn.close()
+
+        assert row is not None, "No telemetry record found"
+        assert row[0] == "codex/gpt-5-codex", f"Expected the Responses model name, got {row[0]!r}"
+        assert row[1] == 1200
+        assert row[2] == 40
+        assert row[3] == 1240
+        assert row[4] == "responses", f"Expected format 'responses', got {row[4]!r}"
+
+
+class _FailingStreamMethod:
+    """Mock for httpx.AsyncClient.stream() that fails before any stream opens."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def __call__(self, *args, **kwargs):
+        raise self._exc
+
+
+@pytest.mark.anyio
+async def test_responses_route_connection_failure_is_an_error_event(tmp_path, monkeypatch):
+    """R12's other half: a failure before the upstream answers is still a
+    Responses-shaped error event, not a bare frame or a dead stream."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        with patch("httpx.AsyncClient.stream", _FailingStreamMethod(httpx.ConnectError("boom"))):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "hi", "stream": True},
+                )
+                body = resp.text
+
+        telemetry.close()
+
+        assert body.startswith("event: error\n"), body[:400]
+        payload = json.loads(body.split("data: ", 1)[1])
+        assert payload["type"] == "error"
+        assert "Connection failed" in payload["message"]
+        assert "boom" in payload["message"]
+
+
+@pytest.mark.anyio
+async def test_responses_route_passes_unknown_event_types_untouched(tmp_path, monkeypatch):
+    """Tool-call event shapes were never probed, so the route must not depend
+    on knowing the event vocabulary: an event it has never seen passes
+    through verbatim."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        _seed_vault(tmp_path, monkeypatch)
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        tool_lines = [
+            "event: response.function_call_arguments.delta",
+            'data: {"type": "response.function_call_arguments.delta", "sequence_number": 9, "item_id": "fc_1", "output_index": 0, "delta": "{\\"city\\":\\"SF\\"}"}',
+            "",
+            "event: response.function_call_arguments.done",
+            'data: {"type": "response.function_call_arguments.done", "sequence_number": 10, "item_id": "fc_1", "output_index": 0, "arguments": "{\\"city\\":\\"SF\\"}"}',
+            "",
+        ]
+        mock_stream = _RecordingLineStreamMethod(
+            _FakeLineStream(_responses_lines() + tool_lines), {}
+        )
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "weather in SF?", "stream": True},
+                )
+                body = resp.text
+
+        telemetry.close()
+
+        for line in tool_lines:
+            if line.strip():
+                assert line in body, f"upstream line was altered or dropped: {line!r}"
+
+
+def test_chat_shaped_routes_refuse_a_responses_only_provider(tmp_path):
+    """The subscription upstream serves only the Responses surface, so the
+    chat-shaped routes refuse it by declaration instead of forwarding."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.stream") as stream, patch("httpx.AsyncClient.post") as post:
+                chat = client.post(
+                    "/v1/chat/completions",
+                    json={"model": "codex/gpt-5-codex", "messages": [{"role": "user", "content": "hi"}]},
+                )
+                messages = client.post(
+                    "/v1/messages",
+                    json={"model": "codex/gpt-5-codex", "messages": [{"role": "user", "content": "hi"}]},
+                )
+        telemetry.close()
+
+    for resp, endpoint in ((chat, "/v1/chat/completions"), (messages, "/v1/messages")):
+        assert resp.status_code == 400, f"{endpoint} forwarded instead of refusing"
+        body = resp.json()
+        assert body["error"]["type"] == "invalid_request_error"
+        assert "codex" in body["error"]["message"]
+        assert "Responses" in body["error"]["message"], body["error"]["message"]
+        assert "/v1/responses" in body["error"]["message"], body["error"]["message"]
+    assert not stream.called, "a chat-shaped refusal must not reach the upstream"
+    assert not post.called, "a chat-shaped refusal must not reach the upstream"
+
+
+def test_responses_route_declines_providers_without_a_responses_surface(tmp_path):
+    """The route's normalization is this upstream's accommodation, so it is
+    only served for a provider that declares a Responses surface."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.stream") as stream:
+                resp = client.post(
+                    "/v1/responses",
+                    json={"model": "openai/gpt-5", "input": "hi"},
+                )
+        telemetry.close()
+
+    assert resp.status_code == 400
+    assert resp.json()["error"]["type"] == "invalid_request_error"
+    assert "openai" in resp.json()["error"]["message"]
+    assert not stream.called
+
+
+def test_responses_previous_response_id_is_rejected_as_stateless(tmp_path):
+    """R8: continuation is deliberately unsupported. Stripping the parameter
+    would hand a state-dependent client a successful, contextless answer, so
+    it is refused distinguishably instead."""
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_vault_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.stream") as stream:
+                resp = client.post(
+                    "/v1/responses",
+                    json={"model": "codex/gpt-5-codex", "input": "and then?", "previous_response_id": "resp_abc"},
+                )
+        telemetry.close()
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["error"]["type"] == "invalid_request_error"
+    assert "previous_response_id" in body["error"]["message"]
+    assert "stateless" in body["error"]["message"].lower()
+    assert "input" in body["error"]["message"]
+    assert not stream.called, "the parameter must be refused, not forwarded"
+
+
+# ------------------------------------------------------------------
+# U5: aggregation for a non-streaming Responses client
+# ------------------------------------------------------------------
+#
+# The upstream serves this dialect as a stream and nothing else. A client that
+# asks for a single response is served by asking upstream in the only form it
+# accepts and folding the stream back into the one object the client asked for.
+# KTD5: this is its own handler, not `_handle_non_streaming` — the latter posts
+# once and would forward the upstream's `{"detail": "Stream must be set to
+# true"}` straight back to the client.
+
+
+class _StreamOnlyLineStreamMethod:
+    """A line-stream mock that models the real upstream's one hard rule.
+
+    A request that does not set ``stream: true`` gets the same 400 the live
+    upstream returns, so a gateway that ever stopped asking in streaming form
+    fails these tests instead of quietly degrading.
+    """
+
+    def __init__(self, lines: list[str], seen: dict | None = None) -> None:
+        self._lines = lines
+        self.seen: dict = seen if seen is not None else {}
+
+    def __call__(self, *args, **kwargs):
+        body = kwargs.get("json") or {}
+        self.seen["json"] = body
+        self.seen["url"] = args[1] if len(args) >= 2 else kwargs.get("url")
+        self.seen["headers"] = kwargs.get("headers")
+        if body.get("stream") is not True:
+            return _FakeLineStream(
+                [],
+                status_code=400,
+                content_type="application/json",
+                body=json.dumps({"detail": "Stream must be set to true"}).encode(),
+            )
+        return _FakeLineStream(self._lines)
+
+
+def _prose_envelope() -> dict:
+    """The terminal envelope of a plain-text turn, as the live probe saw it."""
+    return {
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Hello"}],
+            }
+        ],
+    }
+
+
+def _terminal_envelope(lines: list[str]) -> dict:
+    """The `response` object carried by the fixture's `response.completed`."""
+    idx = lines.index("event: response.completed")
+    return json.loads(lines[idx + 1][len("data: "):])["response"]
+
+
+def _responses_app(td: str, tmp_path, monkeypatch):
+    _seed_vault(tmp_path, monkeypatch)
+    config = _make_vault_config(td)
+    telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+    return create_app(config, telemetry), telemetry
+
+
+async def _post_responses(app, payload: dict):
+    from httpx import ASGITransport
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post("/v1/responses", json=payload)
+        await resp.aread()
+        return resp
+
+
+@pytest.mark.anyio
+async def test_responses_non_streaming_request_is_aggregated_from_the_upstream_stream(tmp_path, monkeypatch):
+    """AE1/R9: the client asks for one response and never learns that the
+    upstream only streams — the gateway asks in streaming form and hands back
+    the single object the client asked for."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        usage = {"input_tokens": 12, "output_tokens": 1, "total_tokens": 13}
+        lines = _responses_lines(usage=usage, extra=_prose_envelope())
+        mock_stream = _StreamOnlyLineStreamMethod(lines)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        # AE1's Given, negated: the gateway asked in the only form the upstream
+        # accepts, so the upstream's "Stream must be set to true" 400 never
+        # happens and the client's own `stream: false` is not forwarded.
+        assert mock_stream.seen["json"]["stream"] is True
+        assert mock_stream.seen["url"] == "https://chatgpt.com/backend-api/codex/responses"
+
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"].startswith("application/json"), resp.headers["content-type"]
+
+        # The aggregated body is the envelope the upstream itself sent in the
+        # terminal event — taken, not reconstructed.
+        assert resp.json() == _terminal_envelope(lines)
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_body_has_the_responses_dialect_shape(tmp_path, monkeypatch):
+    """R9: what comes back is a Responses response object, not a chat body and
+    not a wrapper around the event stream."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        usage = {"input_tokens": 12, "output_tokens": 1, "total_tokens": 13}
+        lines = _responses_lines(usage=usage, extra=_prose_envelope())
+
+        with patch("httpx.AsyncClient.stream", _StreamOnlyLineStreamMethod(lines)):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        body = resp.json()
+        assert body["object"] == "response"
+        assert body["id"] == "resp_1"
+        assert body["model"] == "gpt-5-codex"
+        assert body["status"] == "completed"
+        assert body["usage"] == usage
+        assert body["output"][0]["content"][0]["text"] == "Hello"
+
+        # The client's dialect has no `choices`, and nothing was wrapped around
+        # the response object to carry the events that produced it.
+        assert "choices" not in body
+        assert "events" not in body
+        assert "streamed" not in body
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_stream_that_ends_early_is_a_diagnosable_error(tmp_path, monkeypatch):
+    """R9: a stream that dies mid-answer must not reach a non-streaming client
+    as an empty 200 — there is no `event: error` frame for it to read."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        # Every event but the terminal one: the upstream stopped mid-turn.
+        truncated = _responses_lines()[:-3]
+        with patch("httpx.AsyncClient.stream", _StreamOnlyLineStreamMethod(truncated)):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        assert resp.status_code >= 400, resp.text
+        body = resp.json()
+        assert body["error"]["message"], "the client was handed an empty error"
+        assert "response.completed" in body["error"]["message"]
+        assert "codex" in body["error"]["message"]
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_mid_stream_error_event_is_a_diagnosable_error(tmp_path, monkeypatch):
+    """R9: an error raised after the stream opened is reported as an error, not
+    discarded in favour of the partial answer that preceded it."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        error_frame = [
+            "event: error",
+            'data: {"type": "error", "code": null, "message": "upstream gave up mid-answer", "param": null, "sequence_number": 4}',
+            "",
+        ]
+        with patch("httpx.AsyncClient.stream", _StreamOnlyLineStreamMethod(_responses_lines()[:6] + error_frame)):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        assert resp.status_code >= 400, resp.text
+        assert "upstream gave up mid-answer" in resp.json()["error"]["message"]
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_upstream_rejection_keeps_its_status_and_reason(tmp_path, monkeypatch):
+    """R9: a rejection the upstream never turned into a stream reaches the
+    client as a non-2xx carrying the upstream's own reason."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        mock_stream = _RecordingLineStreamMethod(
+            _FakeLineStream(
+                [],
+                status_code=400,
+                content_type="application/json",
+                body=json.dumps({"detail": "Unsupported parameter: temperature"}).encode(),
+            ),
+            {},
+        )
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["error"]["message"]
+        assert "Unsupported parameter: temperature" in body["error"]["message"]
+        assert body["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_connection_failure_is_not_an_empty_200(tmp_path, monkeypatch):
+    """R9: failing before the upstream answers is a gateway-level error."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        with patch("httpx.AsyncClient.stream", _FailingStreamMethod(httpx.ConnectError("boom"))):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        assert resp.status_code == 502, resp.text
+        body = resp.json()
+        assert "Connection failed" in body["error"]["message"]
+        assert "boom" in body["error"]["message"]
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_request_is_logged(tmp_path, monkeypatch):
+    """The dashboard sees the same request a streaming client produces: the
+    aggregated answer, its usage, and the Responses format."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        usage = {"input_tokens": 12, "output_tokens": 1, "total_tokens": 13}
+        lines = _responses_lines(usage=usage, extra=_prose_envelope())
+
+        with patch("httpx.AsyncClient.stream", _StreamOnlyLineStreamMethod(lines)):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+        assert resp.status_code == 200, resp.text
+
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT model_name, input_tokens, output_tokens, total_tokens, format, response_body FROM requests"
+        ).fetchone()
+        conn.close()
+
+        assert row is not None, "the aggregated request was not logged"
+        assert row[0] == "codex/gpt-5-codex"
+        assert (row[1], row[2], row[3]) == (12, 1, 13)
+        assert row[4] == "responses"
+        logged = json.loads(row[5])
+        assert logged.get("streamed") is not True
+        assert logged["output"][0]["content"][0]["text"] == "Hello"
+
+
+@pytest.mark.anyio
+async def test_responses_streaming_client_still_gets_a_stream(tmp_path, monkeypatch):
+    """Streaming is this gateway's default form, so a client that asks for it —
+    or says nothing — is not aggregated."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        lines = _responses_lines()
+        mock_stream = _StreamOnlyLineStreamMethod(lines)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": True}
+            )
+
+        telemetry.close()
+
+        assert resp.headers["content-type"].startswith("text/event-stream"), resp.headers["content-type"]
+        assert "event: response.completed" in resp.text
+
+
+# ------------------------------------------------------------------
+# U6: a credential failure is its own class of error, and it is one
+# provider's alone (R11 / R12 / KTD6 / KTD8)
+# ------------------------------------------------------------------
+
+
+def _make_mixed_config(td: str) -> Config:
+    """One plain provider beside the subscription provider."""
+    config_path = Path(td) / "config.yaml"
+    config_path.write_text(
+        "providers:\n"
+        "  - name: openai\n"
+        "    base_url: https://api.openai.com/v1\n"
+        "    api_key: sk-plain\n"
+        "    api_format: openai\n"
+        "  - name: codex\n"
+        "    base_url: https://chatgpt.com/backend-api/codex\n"
+        "    auth: codex-oauth\n"
+        "    api_format: openai\n"
+    )
+    return Config(config_path)
+
+
+class _ModelsResponse:
+    status_code = 200
+
+    def json(self):
+        return {"data": [{"id": "gpt-4o", "object": "model"}]}
+
+
+def _patch_models_get(monkeypatch, seen: dict) -> None:
+    """Serve the plain provider's model list, and never let a call reach a
+    provider whose credential the gateway does not have."""
+    real_get = httpx.AsyncClient.get
+
+    async def _get(self, url, **kwargs):
+        url = str(url)
+        if "chatgpt.com" in url:
+            raise AssertionError(f"a credential-less provider was called upstream: {url}")
+        if "api.openai.com" not in url:
+            # The test client's own GET of /v1/models must reach the app.
+            return await real_get(self, url, **kwargs)
+        seen["url"] = url
+        return _ModelsResponse()
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", _get)
+
+
+async def _get_models(app, **params):
+    from httpx import ASGITransport
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        return await client.get("/v1/models", params=params or None)
+
+
+@pytest.mark.anyio
+async def test_models_route_localizes_a_credential_failure_to_its_provider(tmp_path, monkeypatch):
+    """KTD6/AE2: the broken provider is named rather than silently absent, and
+    the providers that are fine still answer."""
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(tmp_path / "absent.json"))
+    with tempfile.TemporaryDirectory() as td:
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(_make_mixed_config(td), telemetry)
+        seen: dict = {}
+        _patch_models_get(monkeypatch, seen)
+
+        resp = await _get_models(app)
+        telemetry.close()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [m["id"] for m in body["data"]] == ["openai/gpt-4o"]
+    assert [e["provider"] for e in body["errors"]] == ["codex"]
+    assert "vault" in body["errors"][0]["message"]
+    assert body["errors"][0]["type"] == "credential_error"
+    # The broken provider is the only one that was not asked upstream.
+    assert seen["url"] == "https://api.openai.com/v1/models"
+
+
+@pytest.mark.anyio
+async def test_models_route_for_a_broken_provider_is_an_explicit_error(tmp_path, monkeypatch):
+    """specs/009-models-api allows a clear error: a client that asked for
+    exactly that provider must not read the answer as "it has no models"."""
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(tmp_path / "absent.json"))
+    with tempfile.TemporaryDirectory() as td:
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(_make_mixed_config(td), telemetry)
+        seen: dict = {}
+        _patch_models_get(monkeypatch, seen)
+
+        resp = await _get_models(app, provider="codex")
+        telemetry.close()
+
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["error"]["type"] == "credential_error"
+    assert "codex" in resp.json()["error"]["message"]
+    assert seen == {}
+
+
+@pytest.mark.anyio
+async def test_a_subscription_request_without_a_grant_is_diagnosable(tmp_path, monkeypatch):
+    """R12/AE2: a credential failure arrives as its own class of error,
+    carrying the subscription's current status — not as an unclassified 500."""
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(tmp_path / "absent.json"))
+    with tempfile.TemporaryDirectory() as td:
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(_make_vault_config(td), telemetry)
+
+        from httpx import ASGITransport
+        async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/v1/responses", json={"model": "codex/gpt-5", "input": "hi"})
+        telemetry.close()
+
+    assert resp.status_code != 500, resp.text
+    body = resp.json()
+    assert body["error"]["type"] == "credential_error"
+    assert body["error"]["code"] == "credential_unavailable"
+    assert body["error"]["provider"] == "codex"
+    assert "vault" in body["error"]["message"]
+    # AE2: the error carries the current status, not just a complaint.
+    assert body["credential"]["available"] is False
+    assert body["credential"]["last_result"] is None
+
+
+@pytest.mark.anyio
+async def test_an_unrefreshable_grant_is_a_credential_error(tmp_path, monkeypatch):
+    """AE2's Given in full: the grant is present, expired, and cannot be
+    refreshed. The client is told the credential is the problem, and nothing is
+    sent upstream bearing a token that is known to be dead."""
+    with tempfile.TemporaryDirectory() as td:
+        _seed_vault(tmp_path, monkeypatch)
+        vault = tmp_path / "auth.json"
+        stored = json.loads(vault.read_text())
+        stored["providers"]["codex"]["tokens"]["expires_at"] = 0
+        vault.write_text(json.dumps(stored))
+
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(_make_vault_config(td), telemetry)
+
+        class _Rejected:
+            status_code = 401
+
+            def json(self):
+                return {"error": "invalid_grant"}
+
+        monkeypatch.setattr("otel_agent.auth_vault.httpx.post", lambda *a, **k: _Rejected())
+
+        def _no_stream(*args, **kwargs):
+            raise AssertionError("the upstream was called with a credential known to be dead")
+
+        from httpx import ASGITransport
+        with patch("httpx.AsyncClient.stream", _no_stream):
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post("/v1/responses", json={"model": "codex/gpt-5", "input": "hi"})
+        telemetry.close()
+
+    assert resp.status_code == 503, resp.text
+    body = resp.json()
+    assert body["error"]["type"] == "credential_error"
+    assert "401" in body["error"]["message"]
+    # The failed refresh is on record, so the operator sees why (R11).
+    assert body["credential"]["last_result"]["ok"] is False

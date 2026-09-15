@@ -13,11 +13,11 @@ from otel_agent.auth_vault import (
     AuthError,
     XAI_OAUTH_CLIENT_ID,
     XAI_OAUTH_DISCOVERY_URL,
+    XAI_OAUTH_TOKEN_URL,
 )
 
 XAI_OAUTH_DEVICE_CODE_URL = "https://auth.x.ai/oauth2/device/code"
 XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access"
-XAI_OAUTH_TOKEN_URL = "https://auth.x.ai/oauth2/token"
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 
 SleepFn = Callable[[float], None]

@@ -77,6 +77,13 @@ def test_parser_auth_import_xai():
     assert args.auth_action == "import-xai"
 
 
+def test_parser_auth_import_codex():
+    parser = build_parser()
+    args = parser.parse_args(["auth", "import-codex"])
+    assert args.command == "auth"
+    assert args.auth_action == "import-codex"
+
+
 def test_parser_auth_login_no_browser():
     parser = build_parser()
     args = parser.parse_args(["auth", "login", "--no-browser"])

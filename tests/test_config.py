@@ -142,6 +142,22 @@ providers:
     assert provider.api_key == ""
 
 
+def test_declared_subscription_auth_allows_empty_api_key(tmp_path):
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  - name: codex
+    base_url: https://chatgpt.com/backend-api/codex
+    auth: codex-oauth
+    api_format: openai
+""")
+    cfg = Config(config_file)
+    provider = cfg.get_provider("codex")
+    assert provider is not None
+    assert provider.auth == "codex-oauth"
+    assert provider.api_key == ""
+
+
 def test_unknown_auth_rejected(tmp_path):
     config_file = tmp_path / "config.yaml"
     config_file.write_text("""

@@ -1,7 +1,9 @@
 """Shared provider utilities — URL building, auth headers, model name prefixing."""
 from __future__ import annotations
 
-from otel_agent.config import Provider
+import asyncio
+
+from otel_agent.config import Provider, auth_source
 
 # Auth header patterns per provider API format
 AUTH_HEADERS = {
@@ -21,6 +23,26 @@ def build_upstream_url(provider: Provider) -> str:
     return f"{base}/chat/completions"
 
 
+def build_responses_upstream_url(provider: Provider) -> str:
+    """Build the upstream URL for the Responses API.
+
+    Deliberately separate from ``build_upstream_url``, which appends
+    ``/chat/completions`` to every openai-format provider.
+    """
+    base = provider.base_url.rstrip("/")
+    return f"{base}/responses"
+
+
+def serves_only_responses(provider: Provider) -> bool:
+    """True when the provider's upstream serves only the Responses API.
+
+    The auth declaration decides, so this asks the table rather than a
+    provider name or an api_format.
+    """
+    source = auth_source(provider.auth)
+    return bool(source is not None and source.responses_only)
+
+
 def build_image_upstream_url(provider: Provider) -> str:
     """Build the upstream URL for image generation (OpenAI /v1/images/generations)."""
     base = provider.base_url.rstrip("/")
@@ -33,11 +55,22 @@ def build_image_edit_upstream_url(provider: Provider) -> str:
     return f"{base}/images/edits"
 
 
-def build_request_headers(provider: Provider) -> dict[str, str]:
-    """Build auth + content-type headers for a provider."""
+async def resolve_bearer_async(provider: Provider) -> str:
+    """Resolve a provider's bearer without blocking the event loop (KTD1).
+
+    Resolution may refresh a subscription credential over the network, and the
+    vault's read-modify-write is deliberately blocking — it holds a
+    cross-process file lock across the exchange — so it runs in a worker
+    thread rather than on the loop.
+    """
     from otel_agent.auth_vault import resolve_bearer
 
-    key = resolve_bearer(provider)
+    return await asyncio.to_thread(resolve_bearer, provider)
+
+
+async def build_request_headers(provider: Provider) -> dict[str, str]:
+    """Build auth + content-type headers for a provider."""
+    key = await resolve_bearer_async(provider)
     headers = AUTH_HEADERS[provider.api_format](key)
     headers["Content-Type"] = "application/json"
     return headers

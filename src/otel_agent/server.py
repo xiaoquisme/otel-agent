@@ -6,12 +6,13 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from otel_agent.auth_vault import AuthError, get_status
 from otel_agent.config import Config, Provider
 from otel_agent.dashboard.api import DashboardAPI
 from otel_agent.dashboard.routes import router as dashboard_router, set_api as set_dashboard_api
@@ -30,6 +31,12 @@ from otel_agent.router import parse_model, resolve_provider
 
 logger = logging.getLogger(__name__)
 
+#: How much of a request or response body a telemetry row keeps. It is applied
+#: when the row is written, which is what lets an accumulator feeding it stop
+#: at the same point instead of holding a whole stream in memory for a
+#: truncation that would discard it.
+_TELEMETRY_BODY_LIMIT = 500_000
+
 
 def normalize_usage(response: dict | str) -> dict[str, int | None]:
     """Normalize provider usage without estimating token counts."""
@@ -46,13 +53,14 @@ def normalize_usage(response: dict | str) -> dict[str, int | None]:
     return {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens}
 
 from otel_agent.provider_utils import (
-    AUTH_HEADERS,
     build_upstream_url,
     build_image_upstream_url,
     build_image_edit_upstream_url,
     build_request_headers,
+    build_responses_upstream_url,
     prefix_model_name,
     rewrite_upstream_model,
+    serves_only_responses,
 )
 
 
@@ -79,6 +87,33 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         telemetry.close()
 
     # ------------------------------------------------------------------
+    # Credential failures
+    # ------------------------------------------------------------------
+    @app.exception_handler(AuthError)
+    async def credential_error(request: Request, exc: AuthError) -> JSONResponse:
+        """Answer a subscription credential failure as what it is (R12).
+
+        The routes resolve a bearer before they forward anything, so an
+        AuthError used to leave the operation and reach the client as an
+        unclassified 500 — the same answer the client gets from a bug in this
+        gateway. It is neither: the gateway is fine and the upstream was never
+        asked. 503 with its own error type says which of the two it is, and the
+        subscription's status rides along so the diagnosis does not stop at
+        "something went wrong" (AE2).
+        """
+        error: dict[str, Any] = {
+            "message": str(exc),
+            "type": "credential_error",
+            "code": "credential_unavailable",
+        }
+        body: dict[str, Any] = {"error": error}
+        if exc.provider:
+            error["provider"] = exc.provider
+            body["credential"] = get_status(exc.provider)
+        logger.warning("Credential unavailable: %s", exc)
+        return JSONResponse(body, status_code=503)
+
+    # ------------------------------------------------------------------
     # OpenAI-compatible endpoint
     # ------------------------------------------------------------------
     @app.post("/v1/chat/completions", response_model=None)
@@ -98,6 +133,11 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         except ValueError as e:
             return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
 
+        # A Responses-only upstream cannot serve this shape at all. Say so at
+        # the client's own shape instead of forwarding and passing on a 404.
+        if serves_only_responses(provider):
+            return _responses_only_refusal(provider, request)
+
         # Prepare the upstream request body
         upstream_body = dict(body)
         upstream_body["model"] = rewrite_upstream_model(provider, upstream_model)
@@ -109,7 +149,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             upstream_body = openai_to_anthropic_request(upstream_body)
 
         url = build_upstream_url(provider)
-        headers = build_request_headers(provider)
+        headers = await build_request_headers(provider)
 
         start_time = time.monotonic()
         original_body = json.dumps(body)
@@ -150,6 +190,11 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         except ValueError as e:
             return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
 
+        # See the chat-completions route: a Responses-only upstream cannot
+        # serve the Anthropic shape either.
+        if serves_only_responses(provider):
+            return _responses_only_refusal(provider, request)
+
         upstream_body = dict(body)
         upstream_body["model"] = rewrite_upstream_model(provider, upstream_model)
 
@@ -159,7 +204,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             upstream_body = anthropic_to_openai_request(upstream_body)
 
         url = build_upstream_url(provider)
-        headers = build_request_headers(provider)
+        headers = await build_request_headers(provider)
 
         start_time = time.monotonic()
         original_body = json.dumps(body)
@@ -177,6 +222,92 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             client, url, headers, upstream_body,
             provider, telemetry, request, start_time,
             source_format="anthropic", target_format=provider.api_format,
+            request_body=original_body, log_body=log_body,
+        )
+
+    # ------------------------------------------------------------------
+    # Responses-native endpoint (pass-through, no protocol translation)
+    # ------------------------------------------------------------------
+    @app.post("/v1/responses", response_model=None)
+    async def responses(request: Request):
+        """Responses-native endpoint, passed straight through to the upstream.
+
+        No converter is installed, so the dialect's ``event:`` lines and blank
+        separators reach the client as they arrive. The gateway's whole
+        accommodation of this upstream is the normalization below.
+        """
+        body = await request.json()
+        model = body.get("model", "")
+
+        try:
+            provider_name, upstream_model = parse_model(model)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        try:
+            provider = resolve_provider(provider_name, config)
+        except ValueError as e:
+            return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
+
+        # The normalization below is written for this upstream, so the route is
+        # served only for a provider that declares a Responses surface.
+        if not serves_only_responses(provider):
+            return JSONResponse(
+                {"error": {"message": f"Provider '{provider.name}' does not serve the Responses API. Route to a provider that declares one, or use /v1/chat/completions.", "type": "invalid_request_error"}},
+                status_code=400,
+            )
+
+        # Continuation is deliberately not supported: the upstream rejects
+        # previous_response_id and keeps no server-side state. Stripping it
+        # would hand a client that depends on continuation a successful but
+        # contextless answer, so it is refused distinguishably instead.
+        if body.get("previous_response_id"):
+            return JSONResponse(
+                {"error": {"message": f"Provider '{provider.name}' is stateless: 'previous_response_id' is not supported. Send the whole conversation in 'input' instead.", "type": "invalid_request_error"}},
+                status_code=400,
+            )
+
+        upstream_body = dict(body)
+        upstream_body["model"] = rewrite_upstream_model(provider, upstream_model)
+        # store/include are overwritten whatever the client asked for — a
+        # default injected only when missing would forward a client's explicit
+        # store: true and leave the conversation on the owner's account.
+        upstream_body["stream"] = True
+        upstream_body["store"] = False
+        upstream_body["include"] = ["reasoning.encrypted_content"]
+        # Parameters this upstream rejects outright.
+        upstream_body.pop("max_output_tokens", None)
+        upstream_body.pop("temperature", None)
+
+        # No identity headers ride along: the upstream treats originator,
+        # User-Agent and ChatGPT-Account-ID as optional, and forwarding a
+        # client's own values would only invite impersonation.
+        url = build_responses_upstream_url(provider)
+        headers = await build_request_headers(provider)
+
+        start_time = time.monotonic()
+        original_body = json.dumps(body)
+        log_body = config.log_request_body
+
+        # The upstream accepts only streaming; which form the CLIENT gets is a
+        # separate question, and it follows the same convention as the other
+        # two routes (body.get("stream", False)) so that an omitted parameter
+        # means the same thing across the gateway. It also matches the
+        # Responses API itself, whose `stream` defaults to false — a client
+        # that omits it expects one JSON object, not SSE. A non-streaming
+        # client still gets its answer: the upstream stream is folded back
+        # into a single object (see _handle_responses_non_streaming).
+        if body.get("stream", False):
+            return await _handle_streaming(
+                client, url, headers, upstream_body,
+                provider, telemetry, request, start_time,
+                source_format="responses", target_format="responses",
+                request_body=original_body, log_body=log_body,
+            )
+
+        return await _handle_responses_non_streaming(
+            client, url, headers, upstream_body,
+            provider, telemetry, request, start_time,
             request_body=original_body, log_body=log_body,
         )
 
@@ -216,7 +347,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             upstream_body["model"] = upstream_model
 
         url = build_image_upstream_url(provider)
-        headers = build_request_headers(provider)
+        headers = await build_request_headers(provider)
         start_time = time.monotonic()
         original_body = json.dumps(body)
         log_body = config.log_request_body
@@ -282,7 +413,7 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
                     data[key] = val
 
         url = build_image_edit_upstream_url(provider)
-        headers = build_request_headers(provider)
+        headers = await build_request_headers(provider)
         # Remove Content-Type for multipart (httpx sets it with boundary)
         headers.pop("Content-Type", None)
         start_time = time.monotonic()
@@ -331,16 +462,37 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
             providers = {provider: providers[provider]}
 
         raw_models: dict[str, list] = {}
+        failures: dict[str, str] = {}
         for name, prov in providers.items():
             cached = model_cache.get(name)
             if cached is not None:
                 raw_models[name] = cached
             else:
-                fetched = await fetch_provider_models(client, prov)
-                model_cache.put(name, fetched)
+                fetched = await fetch_provider_models(client, prov, failures=failures)
+                # A credential failure is not cached: it would hold the empty
+                # list in place for a whole TTL after the operator re-adopts,
+                # which is the same silent absence in slower motion.
+                if name not in failures:
+                    model_cache.put(name, fetched)
                 raw_models[name] = fetched
 
-        return JSONResponse(aggregate_models(raw_models))
+        if provider is not None and provider in failures:
+            # The client asked for exactly this provider, so "no models" would
+            # be a wrong answer and a 200 would dress it up as a right one
+            # (specs/009-models-api allows a clear error instead).
+            return JSONResponse(
+                {
+                    "error": {
+                        "message": failures[provider],
+                        "type": "credential_error",
+                        "code": "credential_unavailable",
+                        "provider": provider,
+                    }
+                },
+                status_code=503,
+            )
+
+        return JSONResponse(aggregate_models(raw_models, failures))
 
     # ------------------------------------------------------------------
     # Health check
@@ -360,6 +512,24 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         register_legacy_index(app, Path(__file__).parent / "dashboard" / "index.html")
 
     return app
+
+
+def _responses_only_refusal(provider: Provider, request: Request) -> JSONResponse:
+    """Refuse a chat-shaped request to an upstream with only one shape.
+
+    A provider that declares the Responses surface alone cannot serve either
+    of the chat-shaped dialects. The client is told that at its own shape,
+    rather than being forwarded a 404 from the upstream it cannot read.
+    """
+    return JSONResponse(
+        {
+            "error": {
+                "message": f"Provider '{provider.name}' serves only the Responses API and is not available on {request.url.path}. POST to /v1/responses with model '{provider.name}/<model>' instead.",
+                "type": "invalid_request_error",
+            }
+        },
+        status_code=400,
+    )
 
 
 async def _handle_non_streaming(
@@ -443,6 +613,7 @@ async def _handle_streaming(
 
     async def stream_generator() -> AsyncIterator[bytes]:
         collected_chunks: list[str] = []
+        collected_chars = 0
         resp_headers: dict[str, str] = {}
         stream_status = 200
         last_valid_usage: dict | None = None
@@ -458,6 +629,14 @@ async def _handle_streaming(
                 content_type = resp.headers.get("content-type", "")
                 if resp.status_code >= 400 and "text/event-stream" not in content_type:
                     error_body = (await resp.aread()).decode("utf-8", errors="replace")
+                    if source_format == "responses":
+                        # A Responses client cannot read the bare data frame
+                        # below, so it would see an unparsable frame or a dead
+                        # stream instead of the upstream's rejection.
+                        yield _responses_error_frame(
+                            f"Upstream error {resp.status_code}: {_upstream_error_message(error_body)}"
+                        )
+                        return
                     try:
                         error_data = json.loads(error_body)
                         error_msg = json.dumps(error_data)
@@ -507,21 +686,36 @@ async def _handle_streaming(
                             for event in openai_to_anthropic.feed(chunk_data):
                                 yield event.encode()
 
-                        # Extract model name from first chunk
+                        # Extract model name from first chunk. Chat completions
+                        # carry it at the top level, Anthropic nests it in
+                        # `message`, the Responses API in `response`.
                         if model_name is None:
-                            model_name = chunk_data.get("model") or chunk_data.get("message", {}).get("model")
+                            for candidate in (chunk_data, chunk_data.get("message"), chunk_data.get("response")):
+                                if isinstance(candidate, dict) and candidate.get("model"):
+                                    model_name = candidate["model"]
+                                    break
 
-                        # Collect for telemetry
-                        collected_chunks.append(json.dumps(chunk_data))
-                        # T031: Extract usage from streaming chunks
-                        # Anthropic message_start nests usage inside message.usage
-                        chunk_usage = normalize_usage(chunk_data)
-                        nested_usage = normalize_usage(chunk_data.get("message", {}))
-                        # Merge: prefer non-None values from either source
-                        merged = {
-                            k: chunk_usage[k] if chunk_usage[k] is not None else nested_usage[k]
-                            for k in chunk_usage
-                        }
+                        # Collect for telemetry, and stop at the point the
+                        # row would keep: a stream can run for minutes and
+                        # carry the entire response, so accumulating all of it
+                        # would hold a second copy of the answer, per in-flight
+                        # request, purely to truncate it on the way in.
+                        if collected_chars < _TELEMETRY_BODY_LIMIT:
+                            chunk_text = json.dumps(chunk_data)
+                            collected_chunks.append(chunk_text)
+                            collected_chars += len(chunk_text)
+                        # T031: Extract usage from streaming chunks. Same three
+                        # places as the model name; prefer the first source that
+                        # has a value for each field.
+                        merged = normalize_usage(chunk_data)
+                        for nested in (chunk_data.get("message"), chunk_data.get("response")):
+                            if not isinstance(nested, dict):
+                                continue
+                            nested_usage = normalize_usage(nested)
+                            merged = {
+                                k: merged[k] if merged[k] is not None else nested_usage[k]
+                                for k in merged
+                            }
                         if any(v is not None for v in merged.values()):
                             if last_valid_usage is None:
                                 last_valid_usage = merged
@@ -545,12 +739,18 @@ async def _handle_streaming(
 
         except httpx.ConnectError as e:
             stream_status = 502
-            error_msg = json.dumps({"error": {"message": f"Connection failed: {e}", "type": "server_error"}})
-            yield f"data: {error_msg}\n\n".encode()
+            message = f"Connection failed: {e}"
+            if source_format == "responses":
+                yield _responses_error_frame(message)
+            else:
+                yield f"data: {json.dumps({'error': {'message': message, 'type': 'server_error'}})}\n\n".encode()
         except httpx.TimeoutException:
             stream_status = 504
-            error_msg = json.dumps({"error": {"message": "Timeout", "type": "server_error"}})
-            yield f"data: {error_msg}\n\n".encode()
+            message = "Timeout"
+            if source_format == "responses":
+                yield _responses_error_frame(message)
+            else:
+                yield f"data: {json.dumps({'error': {'message': message, 'type': 'server_error'}})}\n\n".encode()
         finally:
             latency_ms = (time.monotonic() - start_time) * 1000
             resp_body: dict = {"streamed": True, "preview": "".join(collected_chunks), "model": model_name}
@@ -579,6 +779,142 @@ async def _handle_streaming(
 
     media_type = "text/event-stream"
     return StreamingResponse(stream_generator(), media_type=media_type)
+
+
+async def _handle_responses_non_streaming(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    body: dict,
+    provider: Provider,
+    telemetry: TelemetryLogger,
+    request: Request,
+    start_time: float,
+    request_body: str = "",
+    log_body: bool = True,
+) -> JSONResponse:
+    """Serve a non-streaming Responses client from a streaming-only upstream.
+
+    KTD5: deliberately not ``_handle_non_streaming``. That one posts once and
+    forwards whatever comes back, which for this upstream is a 400 reading
+    ``Stream must be set to true``. The upstream is asked in the only form it
+    accepts, and the stream is folded back into the single object the client
+    asked for, which never learns where it came from.
+
+    The body handed back is the envelope the upstream itself put in its
+    terminal ``response.completed`` event — taken, not reconstructed. A
+    non-streaming client has no ``event: error`` frame to read, so every
+    failure below is a non-2xx with a diagnosable body rather than a stream
+    that ends early behind an empty 200.
+    """
+    resp_headers: dict[str, str] = {}
+    status_code = 200
+    failure: str | None = None
+    final_response: dict | None = None
+
+    try:
+        async with client.stream("POST", url, headers=headers, json=body) as resp:
+            resp_headers = dict(resp.headers)
+            status_code = resp.status_code
+
+            if resp.status_code >= 400:
+                # A rejection that never became a stream (the shape this
+                # upstream uses for an unsupported parameter, say).
+                raw = (await resp.aread()).decode("utf-8", errors="replace")
+                failure = f"Upstream error {resp.status_code}: {_upstream_error_message(raw)}"
+            else:
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        event = json.loads(line[6:])
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    if event.get("type") == "error":
+                        # Raised mid-answer, after the stream had opened.
+                        status_code = 502
+                        failure = str(event.get("message") or "upstream error event")
+                        break
+                    if event.get("type") == "response.completed":
+                        envelope = event.get("response")
+                        if isinstance(envelope, dict):
+                            final_response = envelope
+    except httpx.ConnectError as e:
+        status_code = 502
+        failure = f"Connection failed to provider '{provider.name}': {e}"
+    except httpx.TimeoutException:
+        status_code = 504
+        failure = f"Timeout connecting to provider '{provider.name}'"
+
+    latency_ms = (time.monotonic() - start_time) * 1000
+
+    if failure is None and final_response is None:
+        # The stream ended without ever naming the finished response, so the
+        # answer it was carrying is truncated or absent. It must not be
+        # reported as a complete one.
+        status_code = 502
+        failure = (
+            f"Upstream stream ended without a response.completed event for "
+            f"provider '{provider.name}'"
+        )
+
+    if failure is not None:
+        error_body = {
+            "error": {
+                "message": failure,
+                "type": "server_error" if status_code >= 500 else "invalid_request_error",
+            }
+        }
+        _log_telemetry(
+            telemetry, request, status_code, error_body, latency_ms, provider,
+            request_body=request_body, resp_headers=resp_headers, log_body=log_body,
+            source_format="responses",
+        )
+        return JSONResponse(error_body, status_code=status_code)
+
+    _log_telemetry(
+        telemetry, request, status_code, final_response, latency_ms, provider,
+        request_body=request_body, resp_headers=resp_headers, log_body=log_body,
+        source_format="responses",
+    )
+    return JSONResponse(final_response, status_code=status_code)
+
+
+def _responses_error_frame(message: str) -> bytes:
+    """Frame an upstream failure the way a Responses client expects it.
+
+    The shared handler's bare ``data:`` frame carries no ``event:`` line, so a
+    Responses-native client cannot read a rejection out of it.
+    """
+    payload = {
+        "type": "error",
+        "code": None,
+        "message": message,
+        "param": None,
+        # A single frame, and nothing preceded it in this stream.
+        "sequence_number": 0,
+    }
+    return f"event: error\ndata: {json.dumps(payload)}\n\n".encode()
+
+
+def _upstream_error_message(body: str) -> str:
+    """Pull the human-readable half out of an upstream error body."""
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return body
+    if isinstance(parsed, dict):
+        detail = parsed.get("detail")
+        if isinstance(detail, str) and detail:
+            return detail
+        error = parsed.get("error")
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            return error["message"]
+        if isinstance(error, str) and error:
+            return error
+    return body
 
 
 def _log_telemetry(
@@ -618,7 +954,7 @@ def _log_telemetry(
             model_name = model_name or None
         else:
             model_name = prefix_model_name(model_name or None, provider.name)
-        stored_body = request_body[:500_000] if log_body else ""
+        stored_body = request_body[:_TELEMETRY_BODY_LIMIT] if log_body else ""
         stored_headers = redact_sensitive_headers(resp_headers) if resp_headers else {}
         stored_request_headers = dict(request.headers)
         if extra_headers:
@@ -630,7 +966,7 @@ def _log_telemetry(
             request_body=stored_body,
             response_status=status_code,
             response_headers=stored_headers,
-            response_body=body_str[:500_000],
+            response_body=body_str[:_TELEMETRY_BODY_LIMIT],
             latency_ms=latency_ms,
             upstream=provider.base_url,
             model_name=model_name,

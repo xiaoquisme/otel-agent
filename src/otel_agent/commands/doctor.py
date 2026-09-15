@@ -2,9 +2,56 @@
 
 import socket
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from otel_agent.config import Config
+
+
+def _epoch_of(iso: str) -> float | None:
+    """Read one of the ISO-8601 timestamps either store records, or None.
+
+    Tolerant on purpose: these timestamps come from a file this gateway does
+    not own, and an unreadable one is a reason to say nothing, not to fail
+    the doctor.
+    """
+    text = (iso or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def _warn_on_a_second_writer(provider: str, status: dict) -> None:
+    """Report a sibling CLI that is still refreshing the same grant (R3).
+
+    Adoption is meant to leave this gateway the only writer. On a single-use
+    rotating chain a second writer that presents a spent refresh token takes
+    the whole family down for both of them, so an owner store whose
+    ``last_refresh`` is newer than ours is that failure already forming rather
+    than a hint to be skipped. Most machines have no such store, which is why
+    the reader yields nothing rather than an error.
+    """
+    from otel_agent.auth_vault import _iso_utc, read_owner_last_refresh
+    from otel_agent.commands.auth_cmd import grant_sources
+
+    gateway_at = _epoch_of(str(status.get("last_refresh") or ""))
+    if gateway_at is None:
+        return
+    for source in grant_sources(provider):
+        owner_iso = read_owner_last_refresh(source)
+        owner_at = _epoch_of(owner_iso)
+        if owner_at is None or owner_at <= gateway_at:
+            continue
+        print(
+            f"    → the {source.label} CLI refreshed this grant at {owner_iso} — "
+            f"later than this gateway ({_iso_utc(gateway_at)}). A second writer is "
+            f"still active on this machine, and a refresh that loses the race "
+            f"revokes the whole token family for both of them. Sign the other CLI "
+            f"out, then re-adopt: otel-agent auth import-codex"
+        )
 
 
 def handle_doctor(args) -> None:
@@ -69,12 +116,42 @@ def handle_doctor(args) -> None:
         print("  Config missing  ⚠️")
         print("    → Run: otel-agent init")
 
-    from otel_agent.auth_vault import get_status
+    from otel_agent.auth_vault import _iso_utc, get_status
+    from otel_agent.commands.auth_cmd import CODEX_PROVIDER
+
     xai = get_status("xai")
     if xai["logged_in"]:
         print(f"  xAI OAuth  ✅ logged in ({xai.get('imported_from') or 'vault'})")
     else:
         print("  xAI OAuth  — not logged in (otel-agent auth login)")
+
+    # The subscription the gateway holds itself. Like the row above, a missing
+    # login is a warning and never sets all_ok: a gateway that has not adopted
+    # the subscription yet is a gateway, not a broken installation.
+    codex = get_status(CODEX_PROVIDER)
+    if codex["logged_in"]:
+        print(f"  Codex OAuth  ✅ logged in ({codex.get('imported_from') or 'vault'})")
+        if codex.get("plan"):
+            print(f"    plan: {codex['plan']}")
+        expires_at = codex.get("expires_at")
+        if isinstance(expires_at, (int, float)) and expires_at > 0:
+            print(f"    expires: {_iso_utc(expires_at)}")
+        last = codex.get("last_result")
+        if isinstance(last, dict):
+            if last.get("ok"):
+                state = "ok"
+            else:
+                state = f"failed: {last.get('detail') or 'no reason recorded'}"
+            at = last.get("at")
+            when = _iso_utc(at) if isinstance(at, (int, float)) else "unknown"
+            print(f"    last refresh: {state} ({when})")
+        else:
+            print("    last refresh: never attempted by this gateway")
+        if not codex["available"]:
+            print("    → left mid-refresh by an earlier process; re-adopt it")
+        _warn_on_a_second_writer(CODEX_PROVIDER, codex)
+    else:
+        print("  Codex OAuth  — not logged in (otel-agent auth import-codex)")
 
     # Port
     port = getattr(args, 'port', 45638)
