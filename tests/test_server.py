@@ -1406,11 +1406,19 @@ class _RecordingLineStreamMethod:
         return self._stream
 
 
-def _responses_lines(*, model: str = "gpt-5-codex", usage: dict | None = None) -> list[str]:
-    """A plain-text Responses turn — the 9 event types the live probe saw."""
+def _responses_lines(
+    *, model: str = "gpt-5-codex", usage: dict | None = None, extra: dict | None = None,
+) -> list[str]:
+    """A plain-text Responses turn — the 9 event types the live probe saw.
+
+    ``extra`` adds fields to the terminal envelope (``object``, ``output``, …)
+    for callers that assert on the shape of the assembled response.
+    """
     final_response: dict = {"id": "resp_1", "model": model, "status": "completed"}
     if usage is not None:
         final_response["usage"] = usage
+    if extra is not None:
+        final_response.update(extra)
     events: list[tuple[str, dict]] = [
         ("response.created", {"type": "response.created", "sequence_number": 0, "response": {"id": "resp_1", "model": model, "status": "in_progress"}}),
         ("response.in_progress", {"type": "response.in_progress", "sequence_number": 1, "response": {"id": "resp_1", "model": model, "status": "in_progress"}}),
@@ -1513,7 +1521,7 @@ async def test_responses_route_preserves_event_lines_and_blank_separators(tmp_pa
             async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 resp = await client.post(
                     "/v1/responses",
-                    json={"model": "codex/gpt-5-codex", "input": "hi"},
+                    json={"model": "codex/gpt-5-codex", "input": "hi", "stream": True},
                 )
                 body = resp.text
 
@@ -1563,7 +1571,7 @@ async def test_responses_route_does_not_synthesize_done(tmp_path, monkeypatch):
             async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 resp = await client.post(
                     "/v1/responses",
-                    json={"model": "codex/gpt-5-codex", "input": "hi"},
+                    json={"model": "codex/gpt-5-codex", "input": "hi", "stream": True},
                 )
                 body = resp.text
 
@@ -1596,7 +1604,7 @@ async def test_responses_route_upstream_rejection_becomes_an_error_event(tmp_pat
             async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 resp = await client.post(
                     "/v1/responses",
-                    json={"model": "codex/gpt-5-codex", "input": "hi"},
+                    json={"model": "codex/gpt-5-codex", "input": "hi", "stream": True},
                 )
                 body = resp.text
 
@@ -1630,7 +1638,7 @@ async def test_responses_telemetry_uses_responses_usage_and_model(tmp_path, monk
             async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 resp = await client.post(
                     "/v1/responses",
-                    json={"model": "codex/gpt-5-codex", "input": "hi"},
+                    json={"model": "codex/gpt-5-codex", "input": "hi", "stream": True},
                 )
                 await resp.aread()
 
@@ -1676,7 +1684,7 @@ async def test_responses_route_connection_failure_is_an_error_event(tmp_path, mo
             async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 resp = await client.post(
                     "/v1/responses",
-                    json={"model": "codex/gpt-5-codex", "input": "hi"},
+                    json={"model": "codex/gpt-5-codex", "input": "hi", "stream": True},
                 )
                 body = resp.text
 
@@ -1718,7 +1726,7 @@ async def test_responses_route_passes_unknown_event_types_untouched(tmp_path, mo
             async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
                 resp = await client.post(
                     "/v1/responses",
-                    json={"model": "codex/gpt-5-codex", "input": "weather in SF?"},
+                    json={"model": "codex/gpt-5-codex", "input": "weather in SF?", "stream": True},
                 )
                 body = resp.text
 
@@ -1809,3 +1817,293 @@ def test_responses_previous_response_id_is_rejected_as_stateless(tmp_path):
     assert "stateless" in body["error"]["message"].lower()
     assert "input" in body["error"]["message"]
     assert not stream.called, "the parameter must be refused, not forwarded"
+
+
+# ------------------------------------------------------------------
+# U5: aggregation for a non-streaming Responses client
+# ------------------------------------------------------------------
+#
+# The upstream serves this dialect as a stream and nothing else. A client that
+# asks for a single response is served by asking upstream in the only form it
+# accepts and folding the stream back into the one object the client asked for.
+# KTD5: this is its own handler, not `_handle_non_streaming` — the latter posts
+# once and would forward the upstream's `{"detail": "Stream must be set to
+# true"}` straight back to the client.
+
+
+class _StreamOnlyLineStreamMethod:
+    """A line-stream mock that models the real upstream's one hard rule.
+
+    A request that does not set ``stream: true`` gets the same 400 the live
+    upstream returns, so a gateway that ever stopped asking in streaming form
+    fails these tests instead of quietly degrading.
+    """
+
+    def __init__(self, lines: list[str], seen: dict | None = None) -> None:
+        self._lines = lines
+        self.seen: dict = seen if seen is not None else {}
+
+    def __call__(self, *args, **kwargs):
+        body = kwargs.get("json") or {}
+        self.seen["json"] = body
+        self.seen["url"] = args[1] if len(args) >= 2 else kwargs.get("url")
+        self.seen["headers"] = kwargs.get("headers")
+        if body.get("stream") is not True:
+            return _FakeLineStream(
+                [],
+                status_code=400,
+                content_type="application/json",
+                body=json.dumps({"detail": "Stream must be set to true"}).encode(),
+            )
+        return _FakeLineStream(self._lines)
+
+
+def _prose_envelope() -> dict:
+    """The terminal envelope of a plain-text turn, as the live probe saw it."""
+    return {
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Hello"}],
+            }
+        ],
+    }
+
+
+def _terminal_envelope(lines: list[str]) -> dict:
+    """The `response` object carried by the fixture's `response.completed`."""
+    idx = lines.index("event: response.completed")
+    return json.loads(lines[idx + 1][len("data: "):])["response"]
+
+
+def _responses_app(td: str, tmp_path, monkeypatch):
+    _seed_vault(tmp_path, monkeypatch)
+    config = _make_vault_config(td)
+    telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+    return create_app(config, telemetry), telemetry
+
+
+async def _post_responses(app, payload: dict):
+    from httpx import ASGITransport
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post("/v1/responses", json=payload)
+        await resp.aread()
+        return resp
+
+
+@pytest.mark.anyio
+async def test_responses_non_streaming_request_is_aggregated_from_the_upstream_stream(tmp_path, monkeypatch):
+    """AE1/R9: the client asks for one response and never learns that the
+    upstream only streams — the gateway asks in streaming form and hands back
+    the single object the client asked for."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        usage = {"input_tokens": 12, "output_tokens": 1, "total_tokens": 13}
+        lines = _responses_lines(usage=usage, extra=_prose_envelope())
+        mock_stream = _StreamOnlyLineStreamMethod(lines)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        # AE1's Given, negated: the gateway asked in the only form the upstream
+        # accepts, so the upstream's "Stream must be set to true" 400 never
+        # happens and the client's own `stream: false` is not forwarded.
+        assert mock_stream.seen["json"]["stream"] is True
+        assert mock_stream.seen["url"] == "https://chatgpt.com/backend-api/codex/responses"
+
+        assert resp.status_code == 200, resp.text
+        assert resp.headers["content-type"].startswith("application/json"), resp.headers["content-type"]
+
+        # The aggregated body is the envelope the upstream itself sent in the
+        # terminal event — taken, not reconstructed.
+        assert resp.json() == _terminal_envelope(lines)
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_body_has_the_responses_dialect_shape(tmp_path, monkeypatch):
+    """R9: what comes back is a Responses response object, not a chat body and
+    not a wrapper around the event stream."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        usage = {"input_tokens": 12, "output_tokens": 1, "total_tokens": 13}
+        lines = _responses_lines(usage=usage, extra=_prose_envelope())
+
+        with patch("httpx.AsyncClient.stream", _StreamOnlyLineStreamMethod(lines)):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        body = resp.json()
+        assert body["object"] == "response"
+        assert body["id"] == "resp_1"
+        assert body["model"] == "gpt-5-codex"
+        assert body["status"] == "completed"
+        assert body["usage"] == usage
+        assert body["output"][0]["content"][0]["text"] == "Hello"
+
+        # The client's dialect has no `choices`, and nothing was wrapped around
+        # the response object to carry the events that produced it.
+        assert "choices" not in body
+        assert "events" not in body
+        assert "streamed" not in body
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_stream_that_ends_early_is_a_diagnosable_error(tmp_path, monkeypatch):
+    """R9: a stream that dies mid-answer must not reach a non-streaming client
+    as an empty 200 — there is no `event: error` frame for it to read."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        # Every event but the terminal one: the upstream stopped mid-turn.
+        truncated = _responses_lines()[:-3]
+        with patch("httpx.AsyncClient.stream", _StreamOnlyLineStreamMethod(truncated)):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        assert resp.status_code >= 400, resp.text
+        body = resp.json()
+        assert body["error"]["message"], "the client was handed an empty error"
+        assert "response.completed" in body["error"]["message"]
+        assert "codex" in body["error"]["message"]
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_mid_stream_error_event_is_a_diagnosable_error(tmp_path, monkeypatch):
+    """R9: an error raised after the stream opened is reported as an error, not
+    discarded in favour of the partial answer that preceded it."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        error_frame = [
+            "event: error",
+            'data: {"type": "error", "code": null, "message": "upstream gave up mid-answer", "param": null, "sequence_number": 4}',
+            "",
+        ]
+        with patch("httpx.AsyncClient.stream", _StreamOnlyLineStreamMethod(_responses_lines()[:6] + error_frame)):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        assert resp.status_code >= 400, resp.text
+        assert "upstream gave up mid-answer" in resp.json()["error"]["message"]
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_upstream_rejection_keeps_its_status_and_reason(tmp_path, monkeypatch):
+    """R9: a rejection the upstream never turned into a stream reaches the
+    client as a non-2xx carrying the upstream's own reason."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        mock_stream = _RecordingLineStreamMethod(
+            _FakeLineStream(
+                [],
+                status_code=400,
+                content_type="application/json",
+                body=json.dumps({"detail": "Unsupported parameter: temperature"}).encode(),
+            ),
+            {},
+        )
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        assert resp.status_code == 400, resp.text
+        body = resp.json()
+        assert body["error"]["message"]
+        assert "Unsupported parameter: temperature" in body["error"]["message"]
+        assert body["error"]["type"] == "invalid_request_error"
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_connection_failure_is_not_an_empty_200(tmp_path, monkeypatch):
+    """R9: failing before the upstream answers is a gateway-level error."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        with patch("httpx.AsyncClient.stream", _FailingStreamMethod(httpx.ConnectError("boom"))):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+
+        assert resp.status_code == 502, resp.text
+        body = resp.json()
+        assert "Connection failed" in body["error"]["message"]
+        assert "boom" in body["error"]["message"]
+
+
+@pytest.mark.anyio
+async def test_responses_aggregated_request_is_logged(tmp_path, monkeypatch):
+    """The dashboard sees the same request a streaming client produces: the
+    aggregated answer, its usage, and the Responses format."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        usage = {"input_tokens": 12, "output_tokens": 1, "total_tokens": 13}
+        lines = _responses_lines(usage=usage, extra=_prose_envelope())
+
+        with patch("httpx.AsyncClient.stream", _StreamOnlyLineStreamMethod(lines)):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": False}
+            )
+
+        telemetry.close()
+        assert resp.status_code == 200, resp.text
+
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT model_name, input_tokens, output_tokens, total_tokens, format, response_body FROM requests"
+        ).fetchone()
+        conn.close()
+
+        assert row is not None, "the aggregated request was not logged"
+        assert row[0] == "codex/gpt-5-codex"
+        assert (row[1], row[2], row[3]) == (12, 1, 13)
+        assert row[4] == "responses"
+        logged = json.loads(row[5])
+        assert logged.get("streamed") is not True
+        assert logged["output"][0]["content"][0]["text"] == "Hello"
+
+
+@pytest.mark.anyio
+async def test_responses_streaming_client_still_gets_a_stream(tmp_path, monkeypatch):
+    """Streaming is this gateway's default form, so a client that asks for it —
+    or says nothing — is not aggregated."""
+    with tempfile.TemporaryDirectory() as td:
+        app, telemetry = _responses_app(td, tmp_path, monkeypatch)
+
+        lines = _responses_lines()
+        mock_stream = _StreamOnlyLineStreamMethod(lines)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            resp = await _post_responses(
+                app, {"model": "codex/gpt-5-codex", "input": "hi", "stream": True}
+            )
+
+        telemetry.close()
+
+        assert resp.headers["content-type"].startswith("text/event-stream"), resp.headers["content-type"]
+        assert "event: response.completed" in resp.text

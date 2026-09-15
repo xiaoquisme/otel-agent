@@ -262,13 +262,25 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         original_body = json.dumps(body)
         log_body = config.log_request_body
 
-        # The upstream accepts only streaming, so this route does too. The
-        # non-streaming handler serves a client that asked for a single
-        # response by aggregating this stream.
-        return await _handle_streaming(
+        # The upstream accepts only streaming; which form the CLIENT gets is a
+        # separate question, and it follows the same convention as the other
+        # two routes (body.get("stream", False)) so that an omitted parameter
+        # means the same thing across the gateway. It also matches the
+        # Responses API itself, whose `stream` defaults to false — a client
+        # that omits it expects one JSON object, not SSE. A non-streaming
+        # client still gets its answer: the upstream stream is folded back
+        # into a single object (see _handle_responses_non_streaming).
+        if body.get("stream", False):
+            return await _handle_streaming(
+                client, url, headers, upstream_body,
+                provider, telemetry, request, start_time,
+                source_format="responses", target_format="responses",
+                request_body=original_body, log_body=log_body,
+            )
+
+        return await _handle_responses_non_streaming(
             client, url, headers, upstream_body,
             provider, telemetry, request, start_time,
-            source_format="responses", target_format="responses",
             request_body=original_body, log_body=log_body,
         )
 
@@ -693,6 +705,107 @@ async def _handle_streaming(
 
     media_type = "text/event-stream"
     return StreamingResponse(stream_generator(), media_type=media_type)
+
+
+async def _handle_responses_non_streaming(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    body: dict,
+    provider: Provider,
+    telemetry: TelemetryLogger,
+    request: Request,
+    start_time: float,
+    request_body: str = "",
+    log_body: bool = True,
+) -> JSONResponse:
+    """Serve a non-streaming Responses client from a streaming-only upstream.
+
+    KTD5: deliberately not ``_handle_non_streaming``. That one posts once and
+    forwards whatever comes back, which for this upstream is a 400 reading
+    ``Stream must be set to true``. The upstream is asked in the only form it
+    accepts, and the stream is folded back into the single object the client
+    asked for, which never learns where it came from.
+
+    The body handed back is the envelope the upstream itself put in its
+    terminal ``response.completed`` event — taken, not reconstructed. A
+    non-streaming client has no ``event: error`` frame to read, so every
+    failure below is a non-2xx with a diagnosable body rather than a stream
+    that ends early behind an empty 200.
+    """
+    resp_headers: dict[str, str] = {}
+    status_code = 200
+    failure: str | None = None
+    final_response: dict | None = None
+
+    try:
+        async with client.stream("POST", url, headers=headers, json=body) as resp:
+            resp_headers = dict(resp.headers)
+            status_code = resp.status_code
+
+            if resp.status_code >= 400:
+                # A rejection that never became a stream (the shape this
+                # upstream uses for an unsupported parameter, say).
+                raw = (await resp.aread()).decode("utf-8", errors="replace")
+                failure = f"Upstream error {resp.status_code}: {_upstream_error_message(raw)}"
+            else:
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    try:
+                        event = json.loads(line[6:])
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    if not isinstance(event, dict):
+                        continue
+                    if event.get("type") == "error":
+                        # Raised mid-answer, after the stream had opened.
+                        status_code = 502
+                        failure = str(event.get("message") or "upstream error event")
+                        break
+                    if event.get("type") == "response.completed":
+                        envelope = event.get("response")
+                        if isinstance(envelope, dict):
+                            final_response = envelope
+    except httpx.ConnectError as e:
+        status_code = 502
+        failure = f"Connection failed to provider '{provider.name}': {e}"
+    except httpx.TimeoutException:
+        status_code = 504
+        failure = f"Timeout connecting to provider '{provider.name}'"
+
+    latency_ms = (time.monotonic() - start_time) * 1000
+
+    if failure is None and final_response is None:
+        # The stream ended without ever naming the finished response, so the
+        # answer it was carrying is truncated or absent. It must not be
+        # reported as a complete one.
+        status_code = 502
+        failure = (
+            f"Upstream stream ended without a response.completed event for "
+            f"provider '{provider.name}'"
+        )
+
+    if failure is not None:
+        error_body = {
+            "error": {
+                "message": failure,
+                "type": "server_error" if status_code >= 500 else "invalid_request_error",
+            }
+        }
+        _log_telemetry(
+            telemetry, request, status_code, error_body, latency_ms, provider,
+            request_body=request_body, resp_headers=resp_headers, log_body=log_body,
+            source_format="responses",
+        )
+        return JSONResponse(error_body, status_code=status_code)
+
+    _log_telemetry(
+        telemetry, request, status_code, final_response, latency_ms, provider,
+        request_body=request_body, resp_headers=resp_headers, log_body=log_body,
+        source_format="responses",
+    )
+    return JSONResponse(final_response, status_code=status_code)
 
 
 def _responses_error_frame(message: str) -> bytes:
