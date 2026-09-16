@@ -1,11 +1,16 @@
 """otel-agent configuration — provider registry with hot-reload."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import yaml
+
+from otel_agent.cli_models import MODEL_SOURCES
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_CONFIG = """\\
@@ -103,6 +108,91 @@ class Provider:
     api_format: str = "openai"
     auth: str = ""
 
+    models: tuple[str, ...] = ()
+    """Model ids this provider offers, declared by the operator.
+
+    Empty — the default — means "not declared", and the provider's catalog is
+    discovered from its upstream as before. A non-empty tuple *is* the
+    catalog: it is listed without calling upstream, which is what an upstream
+    that publishes none (the Codex subscription endpoint) needs. It is never
+    guessed or defaulted to a built-in set — an undeclared provider stays
+    undeclared rather than acquiring a list this code invented.
+    """
+
+    models_from: str = ""
+    """Name of a declared source to read this provider's catalog from.
+
+    Empty — the default — discovers the catalog from the upstream's
+    ``GET /models``, as before. A declared source reads it from a vendor CLI
+    instead, for an upstream that publishes no catalog of its own: the Codex
+    subscription endpoint answers ``{"models": []}`` even with a valid
+    credential, while the installed CLI knows the real list. The name is
+    looked up in ``cli_models.MODEL_SOURCES`` — a vendor is named there and
+    nowhere else, so this stays a declaration rather than a special case.
+
+    An unknown or unusable name is dropped at load (see
+    ``declared_model_source``) and the provider keeps the upstream behaviour.
+    """
+
+
+def declared_model_source(value: Any) -> str:
+    """Normalize a provider row's ``models_from`` into a declared source name.
+
+    Like ``declared_model_ids``, this is operator-authored YAML and a bad value
+    must degrade rather than raise: a malformed ``base_url`` makes a row
+    unroutable, but a mistyped ``models_from`` only costs the operator the
+    declaration, and taking the gateway down over it would be the worse trade.
+    So an unknown source, a blank one, or one that is not a string at all
+    degrades to "" — the provider's catalog is discovered from its upstream,
+    exactly as it was before the field existed.
+    """
+    if value is None:
+        return ""
+    name = str(value).strip()
+    if not name:
+        return ""
+    if name not in MODEL_SOURCES:
+        logger.warning(
+            "Ignoring provider 'models_from': unknown source %r. Declared sources: %s",
+            value, ", ".join(repr(s) for s in sorted(MODEL_SOURCES)) or "none",
+        )
+        return ""
+    return name
+
+
+def declared_model_ids(value: Any) -> tuple[str, ...]:
+    """Normalize a provider row's ``models`` value into a tuple of ids.
+
+    The value is operator-authored YAML, so a malformed one must degrade
+    rather than raise: a bad ``base_url`` makes the row unroutable, but a bad
+    ``models`` only costs the operator the declaration, and taking the whole
+    gateway down over it would be a worse trade. A bare string is read as a
+    one-entry declaration (``models: gpt-5.6-sol`` is plain YAML shorthand,
+    not a typo); entries that are not usable ids are dropped with a warning;
+    a value that is neither a string nor a list degrades to "not declared",
+    leaving the provider exactly as it behaves without the field.
+    """
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        if value is not None:
+            logger.warning(
+                "Ignoring provider 'models': expected a list of model ids, got %r", value
+            )
+        return ()
+
+    ids: dict[str, None] = {}
+    for entry in value:
+        if not isinstance(entry, str):
+            logger.warning("Ignoring model id %r: not a string", entry)
+            continue
+        model_id = entry.strip()
+        if not model_id:
+            logger.warning("Ignoring an empty model id in provider 'models'")
+            continue
+        ids[model_id] = None  # insertion-ordered, so this de-duplicates
+    return tuple(ids)
+
 
 class Config:
     """Loads and hot-reloads ~/.otel-agent/config.yaml.
@@ -150,6 +240,8 @@ class Config:
                 api_key=str(item.get("api_key", "")),
                 api_format=str(item.get("api_format", "openai")),
                 auth=str(item.get("auth", "")).strip(),
+                models=declared_model_ids(item.get("models")),
+                models_from=declared_model_source(item.get("models_from")),
             )
 
         self._providers = providers

@@ -68,11 +68,44 @@ async def fetch_provider_models(
     or is unreachable. Loopback Cursor providers use `agent --list-models`
     so clients never see the sidecar's stale hardcoded catalog.
 
+    A provider that declares its ``models`` is listed from that declaration:
+    no upstream call, and no bearer resolved. That is the only answer for an
+    upstream which publishes no catalog at all (the Codex subscription
+    endpoint answers ``{"models": []}`` even with a valid credential), and it
+    also means the listing survives a credential this gateway cannot resolve
+    — which is why the declaration is checked before anything that needs one.
+
+    A provider whose ``models_from`` names a catalog source is listed from
+    that source's CLI instead, again with no bearer resolved. It is checked
+    second, after the declaration and before the upstream fetch, so both
+    declared paths sit above the untouched Cursor name-branch below and above
+    every path that needs a credential or a network call. A source that is
+    undeclared, or whose CLI cannot be read, yields None and falls through to
+    the upstream path unchanged rather than raising into the request.
+
     *failures* — when given, a credential failure is recorded in it as
     ``{provider_name: message}``. The empty list alone cannot carry that: it is
     exactly what a provider with no models returns, so a caller that has to
     tell the operator which provider is broken needs the distinction (KTD6).
     """
+    if provider.models:
+        # Ids are stored unprefixed here and prefixed with the provider name
+        # by aggregate_models, as every other source in this module does.
+        return [
+            {"id": model_id, "object": "model", "owned_by": provider.name, "created": 0}
+            for model_id in provider.models
+        ]
+
+    if provider.models_from:
+        from otel_agent.cli_models import read_cli_models
+
+        ids = read_cli_models(provider.models_from)
+        if ids is not None:
+            return [
+                {"id": model_id, "object": "model", "owned_by": provider.name, "created": 0}
+                for model_id in ids
+            ]
+
     from urllib.parse import urlparse
 
     from otel_agent.auth_vault import AuthError

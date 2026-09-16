@@ -135,6 +135,39 @@ Each provider needs:
 - `api_key`: authentication key (omit when using `auth: xai-oauth`)
 - `api_format`: `openai` or `anthropic` (default: `openai`)
 - `auth`: optional. Use `xai-oauth` for SuperGrok (no API key)
+- `models`: optional. Declares the models this provider serves, so `/v1/models` lists them without calling upstream
+- `models_from`: optional. Names a catalog source to read the models from instead, e.g. `codex-cli`
+
+### Declared models
+
+An upstream that publishes no catalog can be declared on the provider row instead. The Codex subscription endpoint returns an empty list even with a valid credential, so without a declaration a `codex` provider contributes no models at all:
+
+```yaml
+providers:
+  - name: codex
+    base_url: https://chatgpt.com/backend-api/codex
+    auth: codex-oauth
+    api_format: openai
+    models:
+      - gpt-5.6-sol
+```
+
+A declared id is called as `codex/gpt-5.6-sol`, like any other model, and is listed without a credential being resolved. Omit the field and the provider is discovered from its upstream as before — `otel-agent` never assumes a model list of its own.
+
+### Models from a vendor CLI
+
+The Codex subscription endpoint publishes no catalog — it answers `{"models": []}` even with a valid credential — but the installed `codex` CLI knows the real list (`codex debug models`). Name that source and the catalog is read from it every time, so there is still no model list in this repo:
+
+```yaml
+providers:
+  - name: codex
+    base_url: https://chatgpt.com/backend-api/codex
+    auth: codex-oauth
+    api_format: openai
+    models_from: codex-cli
+```
+
+`codex/gpt-6-astra` and the rest are then discoverable from `GET /v1/models`, and are listed without resolving a credential. Requires the `codex` CLI on `PATH`; if it is missing, exits non-zero, or prints something other than the catalog, the provider falls back to its upstream exactly as if the field were absent. An unrecognized source name is ignored at load rather than failing the gateway.
 
 ### SuperGrok / xAI
 

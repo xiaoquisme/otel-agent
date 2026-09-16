@@ -2139,6 +2139,15 @@ class _ModelsResponse:
         return {"data": [{"id": "gpt-4o", "object": "model"}]}
 
 
+class _CliResult:
+    """What subprocess.run hands back, without a subprocess."""
+
+    def __init__(self, stdout: str = "", returncode: int = 0, stderr: str = ""):
+        self.stdout = stdout
+        self.returncode = returncode
+        self.stderr = stderr
+
+
 def _patch_models_get(monkeypatch, seen: dict) -> None:
     """Serve the plain provider's model list, and never let a call reach a
     provider whose credential the gateway does not have."""
@@ -2205,6 +2214,93 @@ async def test_models_route_for_a_broken_provider_is_an_explicit_error(tmp_path,
     assert resp.json()["error"]["type"] == "credential_error"
     assert "codex" in resp.json()["error"]["message"]
     assert seen == {}
+
+
+@pytest.mark.anyio
+async def test_models_route_lists_declared_models_without_a_credential(tmp_path, monkeypatch):
+    """A provider that declares its models is listed from the declaration: the
+    upstream is never called, and a broken credential is not an error here
+    because no credential was needed to answer."""
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(tmp_path / "absent.json"))
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "config.yaml"
+        config_path.write_text(
+            "providers:\n"
+            "  - name: openai\n"
+            "    base_url: https://api.openai.com/v1\n"
+            "    api_key: sk-plain\n"
+            "    api_format: openai\n"
+            "  - name: codex\n"
+            "    base_url: https://chatgpt.com/backend-api/codex\n"
+            "    auth: codex-oauth\n"
+            "    api_format: openai\n"
+            "    models:\n"
+            "      - gpt-5.6-sol\n"
+        )
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(Config(config_path), telemetry)
+        seen: dict = {}
+        # _patch_models_get fails the test on any call to chatgpt.com.
+        _patch_models_get(monkeypatch, seen)
+
+        resp = await _get_models(app)
+        telemetry.close()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [m["id"] for m in body["data"]] == ["codex/gpt-5.6-sol", "openai/gpt-4o"]
+    assert "errors" not in body
+    assert seen["url"] == "https://api.openai.com/v1/models"
+
+
+@pytest.mark.anyio
+async def test_models_route_lists_cli_sourced_models_without_a_credential(tmp_path, monkeypatch):
+    """A provider whose catalog is declared as coming from the vendor CLI is
+    listed from that CLI: the subscription endpoint (which publishes nothing)
+    is never called, and the id a client sees is prefixed like any other."""
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(tmp_path / "absent.json"))
+    catalog = json.dumps({"models": [
+        {"slug": "gpt-6-astra", "visibility": "list"},
+        {"slug": "gpt-5.6-sol", "visibility": "list"},
+    ]})
+    calls: list[list[str]] = []
+    # Stubbed: no test may run the real `codex` binary.
+    monkeypatch.setattr("otel_agent.cli_models.shutil.which", lambda name: "/usr/local/bin/codex")
+    monkeypatch.setattr(
+        "otel_agent.cli_models.subprocess.run",
+        lambda argv, **kwargs: calls.append(list(argv)) or _CliResult(catalog),
+    )
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "config.yaml"
+        config_path.write_text(
+            "providers:\n"
+            "  - name: openai\n"
+            "    base_url: https://api.openai.com/v1\n"
+            "    api_key: sk-plain\n"
+            "    api_format: openai\n"
+            "  - name: codex\n"
+            "    base_url: https://chatgpt.com/backend-api/codex\n"
+            "    auth: codex-oauth\n"
+            "    api_format: openai\n"
+            "    models_from: codex-cli\n"
+        )
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(Config(config_path), telemetry)
+        seen: dict = {}
+        # _patch_models_get fails the test on any call to chatgpt.com.
+        _patch_models_get(monkeypatch, seen)
+
+        resp = await _get_models(app)
+        telemetry.close()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [m["id"] for m in body["data"]] == [
+        "codex/gpt-6-astra", "codex/gpt-5.6-sol", "openai/gpt-4o",
+    ]
+    assert "errors" not in body
+    assert seen["url"] == "https://api.openai.com/v1/models"
+    assert calls == [["/usr/local/bin/codex", "debug", "models"]]
 
 
 @pytest.mark.anyio
