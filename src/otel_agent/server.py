@@ -27,6 +27,12 @@ from otel_agent.converter import (
 )
 from otel_agent.logger import TelemetryLogger, redact_sensitive_headers
 from otel_agent.models import ModelCache, aggregate_models, fetch_provider_models
+from otel_agent.responses_compat import (
+    ChatToResponsesStreamConverter,
+    UnsupportedResponsesFeature,
+    chat_completion_to_response,
+    responses_to_chat_request,
+)
 from otel_agent.router import parse_model, resolve_provider
 
 logger = logging.getLogger(__name__)
@@ -226,15 +232,15 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         )
 
     # ------------------------------------------------------------------
-    # Responses-native endpoint (pass-through, no protocol translation)
+    # Responses endpoint
     # ------------------------------------------------------------------
     @app.post("/v1/responses", response_model=None)
     async def responses(request: Request):
-        """Responses-native endpoint, passed straight through to the upstream.
+        """Responses endpoint.
 
-        No converter is installed, so the dialect's ``event:`` lines and blank
-        separators reach the client as they arrive. The gateway's whole
-        accommodation of this upstream is the normalization below.
+        A Responses-only provider is passed straight through: no converter is
+        installed, so that upstream's ``event:`` lines reach the client as they
+        arrive. An OpenAI-format provider is translated to chat completions.
         """
         body = await request.json()
         model = body.get("model", "")
@@ -249,12 +255,17 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         except ValueError as e:
             return JSONResponse({"error": {"message": str(e), "type": "invalid_request_error"}}, status_code=400)
 
-        # The normalization below is written for this upstream, so the route is
-        # served only for a provider that declares a Responses surface.
+        # The normalization below is written for a Responses-only upstream.
+        # OpenAI-format providers are translated to chat completions instead of
+        # being refused — Codex can no longer speak that dialect itself.
         if not serves_only_responses(provider):
-            return JSONResponse(
-                {"error": {"message": f"Provider '{provider.name}' does not serve the Responses API. Route to a provider that declares one, or use /v1/chat/completions.", "type": "invalid_request_error"}},
-                status_code=400,
+            if provider.api_format != "openai":
+                return JSONResponse(
+                    {"error": {"message": f"Provider '{provider.name}' uses '{provider.api_format}' format, which cannot be translated to the Responses API.", "type": "invalid_request_error"}},
+                    status_code=400,
+                )
+            return await _serve_responses_via_chat(
+                client, provider, telemetry, request, body, upstream_model, config,
             )
 
         # Continuation is deliberately not supported: the upstream rejects
@@ -512,6 +523,209 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         register_legacy_index(app, Path(__file__).parent / "dashboard" / "index.html")
 
     return app
+
+
+async def _serve_responses_via_chat(
+    client: httpx.AsyncClient,
+    provider: Provider,
+    telemetry: TelemetryLogger,
+    request: Request,
+    body: dict,
+    upstream_model: str,
+    config: Config,
+) -> JSONResponse | StreamingResponse:
+    """Serve a Responses client from a chat-completions provider."""
+    try:
+        translated = responses_to_chat_request(
+            body, rewrite_upstream_model(provider, upstream_model)
+        )
+    except UnsupportedResponsesFeature as exc:
+        return JSONResponse(
+            {"error": {"message": str(exc), "type": "invalid_request_error"}},
+            status_code=400,
+        )
+    custom_tool_names = set(translated.pop("custom_tool_names", []))
+    url = build_upstream_url(provider)
+    headers = await build_request_headers(provider)
+    start_time = time.monotonic()
+    original_body = json.dumps(body)
+    log_body = config.log_request_body
+    if body.get("stream", False):
+        translated["stream"] = True
+        translated["stream_options"] = {"include_usage": True}
+        return await _handle_responses_chat_stream(
+            client, url, headers, translated, custom_tool_names,
+            provider, telemetry, request, start_time,
+            request_body=original_body, log_body=log_body,
+        )
+    return await _handle_responses_chat_once(
+        client, url, headers, translated, custom_tool_names,
+        provider, telemetry, request, start_time,
+        request_body=original_body, log_body=log_body,
+    )
+
+
+async def _handle_responses_chat_once(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    body: dict,
+    custom_tool_names: set[str],
+    provider: Provider,
+    telemetry: TelemetryLogger,
+    request: Request,
+    start_time: float,
+    request_body: str = "",
+    log_body: bool = True,
+) -> JSONResponse:
+    """One chat completion, returned as one Responses object."""
+    try:
+        resp = await client.post(url, headers=headers, json=body)
+    except httpx.ConnectError as e:
+        latency_ms = (time.monotonic() - start_time) * 1000
+        error_body = {"error": {"message": f"Connection failed to provider '{provider.name}': {e}", "type": "server_error"}}
+        _log_telemetry(
+            telemetry, request, 502, error_body, latency_ms, provider,
+            request_body=request_body, log_body=log_body, source_format="responses",
+        )
+        return JSONResponse(error_body, status_code=502)
+    except httpx.TimeoutException:
+        latency_ms = (time.monotonic() - start_time) * 1000
+        error_body = {"error": {"message": f"Timeout connecting to provider '{provider.name}'", "type": "server_error"}}
+        _log_telemetry(
+            telemetry, request, 504, error_body, latency_ms, provider,
+            request_body=request_body, log_body=log_body, source_format="responses",
+        )
+        return JSONResponse(error_body, status_code=504)
+
+    latency_ms = (time.monotonic() - start_time) * 1000
+    try:
+        resp_body = resp.json()
+    except Exception:
+        resp_body = {"raw": resp.text}
+    resp_body = _maybe_rewrite_xai_error(provider, resp.status_code, resp_body)
+    if resp.status_code >= 400 or not isinstance(resp_body, dict) or "choices" not in resp_body:
+        message = _upstream_error_message(
+            json.dumps(resp_body) if isinstance(resp_body, dict) else str(resp_body)
+        )
+        status = resp.status_code if resp.status_code >= 400 else 502
+        error_body = {
+            "error": {
+                "message": f"Upstream error {resp.status_code}: {message}",
+                "type": "server_error" if status >= 500 else "invalid_request_error",
+            }
+        }
+        _log_telemetry(
+            telemetry, request, status, error_body, latency_ms, provider,
+            request_body=request_body, resp_headers=dict(resp.headers), log_body=log_body,
+            source_format="responses",
+        )
+        return JSONResponse(error_body, status_code=status)
+
+    converted = chat_completion_to_response(
+        resp_body, model=body["model"], custom_tool_names=custom_tool_names,
+    )
+    _log_telemetry(
+        telemetry, request, resp.status_code, converted, latency_ms, provider,
+        request_body=request_body, resp_headers=dict(resp.headers), log_body=log_body,
+        source_format="responses",
+    )
+    return JSONResponse(converted, status_code=resp.status_code)
+
+
+async def _handle_responses_chat_stream(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    body: dict,
+    custom_tool_names: set[str],
+    provider: Provider,
+    telemetry: TelemetryLogger,
+    request: Request,
+    start_time: float,
+    request_body: str = "",
+    log_body: bool = True,
+) -> StreamingResponse:
+    """Chat-completions SSE, framed as the Responses events Codex parses."""
+    converter = ChatToResponsesStreamConverter(
+        model=body["model"], custom_tool_names=custom_tool_names,
+    )
+
+    async def stream_generator() -> AsyncIterator[bytes]:
+        resp_headers: dict[str, str] = {}
+        stream_status = 200
+        failure: dict | None = None
+        try:
+            async with client.stream("POST", url, headers=headers, json=body) as resp:
+                resp_headers = dict(resp.headers)
+                stream_status = resp.status_code
+                content_type = resp.headers.get("content-type", "")
+                if resp.status_code >= 400 and "text/event-stream" not in content_type:
+                    raw = (await resp.aread()).decode("utf-8", errors="replace")
+                    message = _responses_upstream_message(provider, resp.status_code, raw)
+                    failure = {
+                        "error": {
+                            "message": message,
+                            "type": "server_error" if resp.status_code >= 500 else "invalid_request_error",
+                        }
+                    }
+                    yield ChatToResponsesStreamConverter.failure_frame(
+                        f"Upstream error {resp.status_code}: {message}"
+                    ).encode()
+                    return
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(chunk, dict):
+                        continue
+                    for frame in converter.feed(chunk):
+                        yield frame.encode()
+                for frame in converter.finish():
+                    yield frame.encode()
+        except httpx.ConnectError as e:
+            stream_status = 502
+            message = f"Connection failed: {e}"
+            failure = {"error": {"message": message, "type": "server_error"}}
+            yield ChatToResponsesStreamConverter.failure_frame(message).encode()
+        except httpx.TimeoutException:
+            stream_status = 504
+            message = "Timeout"
+            failure = {"error": {"message": message, "type": "server_error"}}
+            yield ChatToResponsesStreamConverter.failure_frame(message).encode()
+        finally:
+            latency_ms = (time.monotonic() - start_time) * 1000
+            logged = failure if failure is not None else converter.terminal_body()
+            _log_telemetry(
+                telemetry, request, stream_status, logged, latency_ms, provider,
+                request_body=request_body, resp_headers=resp_headers, log_body=log_body,
+                source_format="responses",
+            )
+
+    return StreamingResponse(stream_generator(), media_type="text/event-stream")
+
+
+def _maybe_rewrite_xai_error(provider: Provider, status: int, body: Any) -> Any:
+    from otel_agent.xai_errors import is_xai_provider, rewrite_xai_error
+
+    if isinstance(body, dict) and is_xai_provider(provider):
+        return rewrite_xai_error(status, body)
+    return body
+
+
+def _responses_upstream_message(provider: Provider, status: int, raw: str) -> str:
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        parsed = {"error": {"message": raw}}
+    parsed = _maybe_rewrite_xai_error(provider, status, parsed)
+    return _upstream_error_message(json.dumps(parsed) if isinstance(parsed, dict) else raw)
 
 
 def _responses_only_refusal(provider: Provider, request: Request) -> JSONResponse:
