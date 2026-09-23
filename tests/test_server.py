@@ -1769,9 +1769,58 @@ def test_chat_shaped_routes_refuse_a_responses_only_provider(tmp_path):
     assert not post.called, "a chat-shaped refusal must not reach the upstream"
 
 
-def test_responses_route_declines_providers_without_a_responses_surface(tmp_path):
-    """The route's normalization is this upstream's accommodation, so it is
-    only served for a provider that declares a Responses surface."""
+def test_responses_openai_provider_is_translated_to_chat_completions(tmp_path):
+    """OpenAI-format providers are translated, not refused (issue #35)."""
+    from fastapi.testclient import TestClient
+
+    seen: dict = {}
+
+    async def fake_post(*args, **kwargs):
+        seen["json"] = kwargs.get("json")
+        seen["url"] = kwargs.get("url") or next(
+            (arg for arg in args if isinstance(arg, str) and arg.startswith("http")),
+            None,
+        )
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {}
+        resp.json.return_value = {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+        }
+        return resp
+
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "t.sqlite"
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.post", fake_post), patch("httpx.AsyncClient.stream") as stream:
+                resp = client.post(
+                    "/v1/responses",
+                    json={"model": "openai/gpt-5", "instructions": "Be brief.", "input": "hi"},
+                )
+        telemetry.close()
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT model_name, input_tokens, output_tokens, total_tokens, format FROM requests"
+        ).fetchone()
+        conn.close()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["output"][0]["content"][0]["text"] == "OK"
+    assert body["usage"] == {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4}
+    assert seen["url"] == "https://api.openai.com/v1/chat/completions"
+    assert seen["json"]["model"] == "gpt-5"
+    assert seen["json"]["messages"][0] == {"role": "system", "content": "Be brief."}
+    assert "custom_tool_names" not in seen["json"]
+    assert not stream.called
+    assert row == ("openai/gpt-5", 3, 1, 4, "responses")
+
+
+def test_responses_openai_provider_rejects_previous_response_id_before_upstream(tmp_path):
     from fastapi.testclient import TestClient
 
     with tempfile.TemporaryDirectory() as td:
@@ -1779,17 +1828,126 @@ def test_responses_route_declines_providers_without_a_responses_surface(tmp_path
         telemetry = TelemetryLogger(Path(td) / "t.sqlite")
         app = create_app(config, telemetry)
         with TestClient(app) as client:
-            with patch("httpx.AsyncClient.stream") as stream:
+            with patch("httpx.AsyncClient.post") as post, patch("httpx.AsyncClient.stream") as stream:
                 resp = client.post(
                     "/v1/responses",
-                    json={"model": "openai/gpt-5", "input": "hi"},
+                    json={"model": "openai/gpt-5", "input": "hi", "previous_response_id": "resp_abc"},
                 )
         telemetry.close()
 
     assert resp.status_code == 400
     assert resp.json()["error"]["type"] == "invalid_request_error"
-    assert "openai" in resp.json()["error"]["message"]
+    assert "previous_response_id" in resp.json()["error"]["message"]
+    assert not post.called
     assert not stream.called
+
+
+def test_responses_anthropic_provider_is_refused(tmp_path):
+    from fastapi.testclient import TestClient
+
+    with tempfile.TemporaryDirectory() as td:
+        config_path = Path(td) / "config.yaml"
+        config_path.write_text(
+            "providers:\n"
+            "  - name: anthropic\n"
+            "    base_url: https://api.anthropic.com\n"
+            "    api_key: test-key\n"
+            "    api_format: anthropic\n"
+        )
+        config = Config(config_path)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with TestClient(app) as client:
+            with patch("httpx.AsyncClient.post") as post, patch("httpx.AsyncClient.stream") as stream:
+                resp = client.post(
+                    "/v1/responses",
+                    json={"model": "anthropic/claude", "input": "hi"},
+                )
+        telemetry.close()
+
+    assert resp.status_code == 400
+    assert "anthropic" in resp.json()["error"]["message"]
+    assert not post.called
+    assert not stream.called
+
+
+@pytest.mark.anyio
+async def test_responses_openai_streaming_is_responses_sse(tmp_path):
+    """A streaming Responses client gets Codex events, from chat-completions SSE."""
+    chunks = [
+        {"choices": [{"index": 0, "delta": {"content": "OK"}}], "model": "gpt-5"},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}},
+    ]
+    recorder = _RecordingStream(chunks)
+
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "t.sqlite"
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+        with patch("httpx.AsyncClient.stream", recorder):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "openai/gpt-5", "input": "hi", "stream": True},
+                )
+                raw = (await resp.aread()).decode()
+        telemetry.close()
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT input_tokens, output_tokens, total_tokens, format FROM requests"
+        ).fetchone()
+        conn.close()
+
+    assert resp.status_code == 200
+    assert "event: response.output_text.delta" in raw
+    assert "event: response.completed" in raw
+    assert "data: [DONE]" not in raw
+    assert recorder.seen["url"].endswith("/chat/completions")
+    assert recorder.seen["json"]["stream"] is True
+    assert recorder.seen["json"]["stream_options"] == {"include_usage": True}
+    assert "custom_tool_names" not in recorder.seen["json"]
+    assert row == (2, 1, 3, "responses")
+
+
+@pytest.mark.anyio
+async def test_responses_openai_streaming_upstream_error_is_response_failed(tmp_path):
+    mock = _FakeErrorStreamMethod(400, {"error": {"message": "bad model", "type": "invalid_request_error"}})
+
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "t.sqlite")
+        app = create_app(config, telemetry)
+        with patch("httpx.AsyncClient.stream", mock):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/responses",
+                    json={"model": "openai/gpt-5", "input": "hi", "stream": True},
+                )
+                raw = (await resp.aread()).decode()
+        telemetry.close()
+
+    assert "event: response.failed" in raw
+    assert "bad model" in raw
+    assert "event: response.completed" not in raw
+
+
+class _RecordingStream:
+    """Captures the chat-completions stream call and yields SSE chunks."""
+
+    def __init__(self, chunks: list[dict]) -> None:
+        self._inner = _FakeStreamMethod(chunks)
+        self.seen: dict = {}
+
+    def __call__(self, *args, **kwargs):
+        self.seen["json"] = kwargs.get("json")
+        self.seen["url"] = kwargs.get("url") or next(
+            (arg for arg in args if isinstance(arg, str) and arg.startswith("http")),
+            None,
+        )
+        return self._inner(*args, **kwargs)
 
 
 def test_responses_previous_response_id_is_rejected_as_stateless(tmp_path):
