@@ -10,3 +10,6 @@ A personal xAI OAuth token pair minted by Hermes (`xai-oauth`) or `grok login`. 
 
 ### Codex Grant
 A personal ChatGPT Plus / Codex OAuth token pair, adopted once from a sibling CLI's credential store and thereafter owned by the adopter: the sibling's copy is a duplicate of the same rotating chain, not an independent one, so the adopter's first refresh consumes it and the sibling has to re-login. Usable as a Bearer on `chatgpt.com/backend-api/codex`, an endpoint that accepts only streaming Responses requests. Unlike a SuperGrok Grant, its refresh token is single-use and rotates on every refresh, and presenting a consumed one revokes the whole grant family — so it tolerates exactly one writer.
+
+### Responses Chat Compat
+The gateway path that lets a Responses-only client use a Chat Completions provider. Distinct from the Codex Grant pass-through, which forwards to an upstream that already speaks Responses and applies that upstream's accommodations. This path translates, and it must not reuse those accommodations.
