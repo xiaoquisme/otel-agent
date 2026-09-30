@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
+from otel_agent import model_capabilities
 from otel_agent import server
 from otel_agent.config import Config
 from otel_agent.logger import TelemetryLogger
@@ -2524,3 +2525,134 @@ async def test_an_unrefreshable_grant_is_a_credential_error(tmp_path, monkeypatc
     assert "401" in body["error"]["message"]
     # The failed refresh is on record, so the operator sees why (R11).
     assert body["credential"]["last_result"]["ok"] is False
+
+
+# ------------------------------------------------------------------
+# Model capability metadata at the endpoint (R1 / R6 / R8 / R10)
+#
+# The four additive fields arrive through the aggregation exit: whole
+# catalog fetched once per TTL window, no per-model HTTP, missing fields
+# omitted as a whole, and the endpoint never fails because of the backfill.
+# ------------------------------------------------------------------
+
+def _cap_catalog_payload():
+    """A tiny OpenRouter-shaped catalog covering hit-by-normalization (AE2),
+    hit-by-raw-id with a different vendor prefix, and a miss (AE3)."""
+    return {"data": [
+        {
+            "id": "xiaomi/mimo-v2.5",
+            "context_length": 128000,
+            "top_provider": {"max_completion_tokens": 8192},
+            "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+        },
+        {
+            "id": "moonshotai/kimi-k3:batch",
+            "context_length": 262144,
+            "top_provider": {"max_completion_tokens": 16384},
+            "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+        },
+    ]}
+
+
+def _cap_config(td: str) -> Config:
+    """A provider that declares three ids: two catalog hits, one miss."""
+    config_path = Path(td) / "config.yaml"
+    config_path.write_text(
+        "providers:\n"
+        "  - name: xiaomi\n"
+        "    base_url: https://api.xiaomi.com/v1\n"
+        "    api_key: sk-x\n"
+        "    api_format: openai\n"
+        "    models:\n"
+        "      - mimo-v-2.5\n"
+        "      - kimi-k3:batch\n"
+        "      - nope-model\n"
+    )
+    return Config(config_path)
+
+
+@pytest.mark.anyio
+async def test_models_route_backfills_capabilities_with_one_catalog_fetch(tmp_path, monkeypatch):
+    """R6/R10 end-to-end: the whole catalog is fetched exactly once for any
+    number of listed models (no per-model HTTP), and the response carries the
+    core four fields plus the additive ones on a hit (AE2/AE5) or just the
+    core four on a miss (AE3)."""
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(tmp_path / "absent.json"))
+    fetches: list[str] = []
+
+    def fake_fetch():
+        fetches.append("catalog")
+        return _cap_catalog_payload()
+
+    monkeypatch.setattr(model_capabilities, "fetch_catalog", fake_fetch)
+    monkeypatch.setattr(model_capabilities, "_catalog", model_capabilities.ModelCapabilitiesCatalog())
+
+    with tempfile.TemporaryDirectory() as td:
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(_cap_config(td), telemetry)
+
+        # Process start (KTD1): cold-start prefetch, then the first request.
+        model_capabilities.warm_up()
+        model_capabilities._catalog.wait_for_refresh()
+
+        resp = await _get_models(app)
+        resp2 = await _get_models(app)
+        telemetry.close()
+
+    assert resp.status_code == 200, resp.text
+    assert resp2.status_code == 200, resp2.text
+    # Two requests, three models, one whole-catalog fetch, zero model fetches.
+    assert fetches == ["catalog"]
+
+    by_id = {m["id"]: m for m in resp.json()["data"]}
+    assert set(by_id) == {"xiaomi/mimo-v-2.5", "xiaomi/kimi-k3:batch", "xiaomi/nope-model"}
+
+    # AE2/AE5: normalization hit (mimo-v-2.5 ~ mimo-v2.5) with core fields intact.
+    hit = by_id["xiaomi/mimo-v-2.5"]
+    assert hit["object"] == "model"
+    assert hit["created"] == 0
+    assert hit["owned_by"] == "xiaomi"
+    assert hit["context_length"] == 128000
+    assert hit["max_output_tokens"] == 8192
+    assert set(hit["input_modalities"]) == {"text", "image"}
+    assert set(hit["output_modalities"]) == {"text"}
+
+    # Two-level hit: the raw id matches even though the vendor prefixes differ.
+    batch = by_id["xiaomi/kimi-k3:batch"]
+    assert batch["context_length"] == 262144
+    assert batch["max_output_tokens"] == 16384
+
+    # AE3: a miss keeps only the core four fields — nothing borrowed, nothing
+    # zeroed, nothing null.
+    miss = by_id["xiaomi/nope-model"]
+    assert set(miss) == {"id", "object", "created", "owned_by"}
+    assert {m["id"]: m for m in resp2.json()["data"]}["xiaomi/mimo-v-2.5"] == hit
+
+
+@pytest.mark.anyio
+async def test_models_route_omits_capability_fields_when_the_catalog_is_down(tmp_path, monkeypatch):
+    """R8/AE4: an unreachable OpenRouter costs only the fields — the endpoint
+    answers 200 with the core four fields and no error anywhere."""
+    monkeypatch.setenv("OTEL_AGENT_AUTH_PATH", str(tmp_path / "absent.json"))
+
+    def failing_fetch():
+        return None
+
+    monkeypatch.setattr(model_capabilities, "fetch_catalog", failing_fetch)
+    monkeypatch.setattr(model_capabilities, "_catalog", model_capabilities.ModelCapabilitiesCatalog())
+
+    with tempfile.TemporaryDirectory() as td:
+        telemetry = TelemetryLogger(Path(td) / "test.sqlite")
+        app = create_app(_cap_config(td), telemetry)
+
+        model_capabilities.warm_up()
+        model_capabilities._catalog.wait_for_refresh()
+
+        resp = await _get_models(app)
+        telemetry.close()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "errors" not in body
+    for entry in body["data"]:
+        assert set(entry) == {"id", "object", "created", "owned_by"}

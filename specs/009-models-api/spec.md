@@ -78,6 +78,7 @@ The gateway queries upstream providers for their model lists and caches the resu
 - **FR-008**: System MUST invalidate the cache when the configuration is hot-reloaded.
 - **FR-009**: System MUST support providers that do not expose a model list endpoint by returning an empty list for that provider.
 - **FR-010**: The response format MUST follow the OpenAI `/v1/models` response structure for client compatibility.
+  - *Note (2026-09, model capability metadata):* the core four fields (`id`, `object`, `created`, `owned_by`) keep their names and semantics; additional per-entry fields are allowed (`context_length`, `max_output_tokens`, `input_modalities`, `output_modalities` — see `contracts/models-api.md`). SC-003 is unchanged.
 
 ### Key Entities
 

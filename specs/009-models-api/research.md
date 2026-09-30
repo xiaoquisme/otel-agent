@@ -46,6 +46,8 @@
 **Alternatives considered**:
 - Custom format with more metadata: Rejected — breaks SDK compatibility.
 
+> **2026-09 revision (model capability metadata):** the trade-off above is revised, not reinterpreted. What was rejected in 2026-07 was a *custom format* carrying more metadata, on SDK-compatibility grounds. With two precedents since — the body-level `errors` field and OpenRouter's extended model objects — additive per-entry fields (`context_length`, `max_output_tokens`, `input_modalities`, `output_modalities`) are now accepted while the core four fields keep their names and semantics. The rejection of a custom format stands; what changed is the evidence that additive fields do not break SDK consumers.
+
 ## Decision 4: Cache Invalidation
 
 **Decision**: Invalidate cache when config file mtime changes (already tracked by `Config._reload()`).

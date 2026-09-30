@@ -119,6 +119,7 @@ def _run_server(args) -> None:
     """Run the uvicorn server."""
     import uvicorn
 
+    from otel_agent import model_capabilities
     from otel_agent.config import Config
     from otel_agent.logger import TelemetryLogger
     from otel_agent.server import create_app
@@ -127,6 +128,11 @@ def _run_server(args) -> None:
     config = Config(config_path)
     logger = TelemetryLogger(Path(args.db).expanduser(), backend=config.storage)
     app = create_app(config, logger)
+
+    # Cold-start prefetch of the model capability catalog (KTD1): the first
+    # /v1/models request should find the backfill table warm. Background,
+    # single-flight, never blocks startup or any request path.
+    model_capabilities.warm_up()
 
     print(f"otel-agent gateway listening on :{args.port}")
     print(f"logging to {args.db}")

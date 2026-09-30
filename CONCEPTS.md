@@ -13,3 +13,6 @@ A personal ChatGPT Plus / Codex OAuth token pair, adopted once from a sibling CL
 
 ### Responses Chat Compat
 The gateway path that lets a Responses-only client use a Chat Completions provider. Distinct from the Codex Grant pass-through, which forwards to an upstream that already speaks Responses and applies that upstream's accommodations. This path translates, and it must not reuse those accommodations.
+
+### Model Capability Metadata
+The four optional fields on each `/v1/models` entry — `context_length`, `max_output_tokens` (numbers), `input_modalities`, `output_modalities` (string arrays) — sourced in order: upstream passthrough, then OpenRouter public-catalog backfill (whole-catalog cache, normalized exact id match, stale-on-error), then omission. Never guessed and never hand-declared in config — a missing value means the field is absent, not zero.

@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ideation: 模型能力元数据的暴露方式 — 加字段还是新开接口？</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --panel: #ffffff; --ink: #1f2328; --muted: #5b6470;
+    --line: #e3e0da; --accent: #2f6f4f; --accent-soft: #eaf3ee;
+    --warn: #8a6116; --warn-soft: #faf3e4; --info-soft: #eef2f7;
+    --chip-bg: #f1efe9; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  }
+  main { max-width: 940px; margin-inline: auto; padding: 40px 24px 80px; }
+  h1 { font-size: 27px; line-height: 1.35; margin: 6px 0 10px; }
+  h2 { font-size: 20px; margin: 44px 0 12px; padding-top: 18px; border-top: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 22px 0 8px; }
+  p, li { max-width: 72ch; }
+  code { font-family: var(--mono); font-size: 0.88em; background: var(--chip-bg); padding: 1px 5px; border-radius: 4px; }
+  a { color: var(--accent); }
+  .eyebrow { font-size: 11.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--muted); font-size: 13px; margin: 10px 0 18px; }
+  .meta b { color: var(--ink); font-weight: 600; }
+  .stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 8px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 16px; min-width: 108px; }
+  .stat .n { font-size: 21px; font-weight: 700; }
+  .stat .l { font-size: 12px; color: var(--muted); }
+  .callout { border-radius: 10px; padding: 12px 16px; margin: 14px 0; border: 1px solid var(--line); background: var(--info-soft); }
+  .callout .tag { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; color: var(--accent); }
+  .callout.warn { background: var(--warn-soft); }
+  .callout.warn .tag { color: var(--warn); }
+  .jump { list-style: none; padding: 0; margin: 10px 0 22px; display: grid; gap: 6px; }
+  .jump a { display: inline-block; text-decoration: none; border-bottom: none; }
+  .jump .num { display: inline-block; min-width: 22px; font-weight: 700; color: var(--accent); }
+  article.idea {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px 22px; margin: 20px 0; scroll-margin-top: 16px;
+  }
+  article.idea h3 { margin: 0 0 4px; font-size: 17.5px; }
+  article.idea h3 .num { color: var(--accent); margin-right: 6px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+  .chip {
+    font-size: 11.5px; font-weight: 600; border-radius: 999px; padding: 3px 11px;
+    background: var(--chip-bg); border: 1px solid var(--line); color: var(--muted);
+  }
+  .chip.ok { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+  .field { margin: 10px 0; }
+  .field .label { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 700; color: var(--muted); display: block; margin-bottom: 3px; }
+  .field p { margin: 0; }
+  .basis { border-left: 3px solid var(--accent); padding-left: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; margin: 12px 0; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--chip-bg); font-size: 12px; letter-spacing: 0.04em; }
+  td.num { width: 34px; color: var(--muted); }
+  figure { margin: 16px 0; }
+  figcaption { font-size: 12.5px; color: var(--muted); margin-top: 6px; max-width: 72ch; }
+  footer.composition-signal { margin-top: 56px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  svg text { font-family: inherit; }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171b; --panel: #1b1f25; --ink: #e8e6e1; --muted: #9aa4b0;
+      --line: #2c323a; --accent: #7fc9a2; --accent-soft: #22302a;
+      --warn: #e0b35c; --warn-soft: #2e2718; --info-soft: #1e242c; --chip-bg: #242a31;
+    }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Ideation · 候选方向评估</div>
+    <h1>模型能力元数据的暴露方式：在 /models 加字段，还是新开接口？</h1>
+    <div class="meta">
+      <span><b>日期</b> <time datetime="2026-09-27">2026-09-27</time></span>
+      <span><b>topic</b> <code>model-capability-metadata</code></span>
+      <span><b>focus</b> 给服务加上下文长度与模型能力（input+output tokens）信息的 API 暴露方式</span>
+      <span><b>mode</b> repo-grounded</span>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n">39</div><div class="l">原始想法</div></div>
+      <div class="stat"><div class="n">5</div><div class="l">生成框架</div></div>
+      <div class="stat"><div class="n">13</div><div class="l">合并候选</div></div>
+      <div class="stat"><div class="n">5</div><div class="l">存活方向</div></div>
+      <div class="stat"><div class="n">100%</div><div class="l">直接引文核验</div></div>
+    </div>
+    <div class="callout">
+      <span class="tag">一句话结论</span>
+      <p>证据压倒性指向<b>在既有 /v1/models 响应上加 additive 字段</b>而非新开接口：收窄点唯一（<code>aggregate_models</code>）、仓库已有 body 级 additive 先例（<code>errors</code> 字段）、OpenRouter 已把「model 对象内扩展字段」做成行业事实标准；009 契约当年否决的是「custom format」而非 additive 字段。真正值得开会的不是「加字段还是新接口」，而是<b>字段放哪、数据从哪来、谁校验</b>——下文 1-5 号方向按此排序。</p>
+    </div>
+  </header>
+
+  <section id="grounding-context">
+    <h2>Grounding Context</h2>
+
+    <h3>Codebase Context</h3>
+    <p><b>项目形态：</b>Python 3.10+ FastAPI + httpx 的 LLM API 网关（otel-agent proxy），OpenAI/Anthropic 兼容；uv/hatch 打包 CLI；DuckDB（默认）/SQLite 存遥测；React+TS 前端；<code>specs/</code> 001–020 为 spec-kit 规格驱动开发。</p>
+    <p><b>/models 现状：</b><code>GET /v1/models</code>（<code>server.py:461</code>）→ <code>fetch_provider_models</code>（<code>models.py:59</code>）按三条目录来源取模型：config 声明（<code>config.py:110-121</code>）、<code>models_from</code> vendor CLI（<code>cli_models.py</code>）、上游 <code>GET /models</code> 拉取；Cursor 环回走 sidecar CLI。<code>ModelCache</code> TTL 300s + config mtime 失效（<code>models.py:15</code>）。<code>aggregate_models</code>（<code>models.py:158</code>）把每个 entry 归一化为 <code>{id, object, created, owned_by}</code>，<b>上游自带的任何额外元数据在此被丢弃</b>（<code>models.py:177-182</code>）；body 级附加 <code>errors</code> 字段是既有先例（<code>models.py:184-189</code>，KTD6）。</p>
+    <p><b>既有契约决策（specs/009-models-api）：</b>FR-010（<code>spec.md:80</code>）响应格式 MUST 遵循 OpenAI /v1/models 结构；SC-003（<code>spec.md:93</code>）OpenAI SDK <code>client.models.list()</code> 直接可用；SC-001（<code>spec.md:91</code>）cached &lt;500ms。<code>research.md:47</code> Decision 3 被否决的备选是「Custom format with more metadata: Rejected — breaks SDK compatibility」——<b>被否的是「自定义格式」，additive 字段方案从未被讨论过</b>（决定正文的「exactly」一词留下了文本争议，见方向 1）。<code>contracts/models-api.md</code> 锁定 entry 四字段；<code>tests/test_models.py:106-120</code> 断言的是字段<b>存在</b>而非四字段精确形状。</p>
+    <p><b>痛点/缺口：</b>上游元数据被丢弃、能力/上下文长度没有任何可附着的结构位；三条目录来源只交换纯 id 字符串（声明与 CLI 路径 <code>created: 0</code>）；客户端已用 <code>[500k]</code>/<code>[1m]</code> 后缀表达上下文诉求但被 <code>router.py:10-13</code> 剥除（信息双向缺失）；全库无 <code>context_length</code>/<code>max_output</code>/<code>capabilities</code> 字段，属净新增概念；上游响应差异大（Codex 订阅端点返回空列表、Cursor 需走 CLI）；遥测侧已存 <code>input_tokens/output_tokens/total_tokens</code>（spec 020）。核验另发现一事实缺口：<code>finish_reason</code> 未落库。</p>
+
+    <h3>Past Learnings（docs/solutions）</h3>
+    <ul>
+      <li><b>responses-chat-compat.md</b>（high, 2026-09-23）：面向契约严格的客户端，响应字段「要么完整、要么整体省略」（缺值宁可不发）；不支持的能力要在调用上游前显式报错。</li>
+      <li><b>download-request-json-from-loaded-detail.md</b>：能从既有响应派生的数据不要再开新路径；新路由可为 curl 保留但消费方须可降级——新路由还会在 <code>:45638</code> 长驻旧进程上 404（Dashboard CLI landmine）。</li>
+      <li><b>dashboard-render-delegation-pattern.md</b>：格式知识单一来源；本仓库已有「新端点 + 既有响应加字段」双轨先例；跨层重复必然漂移（specs 011/012/018/020 回归四次）。</li>
+      <li><b>import-supergrok-oauth-sidecar-vault.md</b>：引入新组件前先复用既有声明机制；模型 id 的 <code>provider/</code> 前缀约定不可变。</li>
+      <li><b>integration-test-broken-after-sse-removal.md</b>：变更清单必须枚举全部消费面（路由、前端、集成测试、文档）。</li>
+    </ul>
+
+    <h3>External Context</h3>
+    <p><b>OpenRouter <code>/api/v1/models</code> 实测</b>（2026-09-27，curl 一手验证，458 个模型）：model 对象内携带扩展字段已是行业事实标准——<code>context_length: 200000</code>、<code>top_provider: {context_length, max_completion_tokens, is_moderated}</code>、<code>architecture: {modality, input_modalities, output_modalities, tokenizer}</code>、<code>supported_parameters: [...]</code>。即「在 model 对象上加字段」有生态先例，且分层表达「名义上限 vs 实际可用上限」。</p>
+    <div class="callout warn">
+      <span class="tag">证据边界</span>
+      <p>外部广度调研部分缺失（web-researcher 超时、Anthropic 文档区域受限）。以下主张<b>待核实</b>，未作为任何存活方向的承重依据：Anthropic /v1/models 的 <code>context_window/max_output_tokens</code>、vLLM 的 <code>max_model_len</code>、LiteLLM <code>model_info</code>、vendor 的 1M 变体命名实践。</p>
+    </div>
+  </section>
+
+  <section id="topic-axes">
+    <h2>Topic Axes</h2>
+    <p>Decomposition skipped — atomic subject（「API 该暴露成什么形态」本身就是交付物，候选轴即候选答案，按规则跳过轴分解）。</p>
+  </section>
+
+  <section id="ranked-ideas">
+    <h2>Ranked Ideas</h2>
+    <ul class="jump">
+      <li><a href="#idea-1"><span class="num">1.</span> 在 /v1/models 响应上加 additive 能力字段（字段放哪的答案）</a></li>
+      <li><a href="#idea-2"><span class="num">2.</span> 上游缺省时自动回填：OpenRouter 公共目录查询（整目录缓存）</a></li>
+      <li><a href="#idea-3"><span class="num">3.</span> ModelCapabilities 单一出口管线 + 消费面只读治理</a></li>
+      <li><a href="#idea-4"><span class="num">4.</span> [500k]/[1m] 后缀从被剥除到被校验的协商闭环</a></li>
+      <li><a href="#idea-5"><span class="num">5.</span> 观测违规检测层：用真实流量抓「元数据错了」</a></li>
+    </ul>
+
+    <article class="idea" id="idea-1">
+      <h3><span class="num">1.</span>在 /v1/models 响应上加 additive 能力字段——「加字段，不开新接口」</h3>
+      <div class="chips">
+        <span class="chip ok">Confidence 85%</span>
+        <span class="chip">Complexity Low</span>
+        <span class="chip">direct + external</span>
+        <span class="chip">直接回答焦点问题</span>
+      </div>
+      <div class="field">
+        <span class="label">Description</span>
+        <p>在 <code>aggregate_models</code> 的归一化出口为每个 entry 附加 <code>context_length</code>、<code>max_output_tokens</code>（可选 <code>top_provider</code> 式子对象表达 provider 实际可用上限、<code>supported_parameters</code> 表达能力开关），OpenAI 四字段保留为 MUST 不动；拿不到可信值的模型<b>整体省略</b>这些字段，不填 null/0。字段命名对齐 OpenRouter 事实标准而非自造 schema。放置位置是本条的讨论子题：<b>entry 内直加为主张</b>（一次调用拿全，SDK 兼容有 OpenRouter 生态背书）；<b>body 级 <code>capabilities</code> map 为保守备选</b>（紧挨既有 <code>errors</code> 字段，entry 断言一行不改）；短期 opt-in 开关可作上线保险，但不建议做成默认形态（见淘汰表 M6）。</p>
+      </div>
+      <figure>
+        <svg viewBox="0 0 760 250" width="100%" height="250" role="img" aria-label="entry 字段收窄与加字段后的结构对比">
+          <rect x="10" y="30" width="290" height="120" rx="10" fill="none" stroke="#b9b2a6" stroke-width="1.5"/>
+          <text x="30" y="58" font-size="13" font-weight="700" fill="currentColor">今天：entry 四字段</text>
+          <text x="30" y="82" font-size="12" fill="currentColor">id · object · created · owned_by</text>
+          <text x="30" y="108" font-size="12" fill="currentColor">上游元数据 → 在 models.py:177-182</text>
+          <text x="30" y="128" font-size="12" fill="currentColor">被收窄丢弃</text>
+          <line x1="310" y1="90" x2="368" y2="90" stroke="currentColor" stroke-width="1.5"/>
+          <polygon points="368,84 380,90 368,96" fill="currentColor"/>
+          <text x="316" y="78" font-size="11" fill="currentColor">加字段</text>
+          <rect x="388" y="18" width="360" height="144" rx="10" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+          <text x="408" y="46" font-size="13" font-weight="700" fill="currentColor">加字段后：entry = 核心四字段 + 能力层</text>
+          <text x="408" y="70" font-size="12" fill="currentColor">id · object · created · owned_by　(不变)</text>
+          <text x="408" y="92" font-size="12" fill="currentColor">context_length: 200000</text>
+          <text x="408" y="112" font-size="12" fill="currentColor">max_output_tokens: 64000</text>
+          <text x="408" y="132" font-size="12" fill="currentColor">top_provider: { … }　(可选，实际可用上限)</text>
+          <text x="408" y="152" font-size="12" fill="currentColor">缺可信值 → 整体省略，不填 null</text>
+          <rect x="10" y="180" width="360" height="46" rx="8" fill="var(--accent-soft)"/>
+          <text x="26" y="200" font-size="11.5" font-weight="700" fill="currentColor">放置选项 A（主）</text>
+          <text x="26" y="218" font-size="11.5" fill="currentColor">entry 内直加 — 一次调用拿全，OpenRouter 同形</text>
+          <rect x="388" y="180" width="360" height="46" rx="8" fill="var(--warn-soft)"/>
+          <text x="404" y="200" font-size="11.5" font-weight="700" fill="currentColor">放置选项 B（保守备选）</text>
+          <text x="404" y="218" font-size="11.5" fill="currentColor">body 级 capabilities map — entry 断言零改动</text>
+        </svg>
+        <figcaption>结构对比：收窄点 <code>aggregate_models</code> 既是今天丢弃元数据的地方，也是唯一加字段入口。能力字段照抄 OpenRouter 命名（分层表达名义上限 vs 实际可用上限）。</figcaption>
+      </figure>
+      <div class="field">
+        <span class="label">Basis</span>
+        <p class="basis">direct: <code>models.py:177-182</code>（唯一归一化收窄点，上游额外元数据在此被丢弃）；<code>specs/009-models-api/research.md:47</code> 被否决备选原文是「Custom format with more metadata」，additive 字段从未被讨论；body 级 additive 先例 <code>models.py:184-189</code>（docstring 明写 additive 不影响 <code>data</code> 消费者）。external: OpenRouter <code>/api/v1/models</code> 实测（2026-09-27）——model 对象内 <code>context_length</code>/<code>top_provider</code>/<code>supported_parameters</code> 已是行业事实标准，且生态对额外字段无感。</p>
+      </div>
+      <div class="field">
+        <span class="label">Rationale</span>
+        <p>用户问题的答案由三重证据钉死：收窄点唯一意味着改动是一处而非一套；仓库自己的 <code>errors</code> 字段证明「body 级 additive、消费者无感」在本项目已上线验证；OpenRouter 先例意味着这不是发明格式而是对齐格式，客户端生态已有解析这些字段名的代码。新开接口反而要求客户端两次请求并自行 join，还踩 <code>:45638</code> 旧进程 404 的 landmine。与方向 4 构成双向闭环：字段供后缀校验，后缀需求进遥测。</p>
+      </div>
+      <div class="field">
+        <span class="label">Downsides</span>
+        <p>009 决定正文的「exactly」一词对 additive 是否合规字面上未定论，需要一次契约修订签字（contracts 文档 + 契约测试同步改）；严格 schema 校验的客户端理论上仍可能对未知字段敏感（虽然 OpenRouter 生态反证了这一点）——「整体省略」纪律（responses-chat-compat 教训）是必须随行的保险。</p>
+      </div>
+    </article>
+
+    <article class="idea" id="idea-2">
+      <h3><span class="num">2.</span>上游缺省时自动回填：调用 OpenRouter 公共目录（整目录缓存，零配置）</h3>
+      <div class="chips">
+        <span class="chip ok">Confidence 80%</span>
+        <span class="chip">Complexity Medium</span>
+        <span class="chip">direct + external（实测）</span>
+        <span class="chip">数据从哪来的答案（简化版）</span>
+      </div>
+      <div class="field">
+        <span class="label">Description</span>
+        <p>上游没给能力元数据时，<b>直接查 OpenRouter 公共目录回填</b>（<code>/api/v1/models</code>，无需鉴权，2026-09-27 实测可用）：一次拉取整个目录（458 个模型），按 <code>ModelCache</code> 模式<b>整目录缓存</b>（TTL 24h 级，每 TTL 窗口一次 HTTP，每模型只是本地查找），按模型 id 匹配后填 <code>context_length</code> / <code>max_output_tokens</code>（取 <code>top_provider.max_completion_tokens</code>）。来源链：<b>上游/CLI 透传 → OpenRouter 回填 → 仍无则整体省略</b>（不猜、不填 0）。匹配做小段归一化后<b>精确匹配</b>（<code>xai</code>↔<code>x-ai</code>、<code>v-2.5</code>↔<code>v2.5</code>、排除 <code>:batch</code> 变体），宁缺勿错。<b>完全零配置</b>：不设任何 config 声明入口，目录外模型（如 cursor 侧car）直接走省略纪律，不留手动兜底。</p>
+      </div>
+      <figure>
+        <svg viewBox="0 0 760 236" width="100%" height="236" role="img" aria-label="上游优先、OpenRouter 目录回填、缺失即省略的来源瀑布">
+          <rect x="20" y="18" width="330" height="52" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+          <text x="38" y="40" font-size="13" font-weight="700" fill="currentColor">① 上游 /models、CLI 透传（有就用）</text>
+          <text x="38" y="60" font-size="11.5" fill="currentColor">source: upstream · 保留而非丢弃</text>
+          <line x1="185" y1="70" x2="185" y2="94" stroke="currentColor" stroke-width="1.5"/>
+          <polygon points="179,94 185,106 191,94" fill="currentColor"/>
+          <text x="198" y="98" font-size="11" fill="currentColor">没给才向下</text>
+          <rect x="20" y="106" width="330" height="52" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+          <text x="38" y="128" font-size="13" font-weight="700" fill="currentColor">② OpenRouter 目录回填（缓存 24h）</text>
+          <text x="38" y="148" font-size="11.5" fill="currentColor">一次拉取整目录 · 归一化后精确匹配</text>
+          <line x1="185" y1="158" x2="185" y2="182" stroke="currentColor" stroke-width="1.5"/>
+          <polygon points="179,182 185,194 191,182" fill="currentColor"/>
+          <text x="198" y="186" font-size="11" fill="currentColor">仍无</text>
+          <rect x="20" y="194" width="330" height="34" rx="10" fill="var(--chip-bg)" stroke="#b9b2a6" stroke-width="1.5"/>
+          <text x="38" y="216" font-size="12.5" font-weight="700" fill="currentColor">③ 字段整体省略 — 不猜、不默认、不填 0</text>
+          <rect x="420" y="60" width="320" height="118" rx="10" fill="var(--warn-soft)"/>
+          <text x="438" y="88" font-size="12.5" font-weight="700" fill="currentColor">零配置：无声明表、无配置入口</text>
+          <text x="438" y="112" font-size="11.5" fill="currentColor">目录外模型（cursor 侧car）即省略；</text>
+          <text x="438" y="132" font-size="11.5" fill="currentColor">匹配失败宁缺勿错（xai↔x-ai、</text>
+          <text x="438" y="152" font-size="11.5" fill="currentColor">v-2.5↔v2.5、排除 :batch 变体）</text>
+          <line x1="350" y1="119" x2="412" y2="119" stroke="currentColor" stroke-width="1.5"/>
+          <polygon points="412,113 424,119 412,125" fill="currentColor"/>
+        </svg>
+        <figcaption>来源瀑布：上游优先、OpenRouter 目录整表回填（实测覆盖 xiaomi/mimo、x-ai/grok、openai/codex 等主流模型，cursor 不在目录内）、缺失即省略。每条元数据带 source 标签，方向 5 的观测校验据此抓背离。</figcaption>
+      </figure>
+      <div class="field">
+        <span class="label">Basis</span>
+        <p class="basis">direct: <code>models.py:177-182</code>（元数据丢弃点 = 回填挂载点）；<code>models.py:41-56</code>（<code>ModelCache</code> 整目录缓存模式可直接复用）。external（实测）: OpenRouter <code>/api/v1/models</code> 2026-09-27——458 个模型、无需鉴权、字段即所需（<code>xiaomi/mimo-v2.6-pro</code>: <code>context_length 1048576</code> / <code>top_provider.max_completion_tokens 131072</code>）；覆盖实测：<code>xiaomi/mimo</code> ✓、<code>x-ai/grok</code> ✓、<code>openai/gpt-5.x-codex</code> ✓、cursor ✗。reasoned: 一条 HTTP 换整目录，缓存成本近零；查询失败即省略，与「整体省略」纪律天然兼容。</p>
+      </div>
+      <div class="field">
+        <span class="label">Rationale</span>
+        <p>把「数据从哪来」从<b>维护问题变成查询问题</b>：零配置、零手写表，主流 provider 开箱命中（覆盖实测见 basis）。整目录缓存意味着回填几乎不增加延迟与外部依赖暴露面；每条元数据带 <code>source: openrouter</code> 标签（方向 3 的 provenance 口径），方向 5 的观测校验正好能抓「目录说 1M、你的部署其实 128k」这类背离。与方向 1 同构的「简单优先」：先用免费的行业公共数据把 90% 场景覆盖掉，长尾直接省略字段——省略本来就是既定纪律，不需要人为兜底。</p>
+      </div>
+      <div class="field">
+        <span class="label">Downsides</span>
+        <p>命名不一致是主要工程点：仓库 <code>xiaomi/mimo-v-2.5</code> vs 目录 <code>xiaomi/mimo-v2.5-pro</code>、<code>xai</code> vs <code>x-ai</code>——需要归一化且只做精确匹配（模糊匹配填错比不填更糟）；cursor 侧car模型不在目录内——但按省略纪律这正是想要的行为（缺就是缺，不需要配置兜底）；OpenRouter 的数字是名义模型值，订阅档位不同的部署可能有出入（其 <code>top_provider</code> 分层恰好表达这一点）；引入一个第三方依赖——但失败路径只是省略字段，安全降级。</p>
+      </div>
+    </article>
+
+    <article class="idea" id="idea-3">
+      <h3><span class="num">3.</span>ModelCapabilities 单一出口管线：三来源结构化 + provenance + 消费面只读</h3>
+      <div class="chips">
+        <span class="chip ok">Confidence 70%</span>
+        <span class="chip">Complexity High</span>
+        <span class="chip">direct + reasoned</span>
+        <span class="chip">杠杆最大的一条</span>
+      </div>
+      <div class="field">
+        <span class="label">Description</span>
+        <p>定义内部 <code>ModelCapabilities</code> 记录（<code>context_length, max_input_tokens, max_output_tokens, source</code>），把三条目录来源从「纯 id 字符串」升级为交换结构化能力卡（今天声明与 CLI 路径的 <code>created: 0</code> 空壳就是信息损失的现行证据）。每条元数据带 <code>source: upstream|openrouter|observed</code> 溯源标签；<code>/v1/models</code> 响应、router 调用前校验、dashboard 用量视图、配额/告警全部消费<b>同一个对象</b>。配一条治理规矩（核验并入本条）：能力元数据只在 <code>aggregate_models</code> 出生，其他消费面只许读、不许造；变更清单枚举全部消费面（contracts、tests、前端、docs）。CLI 挂起不阻塞请求的既有约束保持。</p>
+      </div>
+      <figure>
+        <svg viewBox="0 0 760 268" width="100%" height="268" role="img" aria-label="三来源汇入单一 ModelCapabilities 对象再扇出到各消费面">
+          <rect x="14" y="16" width="200" height="44" rx="9" fill="none" stroke="#b9b2a6" stroke-width="1.5"/>
+          <text x="30" y="36" font-size="12.5" font-weight="700" fill="currentColor">OpenRouter 目录</text>
+          <text x="30" y="53" font-size="11" fill="currentColor">source: openrouter</text>
+          <rect x="14" y="86" width="200" height="44" rx="9" fill="none" stroke="#b9b2a6" stroke-width="1.5"/>
+          <text x="30" y="106" font-size="12.5" font-weight="700" fill="currentColor">models_from CLI</text>
+          <text x="30" y="123" font-size="11" fill="currentColor">source: cli</text>
+          <rect x="14" y="156" width="200" height="44" rx="9" fill="none" stroke="#b9b2a6" stroke-width="1.5"/>
+          <text x="30" y="176" font-size="12.5" font-weight="700" fill="currentColor">上游 /models</text>
+          <text x="30" y="193" font-size="11" fill="currentColor">source: upstream（保留不丢弃）</text>
+          <line x1="214" y1="38" x2="286" y2="106" stroke="currentColor" stroke-width="1.4"/>
+          <line x1="214" y1="108" x2="286" y2="118" stroke="currentColor" stroke-width="1.4"/>
+          <line x1="214" y1="178" x2="286" y2="130" stroke="currentColor" stroke-width="1.4"/>
+          <rect x="292" y="78" width="196" height="82" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+          <text x="308" y="104" font-size="12.5" font-weight="700" fill="currentColor">ModelCapabilities</text>
+          <text x="308" y="124" font-size="11" fill="currentColor">单一出口 · source 溯源标签</text>
+          <text x="308" y="142" font-size="11" fill="currentColor">只在 aggregate_models 出生</text>
+          <line x1="488" y1="94" x2="556" y2="46" stroke="currentColor" stroke-width="1.4"/>
+          <line x1="488" y1="112" x2="556" y2="106" stroke="currentColor" stroke-width="1.4"/>
+          <line x1="488" y1="130" x2="556" y2="166" stroke="currentColor" stroke-width="1.4"/>
+          <line x1="488" y1="148" x2="556" y2="226" stroke="currentColor" stroke-width="1.4"/>
+          <rect x="560" y="22" width="186" height="40" rx="9" fill="var(--chip-bg)" stroke="#b9b2a6" stroke-width="1.2"/>
+          <text x="576" y="46" font-size="11.5" fill="currentColor">/v1/models 响应字段</text>
+          <rect x="560" y="84" width="186" height="40" rx="9" fill="var(--chip-bg)" stroke="#b9b2a6" stroke-width="1.2"/>
+          <text x="576" y="108" font-size="11.5" fill="currentColor">router 调用前校验（方向 4）</text>
+          <rect x="560" y="146" width="186" height="40" rx="9" fill="var(--chip-bg)" stroke="#b9b2a6" stroke-width="1.2"/>
+          <text x="576" y="170" font-size="11.5" fill="currentColor">dashboard 用量视图</text>
+          <rect x="560" y="208" width="186" height="40" rx="9" fill="var(--chip-bg)" stroke="#b9b2a6" stroke-width="1.2"/>
+          <text x="576" y="232" font-size="11.5" fill="currentColor">配额 / 告警（方向 5）</text>
+        </svg>
+        <figcaption>来源扇入、单一出口、消费面只读。溯源标签让回填值与观测值并存而不互相污染。</figcaption>
+      </figure>
+      <div class="field">
+        <span class="label">Basis</span>
+        <p class="basis">direct: <code>models.py:95/105/120</code> 三处 <code>created: 0</code>（声明与 CLI 路径只交换裸 id，元数据无车道）；<code>models.py:177-182</code>（上游元数据丢弃点）；<code>dashboard-render-delegation-pattern.md</code>（格式知识跨层重复必然漂移——specs 011/012/018/020 回归四次的根因）；<code>integration-test-broken-after-sse-removal.md</code>（消费面漏枚举的既往事故）。reasoned: 暴露层、路由层、告警层各自拼一份能力数据 → 同一模型在不同处口径不一致，排查成本随消费面数量平方增长。</p>
+      </div>
+      <div class="field">
+        <span class="label">Rationale</span>
+        <p>这是杠杆选择本身：方向 1/2/4/5 全部依赖「能力数据从哪流过」的决定。先把解析做成单点，未来每个消费面都是一次读取而非一次集成；三条来源的结构化升级同时解决「元数据没有附着位」的根因（字段丢弃只是症状）。它也把方向 1 的口径固定下来——字段只在一个地方成型，杜绝第四次、第五次跨层漂移回归。</p>
+      </div>
+      <div class="field">
+        <span class="label">Downsides</span>
+        <p>触碰三条来源的内部接口，改动面最大（fetcher 返回类型、CLI 解析、聚合、测试），是三条里唯一 High 复杂度；如果只想要「先看到数字」，它可以晚于方向 1 落地——但方向 1 的字段语义应该先按本条的 <code>source</code> 口径定义，避免返工。</p>
+      </div>
+    </article>
+
+    <article class="idea" id="idea-4">
+      <h3><span class="num">4.</span>[500k]/[1m] 后缀：从被静默剥除到被校验的能力协商</h3>
+      <div class="chips">
+        <span class="chip ok">Confidence 65%</span>
+        <span class="chip">Complexity Medium</span>
+        <span class="chip">direct</span>
+        <span class="chip">元数据的第一个消费方</span>
+      </div>
+      <div class="field">
+        <span class="label">Description</span>
+        <p><code>router.py</code> 现在把客户端（Claude Code 等）表达上下文诉求的 <code>[500k]</code>/<code>[1m]</code> 后缀静默剥除后路由到同一上游——用户的诉求被扔在地板上，信息双向缺失。改为：解析后缀为能力断言，与能力元数据比对——满足则剥除后缀正常路由；不满足则<b>在调用上游前显式报错</b>（或自动改路由到满足该上下文的部署变体），不静默截断。反方向闭环：后缀诉求与实际能力的偏差进遥测，反哺方向 5 的校准。暴露哪些字段由这个消费闭环倒推——它是能力元数据的第一个真实买方。</p>
+      </div>
+      <figure>
+        <svg viewBox="0 0 760 200" width="100%" height="200" role="img" aria-label="后缀校验流程：解析、比对、放行或报错">
+          <rect x="12" y="70" width="150" height="46" rx="9" fill="none" stroke="#b9b2a6" stroke-width="1.5"/>
+          <text x="26" y="90" font-size="11.5" fill="currentColor">请求 xai/grok-4.6</text>
+          <text x="26" y="108" font-size="11.5" fill="currentColor">[500k]</text>
+          <line x1="162" y1="93" x2="206" y2="93" stroke="currentColor" stroke-width="1.5"/>
+          <polygon points="206,87 218,93 206,99" fill="currentColor"/>
+          <rect x="222" y="70" width="150" height="46" rx="9" fill="none" stroke="#b9b2a6" stroke-width="1.5"/>
+          <text x="236" y="90" font-size="11.5" fill="currentColor">router 解析后缀</text>
+          <text x="236" y="108" font-size="11.5" fill="currentColor">（今天：解析后丢弃）</text>
+          <line x1="372" y1="93" x2="416" y2="93" stroke="currentColor" stroke-width="1.5"/>
+          <polygon points="416,87 428,93 416,99" fill="currentColor"/>
+          <text x="374" y="82" font-size="10.5" fill="currentColor">对照能力元数据</text>
+          <polygon points="500,66 572,93 500,120 428,93" fill="var(--info-soft)" stroke="currentColor" stroke-width="1.4"/>
+          <text x="462" y="90" font-size="11.5" text-anchor="middle" fill="currentColor">满足？</text>
+          <text x="462" y="105" font-size="11.5" text-anchor="middle" fill="currentColor">（方向 1 的字段）</text>
+          <line x1="572" y1="93" x2="622" y2="93" stroke="currentColor" stroke-width="1.5"/>
+          <polygon points="622,87 634,93 622,99" fill="currentColor"/>
+          <text x="576" y="82" font-size="10.5" fill="currentColor">是</text>
+          <rect x="638" y="70" width="112" height="46" rx="9" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+          <text x="652" y="90" font-size="11.5" fill="currentColor">剥除后缀，</text>
+          <text x="652" y="108" font-size="11.5" fill="currentColor">正常路由</text>
+          <line x1="500" y1="120" x2="500" y2="152" stroke="currentColor" stroke-width="1.5"/>
+          <polygon points="494,152 500,164 506,152" fill="currentColor"/>
+          <text x="512" y="142" font-size="10.5" fill="currentColor">否</text>
+          <rect x="374" y="160" width="252" height="34" rx="9" fill="var(--warn-soft)"/>
+          <text x="390" y="181" font-size="11.5" fill="currentColor">调用上游前显式报错（responses-chat-compat 立场）</text>
+          <text x="12" y="152" font-size="10.5" fill="currentColor">反馈回路：后缀诉求 vs 实际能力的偏差 → 遥测（喂方向 5）</text>
+          <path d="M 120 158 C 220 196, 320 196, 366 182" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="4 4"/>
+        </svg>
+        <figcaption>协商闭环：后缀从「被吞掉的注释」变成可校验的契约；超限不再静默截断，而是调用前显式失败。</figcaption>
+      </figure>
+      <div class="field">
+        <span class="label">Basis</span>
+        <p class="basis">direct: <code>router.py:9-13</code>（<code>_CTX_SUFFIX_RE</code> 注释明说这是网关客户端表达 desired context length 的用法）、<code>router.py:25</code> docstring 示例 <code>xai/grok-4.6[500k] -&gt; (xai, grok-4.6)</code>、<code>router.py:35</code>（剥除点）；<code>responses-chat-compat.md</code>（不支持的能力要在调用上游前显式报错——仓库既定先例）。reasoned: 后缀是生产流量里已经存在的能力协商雏形，客户端在为上下文诉求付费表达，网关却单向丢弃。</p>
+      </div>
+      <div class="field">
+        <span class="label">Rationale</span>
+        <p>只暴露不消费的元数据是死数据。后缀闭环给了元数据第一个真实买方（校验基准），让「暴露哪些字段」从凭空设计变成按需倒推；同时把「选错上下文模型」从运行时静默事故（以为跑 1M 实际 128k 截断）变成调用前的显式错误。与方向 1 构成双向闭环。</p>
+      </div>
+      <div class="field">
+        <span class="label">Downsides</span>
+        <p>硬报错改变现网的宽容行为，可能打断今天「带后缀也能跑」的客户端——需要明确灰度或先告警后拦截；解析后缀到数值（500k → 500000）需要处理非标准写法；「或选更大变体」依赖部署变体的存在（与方向 2 的回填值联动）。</p>
+      </div>
+    </article>
+
+    <article class="idea" id="idea-5">
+      <h3><span class="num">5.</span>观测违规检测层：用真实流量抓「元数据错了」，不做自校准填充</h3>
+      <div class="chips">
+        <span class="chip ok">Confidence 55%</span>
+        <span class="chip">Complexity Medium</span>
+        <span class="chip">direct + reasoned（已降格）</span>
+        <span class="chip">元数据质量回路</span>
+      </div>
+      <div class="field">
+        <span class="label">Description</span>
+        <p>spec 020 已按模型存 <code>input_tokens/output_tokens/total_tokens</code>。把观测聚合值用作<b>违规检测</b>而非能力填充：当真实流量出现超过元数据 <code>context_length</code>/<code>max_output_tokens</code> 的样本（或持续逼近上限的截断），判定<b>元数据错了</b>并告警。明确砍掉「用观测值自校准填充元数据」的原始版本——观测最大值只是能力的<b>下界</b>（实际流量几乎不探边界），拿它填充会系统性低估能力；唯一可靠的方向是「观测值越界 = 元数据错误」的单向检测。前置依赖：<code>finish_reason</code> 目前未落库，截断信号需要补上这一字段。</p>
+      </div>
+      <div class="field">
+        <span class="label">Basis</span>
+        <p class="basis">direct: 遥测字段已落库（spec 020：<code>input_tokens/output_tokens/total_tokens</code>，storage 层 T003 / data-model.md）；核验发现的事实缺口：<code>finish_reason</code> 未落库。reasoned: 回填值是第三方名义值、会漂移、档位会不同；而「观测到超过元数据上限的样本」是无歧义的反例信号——它不需要流量探边界，只需要一例越界即证伪，与自校准（需要系统性探边界）的证据要求完全不同。</p>
+      </div>
+      <div class="field">
+        <span class="label">Rationale</span>
+        <p>方向 2 的回填值（来自 OpenRouter 目录）可能与你的实际部署不符——名义值会漂移、档位会不同。本条是唯一能持续对元数据证伪的回路，且数据已经在库里（边际成本一条聚合查询）。它也是全场唯一不依赖上游配合的正确性信号源——Codex 空目录、Cursor 走 CLI 的场景里，网关自己的遥测永远在。</p>
+      </div>
+      <div class="field">
+        <span class="label">Downsides</span>
+        <p>被核验降格过：观测是下界不是上界，本条<b>不能</b>回答「这个模型的真实上限是多少」，只能回答「这份元数据是不是错了」；越界样本罕见，回路可能长期静默；<code>finish_reason</code> 落库是隐藏新增依赖（存储 schema 变更）；截断率类指标在该字段落地前不可用。</p>
+      </div>
+    </article>
+  </section>
+
+  <section id="rejection-summary">
+    <h2>Rejection Summary</h2>
+    <p>39 条原始想法（5 框架）→ 合并为 13 条候选 → 5 条存活。多框架重复命中在合并时计票（如「entry 加字段」被 4 个框架独立命中 6 次）。</p>
+    <table>
+      <thead>
+        <tr><th class="num">#</th><th>候选</th><th>淘汰 / 归并原因</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="num">M2</td><td>声明式 model_info 作为默认权威源（原形态）</td><td>被更简的 OpenRouter 目录回填取代（实测覆盖 xiaomi/mimo、x-ai/grok、openai/codex 等主流模型，整目录一次拉取 + 缓存）；config 声明入口整体移除——不做配置兜底，目录外模型（cursor 侧car）直接省略字段。原三态语义（unknown/conflict）保留为回填链的省略纪律。</td></tr>
+        <tr><td class="num">M6</td><td>opt-in 形态协商（<code>?expand=capabilities</code>）</td><td>并入 #1 备注。依据虚高：核验确认 <code>tests/test_models.py:106-120</code> 断言的是字段存在而非形状锁定；且 OpenRouter 先例本身就是无 opt-in 直加并生态无感——同一先例反证其必要性。可作短期上线保险，不值得单列。</td></tr>
+        <tr><td class="num">M7</td><td>body 级 capabilities 附录</td><td>并入 #1 作为保守备选形态（<code>errors</code> 先例是已上线验证的零破坏路径）。与 entry 直加是同一字段集的放置位置之争，应开成一个议题而非三张选票。</td></tr>
+        <tr><td class="num">M8</td><td>双轨详情端点（<code>/v1/models/{id}</code>、Link rel=describedby）</td><td>弱依据：download-request-json 教训的主旨是「能派生就别开新路径」，对本条实为反向证据；且深元数据去处与 M10 重复。作为附属问题并入 #1/#3 讨论（详情端点可为 curl 保留，消费方必须可降级）。</td></tr>
+        <tr><td class="num">M10</td><td>分层瘦身（深度元数据走独立可缓存资源）</td><td>类比错位：OpenRouter 的分层是 entry 内部结构（<code>top_provider</code> 子对象），不是独立资源；目录体量小（条目数十级、每条几百字节），SC-001 延迟威胁不成立，拆出去收益趋近于零。</td></tr>
+        <tr><td class="num">M11</td><td>能力即运行时反馈（响应头 push x-otel-*）</td><td>无外部先例（OpenRouter/Anthropic 均不做）；每响应加头 + CORS 暴露的持续成本换低频收益。「从不查目录的客户端」本来也用不上该信息。</td></tr>
+        <tr><td class="num">M12</td><td>能力即 id（<code>[1m]</code> 后缀升格为目录命名变体）</td><td>承重外部依据待核实；更硬的内部反证：今天后缀被剥除后路由到同一上游，目录列 <code>grok-4.6[1m]</code> 变体等于承诺无执行机制的能力，恰违反「假元数据最可怕」。其反问「id 是标识符还是能力描述符」保留为会议挑战问题。</td></tr>
+        <tr><td class="num">M9</td><td>unknown/conflict 三态语义</td><td>归并入 #2：它是「声明 &gt; 上游」优先级规则的语义补全，脱离管线无法独立实施。</td></tr>
+        <tr><td class="num">M13</td><td>治理规矩（单一出生点 + 消费面全枚举）</td><td>归并入 #3：是单一出口对象的实施纪律，单列等于同一提案投两次票。</td></tr>
+        <tr><td class="num">M5′</td><td>「观测值自校准填充元数据」承诺</td><td>核验有效反驳：观测最大值是下界不是上界（实际流量不探边界），自校准会系统性低估能力；且 <code>finish_reason</code> 未落库是隐藏依赖。降格为「违规检测」后保留为 #5。</td></tr>
+        <tr><td class="num">X1</td><td>三阶段迁移（body map → entry → opt-in）</td><td>弱：消费方被迫改两次；M1 直加 + 短期开关即可，无需三阶段。</td></tr>
+        <tr><td class="num">X4</td><td>目录 + 响应头双通道</td><td>随 M11 落选（先例缺失）。</td></tr>
+        <tr><td class="num">—</td><td>重复合并（39 → 13）</td><td>四框架对「entry 加字段」「声明式 model_info」「遥测反哺」「后缀闭环」各自独立命中 4-6 次，合并计票而非重复入围。</td></tr>
+      </tbody>
+    </table>
+    <div class="callout">
+      <span class="tag">组合结论（X2/X3 成立）</span>
+      <p>正确的整合形态不是五选一：<b>#1（暴露面）+ #2（权威源）+ #3（管线）+ #5（校验回路）</b>是一套互为前提的集成包，#4 是它的第一个消费方。若只做一件事，做 #1；若做一对，#1 + #2。</p>
+    </div>
+  </section>
+
+  <footer class="composition-signal">Composed 2026-09-27T23:58+08:00 by ce-ideate from 用户提问（otel-agent /models 元数据暴露方式）</footer>
+</main>
+</body>
+</html>
