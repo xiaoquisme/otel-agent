@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from otel_agent import model_capabilities
 from otel_agent.config import Config, Provider
 from otel_agent.models import ModelCache, aggregate_models, fetch_provider_models
 
@@ -495,3 +496,191 @@ def test_cli_sourced_ids_end_up_prefixed_in_the_listing(monkeypatch):
     ]
     assert body["data"][0]["owned_by"] == "codex"
     assert "errors" not in body
+
+
+# --- Capability metadata at the aggregation exit ---
+#
+# Four additive fields — context_length, max_output_tokens,
+# input_modalities, output_modalities — sourced per field as
+# upstream passthrough → catalog backfill → whole-field omission (R1–R5).
+# The core four fields never change shape; no source label is ever emitted.
+
+_CORE_FIELDS = {"id", "object", "created", "owned_by"}
+_CAP_FIELDS = {"context_length", "max_output_tokens", "input_modalities", "output_modalities"}
+
+_BACKFILL = {
+    "xiaomi/mimo-v-2.5": {
+        "context_length": 128000,
+        "max_output_tokens": 8192,
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"],
+    },
+}
+
+
+def _stub_capabilities(monkeypatch, caps: dict[str, dict]) -> list[str]:
+    """Replace the catalog lookup with a canned table; returns the ids asked."""
+    asked: list[str] = []
+
+    def fake_lookup(model_id: str) -> dict:
+        asked.append(model_id)
+        return dict(caps.get(model_id, {}))
+
+    monkeypatch.setattr(model_capabilities, "lookup", fake_lookup)
+    return asked
+
+
+def test_aggregate_passthrough_keeps_upstream_capability_fields(monkeypatch):
+    """AE1: a same-name, right-type upstream value passes through untouched
+    and is never overwritten by a backfill value; near-synonym keys are not
+    mapped (R5)."""
+    caps = {"xiaomi/mimo-v-2.5": {"context_length": 999999, "max_output_tokens": 111}}
+    _stub_capabilities(monkeypatch, caps)
+    raw = {"xiaomi": [{
+        "id": "mimo-v-2.5",
+        "context_length": 200000,
+        "max_output_tokens": 32768,
+        "input_modalities": ["text", "image", "video", "audio"],
+        "output_modalities": ["text"],
+        # Near-synonyms: ignored, and not renamed into the four fields.
+        "max_tokens": 42,
+        "context_window": 43,
+        "max_completion_tokens": 44,
+    }]}
+
+    entry = aggregate_models(raw)["data"][0]
+    assert entry["context_length"] == 200000
+    assert entry["max_output_tokens"] == 32768
+    assert entry["input_modalities"] == ["text", "image", "video", "audio"]
+    assert entry["output_modalities"] == ["text"]
+    assert "max_tokens" not in entry
+    assert "context_window" not in entry
+    assert "max_completion_tokens" not in entry
+
+
+def test_aggregate_backfills_cli_style_entries(monkeypatch):
+    """AE2: a pure-id entry (CLI/declared/Cursor paths) carries no metadata of
+    its own, so the whole capability comes from the backfill. `created: 0`
+    behaviour is unchanged."""
+    _stub_capabilities(monkeypatch, _BACKFILL)
+    raw = {"xiaomi": [{"id": "mimo-v-2.5", "object": "model", "created": 0, "owned_by": "xiaomi"}]}
+
+    entry = aggregate_models(raw)["data"][0]
+    assert entry["id"] == "xiaomi/mimo-v-2.5"
+    assert entry["created"] == 0
+    assert entry["object"] == "model"
+    assert entry["owned_by"] == "xiaomi"
+    assert entry["context_length"] == 128000
+    assert entry["max_output_tokens"] == 8192
+    assert entry["input_modalities"] == ["text", "image"]
+    assert entry["output_modalities"] == ["text"]
+
+
+def test_aggregate_omits_fields_unknown_everywhere(monkeypatch):
+    """AE3: no upstream value and no catalog hit means the field does not
+    appear at all — never 0, never null (R2)."""
+    _stub_capabilities(monkeypatch, {})
+    raw = {"cursor": [{"id": "composer-2.5-sidecar", "object": "model"}]}
+
+    entry = aggregate_models(raw)["data"][0]
+    assert set(entry) == _CORE_FIELDS
+
+
+def test_aggregate_modality_values_pass_through_untouched(monkeypatch):
+    """AE5: modality arrays keep their values (order-insensitive)."""
+    caps = {"xiaomi/mimo-v-2.5": {
+        "input_modalities": ["text", "image", "video", "audio"],
+        "output_modalities": ["text"],
+    }}
+    _stub_capabilities(monkeypatch, caps)
+    raw = {"xiaomi": [{"id": "mimo-v-2.5"}]}
+
+    entry = aggregate_models(raw)["data"][0]
+    assert set(entry["input_modalities"]) == {"text", "image", "video", "audio"}
+    assert set(entry["output_modalities"]) == {"text"}
+
+
+def test_aggregate_chains_each_field_independently(monkeypatch):
+    """Per field: upstream wins, backfill fills the gaps, and a field with no
+    value anywhere is omitted. The `max_tokens` synonym must not shadow the
+    backfill for `max_output_tokens`."""
+    caps = {"xiaomi/mimo-v-2.5": {
+        "max_output_tokens": 8192,
+        "input_modalities": ["text"],
+    }}
+    _stub_capabilities(monkeypatch, caps)
+    raw = {"xiaomi": [{"id": "mimo-v-2.5", "context_length": 200000, "max_tokens": 42}]}
+
+    entry = aggregate_models(raw)["data"][0]
+    assert entry["context_length"] == 200000  # upstream
+    assert entry["max_output_tokens"] == 8192  # backfill (not 42)
+    assert entry["input_modalities"] == ["text"]  # backfill
+    assert "output_modalities" not in entry  # nowhere: omitted
+
+
+def test_aggregate_invalid_upstream_values_fall_through_to_backfill(monkeypatch):
+    """A same-name upstream value of the wrong type is not a value (R5): it
+    falls through to the backfill, and to omission when there is none."""
+    caps = {"xiaomi/mimo-v-2.5": {"context_length": 128000}}
+    _stub_capabilities(monkeypatch, caps)
+    raw = {"xiaomi": [{
+        "id": "mimo-v-2.5",
+        "context_length": -5,
+        "max_output_tokens": "lots",
+        "input_modalities": "text",
+        "output_modalities": ["text", 3],
+    }]}
+
+    entry = aggregate_models(raw)["data"][0]
+    assert entry["context_length"] == 128000  # invalid upstream dropped, backfill used
+    assert "max_output_tokens" not in entry
+    assert "input_modalities" not in entry
+    assert "output_modalities" not in entry
+
+
+def test_aggregate_carries_no_source_labels(monkeypatch):
+    """R4: the response is the minimal field set — nothing marks where a value
+    came from."""
+    _stub_capabilities(monkeypatch, _BACKFILL)
+    raw = {"xiaomi": [{
+        "id": "mimo-v-2.5",
+        "context_length": 200000,
+        "max_output_tokens": 32768,
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+    }]}
+
+    entry = aggregate_models(raw)["data"][0]
+    assert set(entry) == _CORE_FIELDS | _CAP_FIELDS
+
+
+def test_aggregate_queries_the_backfill_with_the_prefixed_entry_id(monkeypatch):
+    asked = _stub_capabilities(monkeypatch, {})
+    raw = {"xiaomi": [{"id": "mimo-v-2.5"}], "openai": [{"id": "gpt-4o"}]}
+
+    aggregate_models(raw)
+    assert sorted(asked) == ["openai/gpt-4o", "xiaomi/mimo-v-2.5"]
+
+
+def test_aggregate_backfills_through_the_real_lookup_path(monkeypatch):
+    """The assembly talks to the real catalog module: an entry normalized
+    against the OpenRouter catalog gets its fields without any upstream
+    metadata (the two halves wired together)."""
+    from otel_agent.model_capabilities import ModelCapabilitiesCatalog
+
+    payload = {"data": [{
+        "id": "xiaomi/mimo-v2.5",
+        "context_length": 128000,
+        "top_provider": {"max_completion_tokens": 8192},
+        "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+    }]}
+    cat = ModelCapabilitiesCatalog(fetcher=lambda: payload)
+    monkeypatch.setattr(model_capabilities, "_catalog", cat)
+    cat.warm_up()
+    cat.wait_for_refresh()
+
+    entry = aggregate_models({"xiaomi": [{"id": "mimo-v-2.5"}]})["data"][0]
+    assert entry["context_length"] == 128000
+    assert entry["max_output_tokens"] == 8192
+    assert entry["input_modalities"] == ["text", "image"]
+    assert entry["output_modalities"] == ["text"]

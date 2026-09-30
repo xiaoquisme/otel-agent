@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from otel_agent import model_capabilities
 from otel_agent.config import Config, Provider
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,20 @@ async def fetch_provider_models(
         return []
 
 
+def _entry_capabilities(model: dict[str, Any], entry_id: str) -> dict[str, Any]:
+    """Capability fields for one entry, per field: upstream → backfill → omit.
+
+    R5: an upstream-supplied value passes through only under its own name and
+    with the right type (no `max_tokens`/`context_window` synonym mapping);
+    whatever is left over is backfilled from the model capability catalog.
+    Fields with no value at all are absent from the response — never 0, never
+    null (R2).
+    """
+    fields = model_capabilities.lookup(entry_id)
+    fields.update(model_capabilities.upstream_passthrough(model))
+    return fields
+
+
 def aggregate_models(
     raw_models: dict[str, list[dict[str, Any]]],
     failures: dict[str, str] | None = None,
@@ -168,18 +183,28 @@ def aggregate_models(
     list is indistinguishable from one that was removed from the config, which
     is the silent absence KTD6 rules out. The aggregate itself still succeeds —
     the entries are additive, so a client reading ``data`` is unaffected.
+
+    This normalization exit is also the single production point of the four
+    additive capability fields (``context_length``, ``max_output_tokens``,
+    ``input_modalities``, ``output_modalities``). The core four fields keep
+    their names and meaning; each capability field is present only when a real
+    value exists (upstream passthrough or catalog backfill) — the field is
+    omitted as a whole otherwise, and no source label is attached (R1–R5).
     """
     result: list[dict[str, Any]] = []
 
     for provider_name, models in sorted(raw_models.items()):
         for model in models:
             original_id = model.get("id", "")
-            result.append({
-                "id": f"{provider_name}/{original_id}",
+            entry_id = f"{provider_name}/{original_id}"
+            entry: dict[str, Any] = {
+                "id": entry_id,
                 "object": "model",
                 "created": model.get("created", 0),
                 "owned_by": provider_name,
-            })
+            }
+            entry.update(_entry_capabilities(model, entry_id))
+            result.append(entry)
 
     body: dict[str, Any] = {"object": "list", "data": result}
     if failures:
