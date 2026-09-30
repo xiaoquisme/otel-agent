@@ -102,6 +102,21 @@ The gateway exposes both OpenAI-compatible and Anthropic-compatible endpoints:
 
 **Cross-format conversion**: If you send an Anthropic-format request to `/v1/messages` but the target provider uses OpenAI format (or vice versa), the gateway automatically converts the request and response formats.
 
+### Model capability metadata
+
+Each `GET /v1/models` entry carries four optional fields alongside the core `id`/`object`/`created`/`owned_by`:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `context_length` | integer | Total context window length in tokens |
+| `max_output_tokens` | integer | Maximum output tokens per response |
+| `input_modalities` | string[] | Accepted inputs (`text`, `image`, `file`, `video`, `audio`; unknown values pass through) |
+| `output_modalities` | string[] | Produced outputs (`text`, `image`, `audio`; unknown values pass through) |
+
+A field appears only when its value is known and is omitted as a whole otherwise — never `0`, never `null`. Values are sourced per field: what the upstream catalog itself provides passes through (same name, right type), anything else is backfilled from the OpenRouter public model catalog, and anything still unknown is left out. The backfill is fetched in the background at most once a day (whole catalog, no per-model requests); when OpenRouter is unreachable the previous values keep serving for up to 7 days, and `/v1/models` neither fails nor slows down because of it.
+
+This is zero-config on purpose: there is **no config entry for declaring capability metadata** — the fields come from the sources above or are omitted. Note also that the response field `max_output_tokens` is model metadata, not the same thing as the request parameter `max_output_tokens` accepted by `/v1/responses` (which caps a single completion).
+
 ## Config File
 
 `~/.otel-agent/config.yaml`:

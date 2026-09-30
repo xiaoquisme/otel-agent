@@ -14,6 +14,17 @@ A single model available from a provider.
 | object | string | Always `"model"` |
 | created | int | Unix timestamp (from upstream or current time) |
 | owned_by | string | Provider name (e.g., `openai`) |
+| context_length | int (optional) | Total context window length in tokens; positive integer, omitted when unknown |
+| max_output_tokens | int (optional) | Maximum output tokens per response; positive integer, omitted when unknown |
+| input_modalities | string[] (optional) | Input modalities; known values `text`/`image`/`file`/`video`/`audio`, new values pass through; omitted when unknown |
+| output_modalities | string[] (optional) | Output modalities; known values `text`/`image`/`audio`, new values pass through; omitted when unknown |
+
+The four capability fields are additive and per-field optional: a field with no
+known value is absent from the entry (never `0`, never `null`). They are
+produced only at the `aggregate_models` normalization exit — upstream passthrough
+(same name, right type) → OpenRouter public catalog backfill
+(`otel_agent/model_capabilities.py`: whole-catalog cache, normalized exact id
+match) → omission. No source label is stored in the response.
 
 ### ModelCache
 
