@@ -21,23 +21,19 @@ Prefer containers? See [Docker](#docker) — including prebuilt images from CI.
 
 ## Docker
 
-Build and run the gateway as a container (dashboard included):
+Run the ready-made image from GitHub Container Registry — no build step:
 
 ```bash
-# Build
-docker build -t otel-agent .
-
-# Run — state persists in a named volume
 docker run -d --name otel-agent \
   -p 45638:45638 \
   -v otel-agent-data:/home/otel/.otel-agent \
-  otel-agent
+  ghcr.io/xiaoquisme/otel-agent:latest
 ```
 
-Or with Compose:
+Or with Compose (`docker-compose.yml` already points at the same image):
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 Details:
@@ -49,7 +45,7 @@ Details:
     -p 45638:45638 \
     -v otel-agent-data:/home/otel/.otel-agent \
     -v "$PWD/config.yaml":/home/otel/.otel-agent/config.yaml:ro \
-    otel-agent
+    ghcr.io/xiaoquisme/otel-agent:latest
   ```
 
 - All state (`config.yaml`, `telemetry.sqlite`, `auth.json`, logs) lives in `/home/otel/.otel-agent` — keep a volume there so it survives image updates.
@@ -58,22 +54,17 @@ Details:
 - The image `HEALTHCHECK` probes `/health` on `OTEL_AGENT_PORT` (default `45638`). If you change the listen port with `-p`, set `OTEL_AGENT_PORT` to match.
 - OAuth sign-in works headless: `docker exec -it otel-agent otel-agent auth login --no-browser`.
 
-### Prebuilt image from CI
+### Image tags
 
-Every push to `main`, tag `v*`, PR, and manual dispatch runs `.github/workflows/docker-image.yml`: it builds the image from the repo Dockerfile, smoke-tests `/health` against a running container, and uploads `otel-agent-<sha>.tar.gz` as the `otel-agent-image` workflow artifact (kept 30 days). A green run always has a downloadable image — the job fails when the tarball is missing.
+`ghcr.io/xiaoquisme/otel-agent` is published by `.github/workflows/docker-image.yml`, which builds the repo Dockerfile and smoke-tests `/health` before every publish:
 
-Download it from the run page (**Actions → Docker image → latest run → Artifacts**) or with the CLI:
+| Tag | When |
+|---|---|
+| `latest` | every push to `main` |
+| `<version>` (e.g. `0.1.0`) | every `v*` git tag |
+| `<short-sha>` (12-char commit) | every published build — pin one specific build |
 
-```bash
-# Most recent run on the current branch
-gh run download "$(gh run list --workflow 'Docker image' --limit 1 --json databaseId --jq '.[0].databaseId')" \
-  --name otel-agent-image --dir dist
-
-# Load it — the image appears as otel-agent:<sha>
-docker load -i dist/otel-agent-<sha>.tar.gz
-```
-
-The tarball is `linux/amd64`, ~55 MB compressed. The same image builds locally with `docker build -t otel-agent .`.
+Pulls need no login — the package is public. The same workflow also uploads `otel-agent-<sha>.tar.gz` as the `otel-agent-image` workflow artifact (kept 30 days) for offline installs: download it from **Actions → Docker image → run → Artifacts** or with `gh run download`, then `docker load -i otel-agent-<sha>.tar.gz`. To build from source instead: `docker build -t otel-agent .`.
 
 ## Quick Start
 

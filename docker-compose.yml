@@ -1,7 +1,8 @@
 services:
   otel-agent:
-    build: .
-    image: otel-agent:latest
+    image: ghcr.io/xiaoquisme/otel-agent:latest
+    # Prefer to build from this repo instead? Uncomment:
+    # build: .
     container_name: otel-agent
     ports:
       - "${OTEL_AGENT_PORT:-45638}:45638"
