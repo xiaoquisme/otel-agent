@@ -15,6 +15,46 @@ uv tool install git+https://github.com/xiaoquisme/otel-agent.git
 pip install git+https://github.com/xiaoquisme/otel-agent.git
 ```
 
+## Docker
+
+Build and run the gateway as a container (dashboard included):
+
+```bash
+# Build
+
+docker build -t otel-agent .
+
+# Run — state persists in a named volume
+docker run -d --name otel-agent \
+  -p 45638:45638 \
+  -v otel-agent-data:/home/otel/.otel-agent \
+  otel-agent
+```
+
+Or with Compose:
+
+```bash
+docker compose up -d --build
+```
+
+Details:
+
+- On first start the entrypoint seeds `/home/otel/.otel-agent/config.yaml` with the default template. To configure providers, mount your own config over it:
+
+  ```bash
+  docker run -d --name otel-agent \
+    -p 45638:45638 \
+    -v otel-agent-data:/home/otel/.otel-agent \
+    -v "$PWD/config.yaml":/home/otel/.otel-agent/config.yaml:ro \
+    otel-agent
+  ```
+
+- All state (`config.yaml`, `telemetry.sqlite`, `auth.json`, logs) lives in `/home/otel/.otel-agent` — keep a volume there so it survives image updates.
+- The process runs as non-root user `otel` (uid 10001). When bind-mounting a host directory for state, make it writable for uid 10001.
+- The gateway binds `0.0.0.0:45638` and serves the dashboard at `http://localhost:45638`.
+- The image `HEALTHCHECK` probes `/health` on `OTEL_AGENT_PORT` (default `45638`). If you change the listen port with `-p`, set `OTEL_AGENT_PORT` to match.
+- OAuth sign-in works headless: `docker exec -it otel-agent otel-agent auth login --no-browser`.
+
 ## Quick Start
 
 ```bash

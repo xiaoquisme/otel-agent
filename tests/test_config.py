@@ -1,7 +1,21 @@
 """Tests for the new flat-provider config schema."""
 
 from pathlib import Path
-from otel_agent.config import Config
+
+import yaml
+
+from otel_agent.config import DEFAULT_CONFIG, Config
+
+
+def test_default_config_is_valid_yaml(tmp_path):
+    """The `otel-agent init` template must parse and load (no stray escapes)."""
+    parsed = yaml.safe_load(DEFAULT_CONFIG)
+    assert isinstance(parsed.get("providers"), list)
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(DEFAULT_CONFIG)
+    cfg = Config(config_file)
+    assert cfg.get_provider("openai") is not None
 
 
 def test_load_valid_config(tmp_path):

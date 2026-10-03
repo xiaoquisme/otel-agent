@@ -1,0 +1,32 @@
+# VCS / agent state
+.git
+.github
+.claude
+
+# Python junk
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+.venv
+**/.venv
+venv
+/dist
+
+# Frontend sources are not needed: dashboard assets ship committed in
+# src/otel_agent/dashboard/frontend_dist (do NOT exclude that directory).
+frontend
+
+# Not needed inside the image
+tests
+specs
+docs
+*.md
+!README.md
+
+# Container files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore

@@ -1,0 +1,22 @@
+services:
+  otel-agent:
+    build: .
+    image: otel-agent:latest
+    container_name: otel-agent
+    ports:
+      - "${OTEL_AGENT_PORT:-45638}:45638"
+    volumes:
+      # State: config.yaml, telemetry DB, auth.json, logs.
+      - otel-agent-data:/home/otel/.otel-agent
+      # Prefer your own config? Bind-mount it over the volume copy:
+      # - ./config.yaml:/home/otel/.otel-agent/config.yaml:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:45638/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  otel-agent-data:
