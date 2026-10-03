@@ -13,8 +13,7 @@ from otel_agent.cli_models import MODEL_SOURCES
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_CONFIG = """\\
-# otel-agent configuration
+DEFAULT_CONFIG = """# otel-agent configuration
 # Docs: https://github.com/xiaoquisme/otel-agent
 #
 # Providers are referenced by model name prefix:
