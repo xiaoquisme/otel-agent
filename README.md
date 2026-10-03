@@ -1,6 +1,6 @@
 # otel-agent — LLM API Gateway
 
-OpenAI/Anthropic compatible API gateway with model-name-based provider routing and telemetry logging.
+OpenAI/Anthropic-compatible API gateway — chat completions, messages, the Responses API, and images — with model-name-based provider routing and telemetry logging.
 
 ## Install
 
@@ -28,7 +28,7 @@ otel-agent config edit
 otel-agent proxy
 
 # 4. Send requests with model-name routing
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:45638/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"openai/gpt-4o","messages":[{"role":"user","content":"hi"}]}'
 ```
@@ -67,7 +67,12 @@ otel-agent dashboard logs     View standalone dashboard logs
 otel-agent dashboard --foreground  Run standalone dashboard in foreground
 otel-agent view               View logged requests (CLI)
 otel-agent config path|show|edit  Manage configuration
-otel-agent auth login|status|import-xai  SuperGrok / xAI OAuth
+otel-agent auth status          Show xAI / Codex login status
+otel-agent auth login           SuperGrok / xAI device-code login
+otel-agent auth login-codex     Codex (ChatGPT) device-code login
+otel-agent auth import-xai      Adopt a Hermes / Grok CLI grant
+otel-agent auth import-codex    Adopt a codex CLI grant
+otel-agent auth --no-browser    Print the login URL instead of opening a browser
 otel-agent doctor             Check installation health
 ```
 
@@ -82,25 +87,37 @@ open http://localhost:45638
 `otel-agent dashboard` starts a standalone viewer only when the proxy is stopped (historical / offline reads). If the proxy is running, the command prints the proxy URL and exits instead of occupying :9090.
 
 Features:
-- Request table with timestamp, method, URL, status, latency
-- Real-time auto-refresh (SSE)
-- Text search and method/status filters
-- Click row for full request/response details
-- Latency chart over time
-- CSV/JSON export
+- Request ledger with timestamp, method, URL, status, and latency
+- Timeline overview with a latency bar per request (click to open)
+- Text search and method/status filters (`/` focuses the search box)
+- Request detail in its own window: full request/response bodies, LLM message trajectory, and a rendered message viewer
+- Download a request as JSON
+- Token usage view — today / week / month totals and per-model breakdown (refreshes every 30s)
+- CSV/JSON export of the request log (`GET /api/export?format=csv|json`)
 
 ## API Endpoints
 
-The gateway exposes both OpenAI-compatible and Anthropic-compatible endpoints:
+The gateway exposes OpenAI-compatible, Anthropic-compatible, and OpenAI Responses endpoints:
 
 | Endpoint | Format | Description |
 |---|---|---|
 | `POST /v1/chat/completions` | OpenAI | Chat completions (streaming supported) |
 | `POST /v1/messages` | Anthropic | Messages (streaming supported) |
+| `POST /v1/responses` | OpenAI Responses | Responses API (streaming supported) |
+| `POST /v1/images/generations` | OpenAI | Image generation |
+| `POST /v1/images/edits` | OpenAI | Image edit (multipart: `image`, optional `mask`, `prompt`) |
 | `GET /v1/models` | OpenAI | List all available models |
 | `GET /health` | — | Health check |
 
 **Cross-format conversion**: If you send an Anthropic-format request to `/v1/messages` but the target provider uses OpenAI format (or vice versa), the gateway automatically converts the request and response formats.
+
+**Responses API**: `POST /v1/responses` behaves in three ways depending on the target provider:
+
+- **Responses-only providers** (`auth: codex-oauth`) are passed straight through. The gateway forces `stream: true` and `store: false` upstream, adds `include: ["reasoning.encrypted_content"]`, and strips `temperature` and `max_output_tokens` (the upstream rejects them). A client that omits `stream` still gets one JSON object back — the upstream stream is folded into a single response. `previous_response_id` is refused with a 400 because the upstream keeps no server-side state; send the whole conversation in `input` instead.
+- **Other OpenAI-format providers** are translated to chat completions and the reply is translated back into Responses shape (streaming and non-streaming), so Responses-only clients keep working against any chat-completions upstream.
+- **Anthropic-format providers** return 400 — there is no translation path.
+
+**Images**: `POST /v1/images/generations` and `POST /v1/images/edits` work with OpenAI-format providers; Anthropic-format providers return 400. Image content parts in chat messages pass through to the upstream unchanged, so vision requests work as well.
 
 ### Model capability metadata
 
@@ -147,9 +164,9 @@ providers:
 Each provider needs:
 - `name`: routing key (used as model name prefix)
 - `base_url`: upstream API base URL
-- `api_key`: authentication key (omit when using `auth: xai-oauth`)
+- `api_key`: authentication key (omit when using a subscription `auth` mode)
 - `api_format`: `openai` or `anthropic` (default: `openai`)
-- `auth`: optional. Use `xai-oauth` for SuperGrok (no API key)
+- `auth`: optional subscription mode — `xai-oauth` for SuperGrok, `codex-oauth` for a ChatGPT/Codex subscription (both leave `api_key` empty)
 - `models`: optional. Declares the models this provider serves, so `/v1/models` lists them without calling upstream
 - `models_from`: optional. Names a catalog source to read the models from instead, e.g. `codex-cli`
 
@@ -218,6 +235,30 @@ What this does:
 
 Do not expose the proxy on a shared network — anyone who can reach it can spend your SuperGrok quota. If a request still 403s after a successful login, the account is not entitled (or is out of quota); see https://grok.com/?_s=usage. Re-login will not fix that.
 
+### Codex / ChatGPT subscription
+
+Proxy a ChatGPT (Codex) subscription instead of an API key. The Codex upstream serves only the Responses API, so calls go to `POST /v1/responses` (see API Endpoints above).
+
+```bash
+# Sign in (device-code; opens the browser, or prints the URL with --no-browser / SSH)
+otel-agent auth login-codex
+
+# Already signed in with the `codex` CLI? Adopt that grant instead
+otel-agent auth import-codex
+
+# Check login
+otel-agent auth status
+```
+
+What this does:
+
+- `login-codex` mints a fresh grant chain owned by this gateway alone — no sibling CLI is read or modified. Tokens are saved in `~/.otel-agent/auth.json` and a `codex` provider is added to config; you do not paste an API key.
+- `import-codex` adopts a grant already held by the `codex` CLI (its files are not modified). This is a hand-off: from then on this gateway is the chain's only writer — the sibling's sign-in goes stale, and a second writer refreshing the chain will invalidate it.
+- Tokens refresh automatically while the proxy is running. Use `codex/<model>` (e.g. `codex/gpt-5.6-sol`). The endpoint publishes no model catalog, so declare `models:` or `models_from: codex-cli` as described above.
+- `/v1/chat/completions` and `/v1/messages` refuse a `codex` provider with a 400 that points at `/v1/responses` — the upstream would 404 those routes anyway.
+
+Same warning as SuperGrok: do not expose the proxy on a shared network — anyone who can reach it can spend your subscription quota.
+
 ### Cursor subscription
 
 Cursor dashboard API keys are not an OpenAI chat-completions host (`POST https://api.cursor.com/v1/chat/completions` is 404). Point a `cursor` provider at a local OpenAI sidecar (`cursor-agent-api`) that wraps the Cursor CLI.
@@ -240,7 +281,7 @@ Do not put `auth: xai-oauth` on this provider — the key is static YAML, like a
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://localhost:8080/v1", api_key="dummy")
+client = OpenAI(base_url="http://localhost:45638/v1", api_key="dummy")
 response = client.chat.completions.create(
     model="openai/gpt-4o",  # or "xiaomi/mimo-v-2.5"
     messages=[{"role": "user", "content": "Hello!"}],
@@ -251,7 +292,7 @@ response = client.chat.completions.create(
 
 ```python
 import anthropic
-client = anthropic.Anthropic(base_url="http://localhost:8080", api_key="dummy")
+client = anthropic.Anthropic(base_url="http://localhost:45638", api_key="dummy")
 response = client.messages.create(
     model="anthropic/claude-sonnet-4",  # or "xiaomi/mimo-v-2.5"
     max_tokens=1024,
@@ -263,13 +304,13 @@ response = client.messages.create(
 
 ```bash
 # List available models
-curl http://localhost:8080/v1/models
+curl http://localhost:45638/v1/models
 
 # Filter by provider
-curl "http://localhost:8080/v1/models?provider=openai"
+curl "http://localhost:45638/v1/models?provider=openai"
 
 # OpenAI format
-curl http://localhost:8080/v1/chat/completions \
+curl http://localhost:45638/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "openai/gpt-4o",
@@ -278,12 +319,20 @@ curl http://localhost:8080/v1/chat/completions \
   }'
 
 # Anthropic format
-curl http://localhost:8080/v1/messages \
+curl http://localhost:45638/v1/messages \
   -H "Content-Type: application/json" \
   -d '{
     "model": "anthropic/claude-sonnet-4",
     "max_tokens": 100,
     "messages": [{"role": "user", "content": "hi"}]
+  }'
+
+# Responses API (e.g. for Codex-only clients)
+curl http://localhost:45638/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai/gpt-4o",
+    "input": "hi"
   }'
 ```
 
