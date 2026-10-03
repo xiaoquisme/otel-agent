@@ -1,0 +1,42 @@
+name: Docker image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and upload image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build --tag "otel-agent:${GITHUB_SHA}" .
+
+      - name: Smoke test
+        run: |
+          docker run --detach --name smoke --publish 45638:45638 "otel-agent:${GITHUB_SHA}"
+          if ! curl --retry 30 --retry-delay 1 --retry-all-errors --fail --silent --show-error http://127.0.0.1:45638/health; then
+            docker logs smoke
+            exit 1
+          fi
+          docker rm --force smoke
+
+      - name: Save image tarball
+        run: docker save "otel-agent:${GITHUB_SHA}" | gzip > "otel-agent-${GITHUB_SHA}.tar.gz"
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: otel-agent-image
+          path: otel-agent-${{ github.sha }}.tar.gz
+          if-no-files-found: error
+          retention-days: 30
