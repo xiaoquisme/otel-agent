@@ -1,5 +1,7 @@
 # otel-agent — LLM API Gateway
 
+[![Docker image](https://github.com/xiaoquisme/otel-agent/actions/workflows/docker-image.yml/badge.svg)](https://github.com/xiaoquisme/otel-agent/actions/workflows/docker-image.yml)
+
 OpenAI/Anthropic-compatible API gateway — chat completions, messages, the Responses API, and images — with model-name-based provider routing and telemetry logging.
 
 ## Install
@@ -15,13 +17,14 @@ uv tool install git+https://github.com/xiaoquisme/otel-agent.git
 pip install git+https://github.com/xiaoquisme/otel-agent.git
 ```
 
+Prefer containers? See [Docker](#docker) — including prebuilt images from CI.
+
 ## Docker
 
 Build and run the gateway as a container (dashboard included):
 
 ```bash
 # Build
-
 docker build -t otel-agent .
 
 # Run — state persists in a named volume
@@ -54,7 +57,23 @@ Details:
 - The gateway binds `0.0.0.0:45638` and serves the dashboard at `http://localhost:45638`.
 - The image `HEALTHCHECK` probes `/health` on `OTEL_AGENT_PORT` (default `45638`). If you change the listen port with `-p`, set `OTEL_AGENT_PORT` to match.
 - OAuth sign-in works headless: `docker exec -it otel-agent otel-agent auth login --no-browser`.
-- CI builds the image on every push to `main`, tag, PR, and manual dispatch (`.github/workflows/docker-image.yml`), smoke-tests `/health`, and uploads `otel-agent-<sha>.tar.gz` as the `otel-agent-image` workflow artifact (kept 30 days). Load it with `docker load -i otel-agent-<sha>.tar.gz`.
+
+### Prebuilt image from CI
+
+Every push to `main`, tag `v*`, PR, and manual dispatch runs `.github/workflows/docker-image.yml`: it builds the image from the repo Dockerfile, smoke-tests `/health` against a running container, and uploads `otel-agent-<sha>.tar.gz` as the `otel-agent-image` workflow artifact (kept 30 days). A green run always has a downloadable image — the job fails when the tarball is missing.
+
+Download it from the run page (**Actions → Docker image → latest run → Artifacts**) or with the CLI:
+
+```bash
+# Most recent run on the current branch
+gh run download "$(gh run list --workflow 'Docker image' --limit 1 --json databaseId --jq '.[0].databaseId')" \
+  --name otel-agent-image --dir dist
+
+# Load it — the image appears as otel-agent:<sha>
+docker load -i dist/otel-agent-<sha>.tar.gz
+```
+
+The tarball is `linux/amd64`, ~55 MB compressed. The same image builds locally with `docker build -t otel-agent .`.
 
 ## Quick Start
 
