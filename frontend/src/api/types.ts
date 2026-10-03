@@ -47,6 +47,10 @@ export interface ModelUsage {
   input_tokens: number
   output_tokens: number
   request_count: number
+  cache_read_tokens?: number
+  cache_creation_tokens?: number
+  cacheable_input_tokens?: number
+  cache_hit_rate?: number | null
 }
 
 export interface UsageSummary {
@@ -58,6 +62,10 @@ export interface UsageSummary {
   models: ModelUsage[]
   eligible_request_count: number
   excluded_request_count: number
+  cache_read_tokens?: number
+  cache_creation_tokens?: number
+  cacheable_input_tokens?: number
+  cache_hit_rate?: number | null
 }
 
 export interface RequestListParams {

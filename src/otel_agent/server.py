@@ -27,6 +27,7 @@ from otel_agent.converter import (
 )
 from otel_agent.logger import TelemetryLogger, redact_sensitive_headers
 from otel_agent.models import ModelCache, aggregate_models, fetch_provider_models
+from otel_agent.stream_capture import StreamCapture
 from otel_agent.responses_compat import (
     ChatToResponsesStreamConverter,
     UnsupportedResponsesFeature,
@@ -37,10 +38,11 @@ from otel_agent.router import parse_model, resolve_provider
 
 logger = logging.getLogger(__name__)
 
-#: How much of a request or response body a telemetry row keeps. It is applied
-#: when the row is written, which is what lets an accumulator feeding it stop
-#: at the same point instead of holding a whole stream in memory for a
-#: truncation that would discard it.
+#: How much of a request or response body a telemetry row keeps. It bounds
+#: the DB row and the dashboard's render cost; the dashboard flags a body that
+#: ends at the cut. Streamed responses are reassembled (see
+#: ``stream_capture``) and stay well inside it in practice — their snapshot
+#: leads with usage so even a pathological cut cannot lose the analytics.
 _TELEMETRY_BODY_LIMIT = 500_000
 
 
@@ -57,6 +59,35 @@ def normalize_usage(response: dict | str) -> dict[str, int | None]:
         values = [value for value in (input_tokens, output_tokens) if value is not None]
         total_tokens = sum(values) if values else None
     return {"input_tokens": input_tokens, "output_tokens": output_tokens, "total_tokens": total_tokens}
+
+
+def normalize_cache_usage(response: dict | str) -> dict[str, int | None]:
+    """Extract prompt-cache token counts from any provider usage dialect.
+
+    Providers name these differently: Anthropic reports
+    ``cache_read_input_tokens`` / ``cache_creation_input_tokens``, OpenAI chat
+    reports ``prompt_tokens_details.cached_tokens``, the Responses API
+    ``input_tokens_details.cached_tokens``, and DeepSeek
+    ``prompt_cache_hit_tokens``. Counts are taken as reported, never
+    estimated; ``cache_creation_tokens`` stays None where the provider has no
+    cache-write concept.
+    """
+    raw = response.get("usage") if isinstance(response, dict) else None
+    usage = raw if isinstance(raw, dict) else {}
+
+    def valid(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    read = valid(usage.get("cache_read_input_tokens"))
+    if read is None:
+        read = valid(usage.get("prompt_cache_hit_tokens"))
+    for details_key in ("prompt_tokens_details", "input_tokens_details"):
+        if read is None:
+            details = usage.get(details_key)
+            if isinstance(details, dict):
+                read = valid(details.get("cached_tokens"))
+    creation = valid(usage.get("cache_creation_input_tokens"))
+    return {"cache_read_tokens": read, "cache_creation_tokens": creation}
 
 from otel_agent.provider_utils import (
     build_upstream_url,
@@ -826,12 +857,9 @@ async def _handle_streaming(
     """Handle a streaming request to an upstream provider."""
 
     async def stream_generator() -> AsyncIterator[bytes]:
-        collected_chunks: list[str] = []
-        collected_chars = 0
+        capture = StreamCapture()
         resp_headers: dict[str, str] = {}
         stream_status = 200
-        last_valid_usage: dict | None = None
-        model_name: str | None = None
         try:
             async with client.stream("POST", url, headers=headers, json=body) as resp:
                 resp_headers = dict(resp.headers)
@@ -900,45 +928,11 @@ async def _handle_streaming(
                             for event in openai_to_anthropic.feed(chunk_data):
                                 yield event.encode()
 
-                        # Extract model name from first chunk. Chat completions
-                        # carry it at the top level, Anthropic nests it in
-                        # `message`, the Responses API in `response`.
-                        if model_name is None:
-                            for candidate in (chunk_data, chunk_data.get("message"), chunk_data.get("response")):
-                                if isinstance(candidate, dict) and candidate.get("model"):
-                                    model_name = candidate["model"]
-                                    break
-
-                        # Collect for telemetry, and stop at the point the
-                        # row would keep: a stream can run for minutes and
-                        # carry the entire response, so accumulating all of it
-                        # would hold a second copy of the answer, per in-flight
-                        # request, purely to truncate it on the way in.
-                        if collected_chars < _TELEMETRY_BODY_LIMIT:
-                            chunk_text = json.dumps(chunk_data)
-                            collected_chunks.append(chunk_text)
-                            collected_chars += len(chunk_text)
-                        # T031: Extract usage from streaming chunks. Same three
-                        # places as the model name; prefer the first source that
-                        # has a value for each field.
-                        merged = normalize_usage(chunk_data)
-                        for nested in (chunk_data.get("message"), chunk_data.get("response")):
-                            if not isinstance(nested, dict):
-                                continue
-                            nested_usage = normalize_usage(nested)
-                            merged = {
-                                k: merged[k] if merged[k] is not None else nested_usage[k]
-                                for k in merged
-                            }
-                        if any(v is not None for v in merged.values()):
-                            if last_valid_usage is None:
-                                last_valid_usage = merged
-                            else:
-                                # Accumulate: keep existing non-None, overlay new non-None
-                                last_valid_usage = {
-                                    k: merged[k] if merged[k] is not None else last_valid_usage[k]
-                                    for k in last_valid_usage
-                                }
+                        # Reassemble for telemetry instead of concatenating
+                        # raw chunk JSON: the raw form is 5-10x the answer and
+                        # its tail (where providers report usage) hit the body
+                        # limit first. See stream_capture for the full story.
+                        capture.feed(chunk_data)
                     elif openai_to_anthropic is None:
                         # Pass through non-data lines (event:, id:, etc.)
                         yield f"{line}\n".encode()
@@ -967,24 +961,9 @@ async def _handle_streaming(
                 yield f"data: {json.dumps({'error': {'message': message, 'type': 'server_error'}})}\n\n".encode()
         finally:
             latency_ms = (time.monotonic() - start_time) * 1000
-            resp_body: dict = {"streamed": True, "preview": "".join(collected_chunks), "model": model_name}
-            # T031: If usage was captured from streaming chunks, include it in the
-            # response body so _log_telemetry can normalize and persist it.
-            if last_valid_usage is not None:
-                # Recompute total from merged input/output to avoid stale
-                # auto-computed values from partial chunks (e.g. message_delta
-                # only has output_tokens so its total_tokens is wrong).
-                inp = last_valid_usage["input_tokens"]
-                out = last_valid_usage["output_tokens"]
-                recomputed_total = (
-                    (inp or 0) + (out or 0) if inp is not None or out is not None
-                    else last_valid_usage["total_tokens"]
-                )
-                resp_body["usage"] = {
-                    "input_tokens": inp,
-                    "output_tokens": out,
-                    "total_tokens": recomputed_total,
-                }
+            # T031: the snapshot carries the provider's raw usage object so
+            # _log_telemetry normalizes and persists it.
+            resp_body: dict = capture.snapshot()
             _log_telemetry(
                 telemetry, request, stream_status, resp_body, latency_ms, provider,
                 request_body=request_body, resp_headers=resp_headers, log_body=log_body,
@@ -1148,6 +1127,7 @@ def _log_telemetry(
     try:
         body_str = json.dumps(resp_body) if isinstance(resp_body, dict) else str(resp_body)
         usage = normalize_usage(resp_body)
+        cache = normalize_cache_usage(resp_body)
         # Extract client-visible model from response body for analytics.
         # Fall back to the client's request body when the upstream omits the
         # model field (common with OpenRouter and some proxied providers).
@@ -1186,6 +1166,8 @@ def _log_telemetry(
             model_name=model_name,
             input_tokens=usage["input_tokens"], output_tokens=usage["output_tokens"],
             total_tokens=usage["total_tokens"],
+            cache_read_tokens=cache["cache_read_tokens"],
+            cache_creation_tokens=cache["cache_creation_tokens"],
             format=source_format,
         )
     except Exception:

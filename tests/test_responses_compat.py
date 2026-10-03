@@ -379,3 +379,16 @@ def test_upstream_failure_is_response_failed_without_completed():
     assert events[0][0] == "response.failed"
     assert events[0][1]["response"]["error"]["message"] == "model rejected the parameter"
     assert "response.completed" not in frame
+
+
+def test_chat_completion_cache_usage_becomes_input_tokens_details():
+    response = chat_completion_to_response(
+        {
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11,
+                      "prompt_tokens_details": {"cached_tokens": 6}},
+        },
+        model="m",
+        custom_tool_names=set(),
+    )
+    assert response["usage"]["input_tokens_details"] == {"cached_tokens": 6}

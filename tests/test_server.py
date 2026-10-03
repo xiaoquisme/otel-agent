@@ -279,8 +279,85 @@ async def test_streaming_telemetry_logged():
         assert row is not None, "No telemetry record found — streaming request was NOT logged"
         parsed = json.loads(row[0])
         assert parsed["streamed"] is True
-        assert "preview" in parsed
-        assert len(parsed["preview"]) > 0
+        # Reassembled body: the answer itself, not a raw-chunk concatenation.
+        assert parsed["content"] == "Hello world"
+        assert "preview" not in parsed
+
+
+@pytest.mark.anyio
+async def test_streaming_telemetry_keeps_raw_usage():
+    """The stored stream body carries the provider's raw usage object so
+    provider-specific fields (e.g. cache tokens) survive for analytics."""
+    with tempfile.TemporaryDirectory() as td:
+        db_path = Path(td) / "test.sqlite"
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(db_path)
+        app = create_app(config, telemetry)
+
+        chunks = [
+            {"choices": [{"delta": {"content": "Hi"}, "index": 0}]},
+            {
+                "choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                    "prompt_tokens_details": {"cached_tokens": 6},
+                },
+            },
+        ]
+        mock_stream = _FakeStreamMethod(chunks)
+
+        with patch("httpx.AsyncClient.stream", mock_stream):
+            from httpx import ASGITransport
+            async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/v1/chat/completions",
+                    json={"model": "openai/gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": True},
+                )
+                await resp.aread()
+
+        telemetry.close()
+        conn = sqlite3.connect(str(db_path))
+        row = conn.execute(
+            "SELECT response_body, input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_creation_tokens FROM requests"
+        ).fetchone()
+        conn.close()
+        parsed = json.loads(row[0])
+        assert parsed["usage"]["prompt_tokens_details"] == {"cached_tokens": 6}
+        assert parsed["finish_reason"] == "stop"
+        assert (row[1], row[2], row[3]) == (10, 5, 15)
+        assert (row[4], row[5]) == (6, None)
+
+
+def test_normalize_cache_usage_dialects():
+    """Every provider naming for cache tokens normalizes to the two columns."""
+    normalize = getattr(server, "normalize_cache_usage")
+    # Anthropic
+    assert normalize({"usage": {"cache_read_input_tokens": 700, "cache_creation_input_tokens": 100}}) == {
+        "cache_read_tokens": 700, "cache_creation_tokens": 100,
+    }
+    # OpenAI chat
+    assert normalize({"usage": {"prompt_tokens_details": {"cached_tokens": 6}}}) == {
+        "cache_read_tokens": 6, "cache_creation_tokens": None,
+    }
+    # Responses
+    assert normalize({"usage": {"input_tokens_details": {"cached_tokens": 9}}}) == {
+        "cache_read_tokens": 9, "cache_creation_tokens": None,
+    }
+    # DeepSeek
+    assert normalize({"usage": {"prompt_cache_hit_tokens": 42}}) == {
+        "cache_read_tokens": 42, "cache_creation_tokens": None,
+    }
+
+
+def test_normalize_cache_usage_invalid_values():
+    normalize = getattr(server, "normalize_cache_usage")
+    assert normalize({"usage": {"cache_read_input_tokens": -1, "cache_creation_input_tokens": True}}) == {
+        "cache_read_tokens": None, "cache_creation_tokens": None,
+    }
+    assert normalize({"usage": None}) == {"cache_read_tokens": None, "cache_creation_tokens": None}
+    assert normalize("not a dict") == {"cache_read_tokens": None, "cache_creation_tokens": None}
 
 
 @pytest.mark.anyio

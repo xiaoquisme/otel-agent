@@ -252,6 +252,55 @@ class TestStreamingPreview:
 
 
 # ---------------------------------------------------------------------------
+# Tests: Reassembled streaming body (no raw-chunk preview)
+# ---------------------------------------------------------------------------
+
+class TestReassembledStreamingBody:
+    def test_message_and_metadata(self) -> None:
+        body = json.dumps({
+            "streamed": True,
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            "model": "gpt-4",
+            "finish_reason": "stop",
+            "content": "Hello world",
+            "reasoning_content": "Thinking...",
+            "tool_calls": [{"id": "call_1", "name": "lookup", "arguments": '{"a": 1}'}],
+        })
+        result = parse_messages(request_body=None, response_body=body)
+        messages = result["messages"]
+        assert len(messages) == 1
+        msg = messages[0]
+        assert msg["role"] == "assistant"
+        assert msg["content"] == "Hello world"
+        assert msg["reasoning_content"] == "Thinking..."
+        assert msg["tool_calls"] == [{"id": "call_1", "name": "lookup", "arguments": '{"a": 1}'}]
+        assert result["metadata"]["model"] == "gpt-4"
+        assert result["metadata"]["finish_reason"] == "stop"
+        # Display usage is normalized regardless of provider naming.
+        assert result["metadata"]["usage"] == {
+            "input_tokens": 10, "output_tokens": 5, "total_tokens": 15,
+        }
+
+    def test_usage_naming_is_normalized_for_display(self) -> None:
+        body = json.dumps({
+            "streamed": True, "content": "x",
+            "usage": {"input_tokens": 2, "output_tokens": 1,
+                      "cache_read_input_tokens": 500},
+        })
+        result = parse_messages(request_body=None, response_body=body)
+        assert result["metadata"]["usage"] == {
+            "input_tokens": 2, "output_tokens": 1, "total_tokens": None,
+        }
+
+    def test_empty_stream_body(self) -> None:
+        body = json.dumps({"streamed": True, "content": ""})
+        result = parse_messages(request_body=None, response_body=body)
+        assert result["messages"] == []
+        assert result["metadata"]["finish_reason"] == "streaming"
+        assert result["metadata"]["usage"] is None
+
+
+# ---------------------------------------------------------------------------
 # Tests: Combined request + response
 # ---------------------------------------------------------------------------
 

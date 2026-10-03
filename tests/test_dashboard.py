@@ -77,7 +77,9 @@ def _create_usage_db(db_path: Path, records: list[dict]) -> None:
             model_name TEXT,
             input_tokens INTEGER,
             output_tokens INTEGER,
-            total_tokens INTEGER
+            total_tokens INTEGER,
+            cache_read_tokens INTEGER,
+            cache_creation_tokens INTEGER
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_timestamp ON requests(timestamp)")
@@ -86,9 +88,10 @@ def _create_usage_db(db_path: Path, records: list[dict]) -> None:
             """INSERT INTO requests
                (timestamp, method, url, upstream, request_headers, request_body,
                 response_status, response_headers, response_body, latency_ms,
-                model_name, input_tokens, output_tokens, total_tokens)
+                model_name, input_tokens, output_tokens, total_tokens,
+                cache_read_tokens, cache_creation_tokens)
                VALUES (?, ?, ?, '', '{}', '{}', ?, '{}', '{}', 1.0,
-                       ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?)""",
             (
                 r.get("timestamp", datetime.now(timezone.utc).isoformat()),
                 r.get("method", "POST"),
@@ -98,6 +101,8 @@ def _create_usage_db(db_path: Path, records: list[dict]) -> None:
                 r.get("input_tokens"),
                 r.get("output_tokens"),
                 r.get("total_tokens"),
+                r.get("cache_read_tokens"),
+                r.get("cache_creation_tokens"),
             ),
         )
     conn.commit()
@@ -124,7 +129,9 @@ def _create_test_db(db_path: Path, n: int = 5) -> None:
             model_name TEXT,
             input_tokens INTEGER,
             output_tokens INTEGER,
-            total_tokens INTEGER
+            total_tokens INTEGER,
+            cache_read_tokens INTEGER,
+            cache_creation_tokens INTEGER
         )
     """)
     for i in range(1, n + 1):

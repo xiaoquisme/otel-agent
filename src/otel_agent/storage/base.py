@@ -55,6 +55,13 @@ class StorageBackend(ABC):
         response_body: str,
         latency_ms: float,
         upstream: str = "",
+        model_name: str | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        total_tokens: int | None = None,
+        cache_read_tokens: int | None = None,
+        cache_creation_tokens: int | None = None,
+        timestamp: str | None = None,
         format: str | None = None,
     ) -> None:
         """Insert a single request record."""

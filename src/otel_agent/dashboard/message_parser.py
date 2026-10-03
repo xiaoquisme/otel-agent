@@ -82,12 +82,60 @@ def _extract_anthropic_request_messages(parsed: dict[str, Any]) -> list[dict[str
     return result
 
 
-def _extract_streaming_messages(parsed: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Extract messages and metadata from a streaming preview object."""
-    preview = parsed.get("preview")
-    if not preview:
-        return [], {}
+def _display_usage(raw: Any) -> dict[str, Any] | None:
+    """Normalize a provider usage object to the dashboard's display triple."""
+    if not isinstance(raw, dict):
+        return None
+    usage = {
+        "input_tokens": raw.get("input_tokens") or raw.get("prompt_tokens"),
+        "output_tokens": raw.get("output_tokens") or raw.get("completion_tokens"),
+        "total_tokens": raw.get("total_tokens"),
+    }
+    return usage if any(v is not None for v in usage.values()) else None
 
+
+def _extract_streaming_messages(parsed: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Extract messages and metadata from a stored streaming body.
+
+    Two stored shapes exist: legacy rows keep the raw chunk concatenation
+    under ``preview``; current rows carry the reassembled message (content,
+    reasoning, tool calls, finish reason, raw usage) directly.
+    """
+    preview = parsed.get("preview")
+    if preview:
+        return _extract_streaming_preview(preview)
+    return _extract_reassembled_stream(parsed)
+
+
+def _extract_reassembled_stream(parsed: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Read the reassembled stream snapshot written by ``stream_capture``."""
+    content = parsed.get("content") or ""
+    reasoning = parsed.get("reasoning_content") or ""
+    tool_calls = [
+        {"id": tc.get("id"), "name": tc.get("name") or "tool", "arguments": tc.get("arguments") or ""}
+        for tc in parsed.get("tool_calls") or []
+        if isinstance(tc, dict)
+    ]
+
+    messages: list[dict[str, Any]] = []
+    if content or reasoning or tool_calls:
+        msg: dict[str, Any] = {"role": "assistant", "content": content}
+        if reasoning:
+            msg["reasoning_content"] = reasoning
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+        messages.append(msg)
+
+    metadata: dict[str, Any] = {
+        "model": parsed.get("model") or "",
+        "finish_reason": parsed.get("finish_reason") or "streaming",
+        "usage": _display_usage(parsed.get("usage")),
+    }
+    return messages, metadata
+
+
+def _extract_streaming_preview(preview: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Extract messages and metadata from a legacy raw-chunk preview."""
     chunks = _parse_streaming_chunks(preview)
     if not chunks:
         return [], {}
@@ -103,13 +151,9 @@ def _extract_streaming_messages(parsed: dict[str, Any]) -> tuple[list[dict[str, 
         if chunk.get("model"):
             model = chunk["model"]
         # Extract usage from chunks
-        chunk_usage = chunk.get("usage")
-        if isinstance(chunk_usage, dict):
-            usage = {
-                "input_tokens": chunk_usage.get("input_tokens") or chunk_usage.get("prompt_tokens"),
-                "output_tokens": chunk_usage.get("output_tokens") or chunk_usage.get("completion_tokens"),
-                "total_tokens": chunk_usage.get("total_tokens"),
-            }
+        chunk_usage = _display_usage(chunk.get("usage"))
+        if chunk_usage is not None:
+            usage = chunk_usage
         choices = chunk.get("choices")
         if not choices or not isinstance(choices, list):
             continue

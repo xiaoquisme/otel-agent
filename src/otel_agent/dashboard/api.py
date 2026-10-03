@@ -114,7 +114,9 @@ class DashboardAPI:
     def _empty_usage(self, start: str, end: str) -> dict:
         """Return an empty usage response."""
         return {"start": start, "end": end, "total_tokens": 0, "input_tokens": 0,
-                "output_tokens": 0, "eligible_request_count": 0, "excluded_request_count": 0, "models": []}
+                "output_tokens": 0, "cache_read_tokens": 0, "cache_creation_tokens": 0,
+                "cacheable_input_tokens": 0, "cache_hit_rate": None,
+                "eligible_request_count": 0, "excluded_request_count": 0, "models": []}
 
     # ------------------------------------------------------------------
     # Public API

@@ -591,7 +591,7 @@ def _tool_output_text(output: Any) -> str:
     return json.dumps(output)
 
 
-def _responses_usage(raw: Any) -> dict[str, int] | None:
+def _responses_usage(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
 
@@ -607,11 +607,27 @@ def _responses_usage(raw: Any) -> dict[str, int] | None:
         return None
     if total_tokens is None:
         total_tokens = input_tokens + output_tokens
-    return {
+    usage: dict[str, Any] = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
     }
+    # Carry prompt-cache accounting across the dialect boundary so telemetry
+    # can still compute cache hit rates after conversion. Responses reports it
+    # in input_tokens_details, OpenAI chat in prompt_tokens_details, Anthropic
+    # as cache_* keys.
+    cached = None
+    for details_key in ("prompt_tokens_details", "input_tokens_details"):
+        details = raw.get(details_key)
+        if cached is None and isinstance(details, dict):
+            cached = integer(details.get("cached_tokens"))
+    if cached is not None:
+        usage["input_tokens_details"] = {"cached_tokens": cached}
+    for key in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+        value = integer(raw.get(key))
+        if value is not None:
+            usage[key] = value
+    return usage
 
 
 def _response_id(raw: Any) -> str:

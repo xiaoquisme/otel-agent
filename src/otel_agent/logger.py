@@ -38,6 +38,7 @@ class TelemetryLogger:
         upstream: str = "",
         model_name: str | None = None, input_tokens: int | None = None,
         output_tokens: int | None = None, total_tokens: int | None = None,
+        cache_read_tokens: int | None = None, cache_creation_tokens: int | None = None,
         timestamp: str | None = None, format: str | None = None,
     ):
         self.storage.log_request(
@@ -50,7 +51,10 @@ class TelemetryLogger:
             response_body=response_body,
             latency_ms=latency_ms,
             upstream=upstream, model_name=model_name, input_tokens=input_tokens,
-            output_tokens=output_tokens, total_tokens=total_tokens, timestamp=timestamp,
+            output_tokens=output_tokens, total_tokens=total_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            timestamp=timestamp,
             format=format,
         )
 

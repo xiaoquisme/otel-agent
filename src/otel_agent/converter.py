@@ -173,6 +173,17 @@ def openai_to_anthropic_response(openai_resp: dict[str, Any]) -> dict[str, Any]:
 
     usage = openai_resp.get("usage", {})
 
+    anthropic_usage: dict[str, Any] = {
+        "input_tokens": usage.get("prompt_tokens", 0),
+        "output_tokens": usage.get("completion_tokens", 0),
+    }
+    # Carry prompt-cache accounting across the dialect boundary (telemetry
+    # computes cache hit rates from it; see normalize_cache_usage).
+    details = usage.get("prompt_tokens_details")
+    cached = details.get("cached_tokens") if isinstance(details, dict) else None
+    if isinstance(cached, int) and not isinstance(cached, bool):
+        anthropic_usage["cache_read_input_tokens"] = cached
+
     return {
         "id": openai_resp.get("id", ""),
         "type": "message",
@@ -180,10 +191,7 @@ def openai_to_anthropic_response(openai_resp: dict[str, Any]) -> dict[str, Any]:
         "content": content_blocks,
         "model": openai_resp.get("model", ""),
         "stop_reason": stop_reason,
-        "usage": {
-            "input_tokens": usage.get("prompt_tokens", 0),
-            "output_tokens": usage.get("completion_tokens", 0),
-        },
+        "usage": anthropic_usage,
     }
 
 
@@ -203,6 +211,20 @@ def anthropic_to_openai_response(anthropic_resp: dict[str, Any]) -> dict[str, An
 
     usage = anthropic_resp.get("usage", {})
 
+    openai_usage: dict[str, Any] = {
+        "prompt_tokens": usage.get("input_tokens", 0),
+        "completion_tokens": usage.get("output_tokens", 0),
+        "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+    }
+    # Carry prompt-cache accounting across the dialect boundary (telemetry
+    # computes cache hit rates from it; see normalize_cache_usage).
+    cache_read = usage.get("cache_read_input_tokens")
+    if isinstance(cache_read, int) and not isinstance(cache_read, bool):
+        openai_usage["prompt_tokens_details"] = {"cached_tokens": cache_read}
+    cache_creation = usage.get("cache_creation_input_tokens")
+    if isinstance(cache_creation, int) and not isinstance(cache_creation, bool):
+        openai_usage["cache_creation_input_tokens"] = cache_creation
+
     return {
         "id": anthropic_resp.get("id", ""),
         "object": "chat.completion",
@@ -214,11 +236,7 @@ def anthropic_to_openai_response(anthropic_resp: dict[str, Any]) -> dict[str, An
                 "finish_reason": finish_reason,
             }
         ],
-        "usage": {
-            "prompt_tokens": usage.get("input_tokens", 0),
-            "completion_tokens": usage.get("output_tokens", 0),
-            "total_tokens": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
-        },
+        "usage": openai_usage,
     }
 
 

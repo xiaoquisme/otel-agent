@@ -145,6 +145,12 @@ class TestDetectFormat:
         body = _make_streaming_preview()
         assert detect_format(body, "anthropic") == "streaming"
 
+    def test_reassembled_streaming_body_detected_without_preview(self) -> None:
+        """Current stream bodies carry 'streamed' with the reassembled
+        message and no 'preview' key."""
+        body = json.dumps({"streamed": True, "usage": {"prompt_tokens": 1}, "content": "hi"})
+        assert detect_format(body, "openai") == "streaming"
+
 
 # ---------------------------------------------------------------------------
 # Tests: streaming chunk parser

@@ -10,6 +10,11 @@ from typing import Any
 from otel_agent.storage.base import StorageBackend
 
 
+def _hit_rate(cache_read: int, cacheable_input: int) -> float | None:
+    """Cache hit rate as a 0-1 ratio, or None when nothing was cacheable."""
+    return round(cache_read / cacheable_input, 4) if cacheable_input else None
+
+
 class SQLiteStorage(StorageBackend):
     """Backend backed by SQLite 3 via the stdlib :mod:`sqlite3` module.
 
@@ -78,7 +83,7 @@ class SQLiteStorage(StorageBackend):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(response_status)"
         )
-        for column in ("model_name TEXT", "input_tokens INTEGER", "output_tokens INTEGER", "total_tokens INTEGER", "format TEXT"):
+        for column in ("model_name TEXT", "input_tokens INTEGER", "output_tokens INTEGER", "total_tokens INTEGER", "cache_read_tokens INTEGER", "cache_creation_tokens INTEGER", "format TEXT"):
             try:
                 conn.execute(f"ALTER TABLE requests ADD COLUMN {column}")
             except sqlite3.OperationalError:
@@ -98,6 +103,7 @@ class SQLiteStorage(StorageBackend):
         upstream: str = "", model_name: str | None = None,
         input_tokens: int | None = None, output_tokens: int | None = None,
         total_tokens: int | None = None, timestamp: str | None = None,
+        cache_read_tokens: int | None = None, cache_creation_tokens: int | None = None,
         format: str | None = None,
     ) -> None:
         from datetime import datetime, timezone
@@ -107,8 +113,8 @@ class SQLiteStorage(StorageBackend):
             """INSERT INTO requests
                (timestamp, method, url, upstream, request_headers, request_body,
                 response_status, response_headers, response_body, latency_ms, model_name,
-                input_tokens, output_tokens, total_tokens, format)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_creation_tokens, format)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 timestamp or datetime.now(timezone.utc).isoformat(),
                 method,
@@ -119,7 +125,8 @@ class SQLiteStorage(StorageBackend):
                 response_status,
                 json.dumps(response_headers),
                 response_body,
-                latency_ms, model_name, input_tokens, output_tokens, total_tokens, format,
+                latency_ms, model_name, input_tokens, output_tokens, total_tokens,
+                cache_read_tokens, cache_creation_tokens, format,
             ),
         )
         conn.commit()
@@ -219,12 +226,58 @@ class SQLiteStorage(StorageBackend):
         return [self._row_to_dict(r) for r in cur.fetchall()]
 
     def get_usage_summary(self, start: str, end: str) -> dict:
-        """Aggregate completed request usage in a UTC half-open range."""
+        """Aggregate completed request usage in a UTC half-open range.
+
+        Cache accounting is dialect-normalized at write time (see
+        ``normalize_cache_usage``): ``cache_read_tokens`` is tokens served
+        from the prompt cache, ``cache_creation_tokens`` tokens written to it
+        (reported by Anthropic-style providers only). The cache hit rate is
+        ``cache_read_tokens / cacheable_input_tokens`` where the denominator
+        counts every input-side token the model processed; rows that report
+        cache creation are Anthropic-style (their ``input_tokens`` excludes
+        cache), while other rows report input that already includes cached
+        tokens.
+        """
         conn = self._get_conn()
         where = "timestamp >= ? AND timestamp < ? AND response_status BETWEEN 200 AND 299"
-        totals = conn.execute(f"SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COUNT(total_tokens), COUNT(*) - COUNT(total_tokens) FROM requests WHERE {where}", (start, end)).fetchone()
-        rows = conn.execute(f"SELECT model_name, COALESCE(SUM(total_tokens), 0), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COUNT(*) FROM requests WHERE {where} AND total_tokens IS NOT NULL GROUP BY model_name ORDER BY 2 DESC, model_name ASC", (start, end)).fetchall()
-        return {"start": start, "end": end, "total_tokens": totals[0], "input_tokens": totals[1], "output_tokens": totals[2], "eligible_request_count": totals[3], "excluded_request_count": totals[4], "models": [{"model_name": row[0], "total_tokens": row[1], "input_tokens": row[2], "output_tokens": row[3], "request_count": row[4]} for row in rows]}
+        cacheable = (
+            "CASE WHEN cache_creation_tokens IS NOT NULL "
+            "THEN COALESCE(input_tokens, 0) + COALESCE(cache_read_tokens, 0) + cache_creation_tokens "
+            "ELSE COALESCE(input_tokens, 0) END"
+        )
+        agg = (
+            "COALESCE(SUM(total_tokens), 0), COALESCE(SUM(input_tokens), 0), "
+            "COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cache_read_tokens), 0), "
+            f"COALESCE(SUM(cache_creation_tokens), 0), COALESCE(SUM({cacheable}), 0)"
+        )
+        totals = conn.execute(
+            f"SELECT {agg}, COUNT(total_tokens), COUNT(*) - COUNT(total_tokens) FROM requests WHERE {where}",
+            (start, end),
+        ).fetchone()
+        rows = conn.execute(
+            f"SELECT model_name, {agg}, COUNT(*) FROM requests WHERE {where} AND total_tokens IS NOT NULL "
+            "GROUP BY model_name ORDER BY 2 DESC, model_name ASC",
+            (start, end),
+        ).fetchall()
+
+        def model_row(row) -> dict:
+            cacheable_total = row[6]
+            return {
+                "model_name": row[0], "total_tokens": row[1], "input_tokens": row[2],
+                "output_tokens": row[3], "cache_read_tokens": row[4],
+                "cache_creation_tokens": row[5], "cacheable_input_tokens": cacheable_total,
+                "cache_hit_rate": _hit_rate(row[4], cacheable_total), "request_count": row[7],
+            }
+
+        return {
+            "start": start, "end": end,
+            "total_tokens": totals[0], "input_tokens": totals[1], "output_tokens": totals[2],
+            "cache_read_tokens": totals[3], "cache_creation_tokens": totals[4],
+            "cacheable_input_tokens": totals[5],
+            "cache_hit_rate": _hit_rate(totals[3], totals[5]),
+            "eligible_request_count": totals[6], "excluded_request_count": totals[7],
+            "models": [model_row(row) for row in rows],
+        }
 
     def close(self) -> None:
         if self._conn is not None:

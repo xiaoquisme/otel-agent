@@ -17,6 +17,11 @@ function formatNumber(n: number | null | undefined): string {
   return num.toLocaleString()
 }
 
+function formatHitRate(rate: number | null | undefined): string {
+  if (rate == null) return '—'
+  return `${(rate * 100).toFixed(1)}%`
+}
+
 const MODEL_COLORS = [
   'var(--color-accent-blue)',
   'var(--color-accent-green)',
@@ -59,8 +64,8 @@ export default function UsageOverview() {
       </div>
 
       {loading ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-          {[0, 1, 2].map((i) => (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+          {[0, 1, 2, 3].map((i) => (
             <div key={i} style={{ background: 'var(--color-bg-surface)', border: '1px solid var(--color-border-default)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-4)' }}>
               <Skeleton width="60%" height="10px" />
               <div style={{ marginTop: 'var(--space-2)' }}>
@@ -72,16 +77,20 @@ export default function UsageOverview() {
       ) : usage ? (
         <>
           {/* Summary cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
             <UsageCard label="Total Tokens" value={formatNumber(usage.total_tokens)} color="var(--color-accent-blue)" />
             <UsageCard label="Input Tokens" value={formatNumber(usage.input_tokens)} color="var(--color-accent-green)" />
             <UsageCard label="Output Tokens" value={formatNumber(usage.output_tokens)} color="var(--color-accent-purple)" />
+            <UsageCard label="Cache Hit Rate" value={formatHitRate(usage.cache_hit_rate)} color="var(--color-accent-yellow)" />
           </div>
 
           {/* Request count summary */}
           <div style={{ display: 'flex', gap: 'var(--space-4)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-4)' }}>
             <span>
               <strong style={{ color: 'var(--color-text-primary)' }}>{formatNumber(usage.eligible_request_count)}</strong> requests with token data
+            </span>
+            <span>
+              <strong style={{ color: 'var(--color-text-primary)' }}>{formatNumber(usage.cache_read_tokens ?? 0)}</strong> tokens served from cache
             </span>
             {usage.excluded_request_count > 0 && (
               <span>
@@ -128,6 +137,7 @@ export default function UsageOverview() {
                   <tr style={{ borderBottom: '1px solid var(--color-border-default)' }}>
                     <th style={{ textAlign: 'left', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', textTransform: 'uppercase' }}>Model</th>
                     <th style={{ textAlign: 'right', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', textTransform: 'uppercase' }}>Total</th>
+                    <th style={{ textAlign: 'right', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', textTransform: 'uppercase' }}>Cache Hit</th>
                     <th style={{ textAlign: 'right', padding: 'var(--space-1) var(--space-2)', fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', textTransform: 'uppercase' }}>Requests</th>
                     <th style={{ width: '100px', padding: 'var(--space-1) var(--space-2)' }}></th>
                   </tr>
@@ -143,6 +153,7 @@ export default function UsageOverview() {
                           <span style={{ color: 'var(--color-accent-blue)' }}>{m.model_name || 'Unknown'}</span>
                         </td>
                         <td style={{ padding: 'var(--space-2)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatNumber(m.total_tokens)}</td>
+                        <td style={{ padding: 'var(--space-2)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--color-text-secondary)' }}>{formatHitRate(m.cache_hit_rate)}</td>
                         <td style={{ padding: 'var(--space-2)', textAlign: 'right', color: 'var(--color-text-secondary)' }}>{formatNumber(m.request_count)}</td>
                         <td style={{ padding: 'var(--space-2)' }}>
                           <div style={{ height: '6px', borderRadius: 'var(--radius-full)', background: 'var(--color-bg-overlay)', overflow: 'hidden' }}>

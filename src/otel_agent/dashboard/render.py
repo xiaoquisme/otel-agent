@@ -86,8 +86,10 @@ def detect_format(body: str, format_tag: str | None = None) -> str:
     """
     parsed = _parse_body(body)
 
-    # Streaming preview — body content takes priority over format_tag
-    if parsed and isinstance(parsed, dict) and parsed.get("streamed") and parsed.get("preview"):
+    # Stored streaming body — body content takes priority over format_tag.
+    # Both stored shapes carry ``streamed``: current rows hold the reassembled
+    # message, legacy rows hold a raw-chunk ``preview``.
+    if parsed and isinstance(parsed, dict) and parsed.get("streamed"):
         return "streaming"
 
     if format_tag:

@@ -277,3 +277,27 @@ def test_openai_to_anthropic_stream_flush_closes_without_finish_chunk():
     })
     events = conv.flush()
     assert _event_types(events)[-2:] == ["message_delta", "message_stop"]
+
+
+# --- Cache usage passthrough ---
+
+
+def test_openai_to_anthropic_response_carries_cache_usage():
+    resp = openai_to_anthropic_response({
+        "id": "x", "model": "gpt-4",
+        "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12,
+                  "prompt_tokens_details": {"cached_tokens": 6}},
+    })
+    assert resp["usage"]["cache_read_input_tokens"] == 6
+
+
+def test_anthropic_to_openai_response_carries_cache_usage():
+    resp = anthropic_to_openai_response({
+        "id": "x", "model": "claude", "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 20, "output_tokens": 2,
+                  "cache_read_input_tokens": 700, "cache_creation_input_tokens": 100},
+    })
+    assert resp["usage"]["prompt_tokens_details"] == {"cached_tokens": 700}
+    assert resp["usage"]["cache_creation_input_tokens"] == 100
