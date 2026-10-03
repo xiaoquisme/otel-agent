@@ -64,7 +64,9 @@ Details:
 | `<version>` (e.g. `0.1.0`) | every `v*` git tag |
 | `<short-sha>` (12-char commit) | every published build — pin one specific build |
 
-Pulls need no login — the package is public. The same workflow also uploads `otel-agent-<sha>.tar.gz` as the `otel-agent-image` workflow artifact (kept 30 days) for offline installs: download it from **Actions → Docker image → run → Artifacts** or with `gh run download`, then `docker load -i otel-agent-<sha>.tar.gz`. To build from source instead: `docker build -t otel-agent .`.
+Images are multi-arch (`linux/amd64` + `linux/arm64`): `docker pull` gets the one matching the host, so Apple Silicon runs natively without emulation.
+
+Pulls need no login — the package is public. The same workflow also uploads `otel-agent-<sha>-amd64.tar.gz` and `otel-agent-<sha>-arm64.tar.gz` as the `otel-agent-image` workflow artifact (kept 30 days) for offline installs: download it from **Actions → Docker image → run → Artifacts** or with `gh run download`, then `docker load -i otel-agent-<sha>-<arch>.tar.gz`. To build from source instead: `docker build -t otel-agent .`.
 
 ## Quick Start
 

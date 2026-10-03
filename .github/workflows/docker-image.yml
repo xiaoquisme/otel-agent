@@ -19,8 +19,16 @@ jobs:
       - name: Check out
         uses: actions/checkout@v7
 
-      - name: Build image
-        run: docker build --tag "otel-agent:${GITHUB_SHA}" .
+      # arm64 layers run under emulation so the Dockerfile builds for both
+      # architectures from this single amd64 runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image (amd64, for smoke test and artifact)
+        run: docker buildx build --platform linux/amd64 --load --tag "otel-agent:${GITHUB_SHA}" .
 
       - name: Smoke test
         run: |
@@ -31,35 +39,37 @@ jobs:
           fi
           docker rm --force smoke
 
-      # PRs never publish: they only build, smoke-test, and upload the artifact below.
-      - name: Push to GitHub Container Registry
+      # PRs never publish: they only build, smoke-test, and upload the artifacts below.
+      - name: Push multi-arch image to GitHub Container Registry
         if: github.event_name != 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "${GITHUB_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
           repo="ghcr.io/$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
-          docker tag "otel-agent:${GITHUB_SHA}" "${repo}:${GITHUB_SHA::12}"
-          docker push "${repo}:${GITHUB_SHA::12}"
+          args="--platform linux/amd64,linux/arm64 --push -t ${repo}:${GITHUB_SHA::12}"
           if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
-            docker tag "otel-agent:${GITHUB_SHA}" "${repo}:latest"
-            docker push "${repo}:latest"
+            args="${args} -t ${repo}:latest"
           fi
           case "${GITHUB_REF}" in
             refs/tags/*)
-              version="${GITHUB_REF_NAME#v}"
-              docker tag "otel-agent:${GITHUB_SHA}" "${repo}:${version}"
-              docker push "${repo}:${version}"
+              args="${args} -t ${repo}:${GITHUB_REF_NAME#v}"
               ;;
           esac
+          docker buildx build ${args} .
 
-      - name: Save image tarball
-        run: docker save "otel-agent:${GITHUB_SHA}" | gzip > "otel-agent-${GITHUB_SHA}.tar.gz"
+      - name: Save image tarballs
+        run: |
+          docker save "otel-agent:${GITHUB_SHA}" | gzip > "otel-agent-${GITHUB_SHA}-amd64.tar.gz"
+          docker buildx build --platform linux/arm64 --load --tag "otel-agent:${GITHUB_SHA}-arm64" .
+          docker save "otel-agent:${GITHUB_SHA}-arm64" | gzip > "otel-agent-${GITHUB_SHA}-arm64.tar.gz"
 
       - name: Upload image artifact
         uses: actions/upload-artifact@v7
         with:
           name: otel-agent-image
-          path: otel-agent-${{ github.sha }}.tar.gz
+          path: |
+            otel-agent-${{ github.sha }}-amd64.tar.gz
+            otel-agent-${{ github.sha }}-arm64.tar.gz
           if-no-files-found: error
           retention-days: 30
