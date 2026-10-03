@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build image
         run: docker build --tag "otel-agent:${GITHUB_SHA}" .
@@ -34,7 +34,7 @@ jobs:
         run: docker save "otel-agent:${GITHUB_SHA}" | gzip > "otel-agent-${GITHUB_SHA}.tar.gz"
 
       - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: otel-agent-image
           path: otel-agent-${{ github.sha }}.tar.gz
