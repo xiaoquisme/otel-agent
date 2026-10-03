@@ -54,6 +54,7 @@ Details:
 - The gateway binds `0.0.0.0:45638` and serves the dashboard at `http://localhost:45638`.
 - The image `HEALTHCHECK` probes `/health` on `OTEL_AGENT_PORT` (default `45638`). If you change the listen port with `-p`, set `OTEL_AGENT_PORT` to match.
 - OAuth sign-in works headless: `docker exec -it otel-agent otel-agent auth login --no-browser`.
+- CI builds the image on every push to `main`, tag, PR, and manual dispatch (`.github/workflows/docker-image.yml`), smoke-tests `/health`, and uploads `otel-agent-<sha>.tar.gz` as the `otel-agent-image` workflow artifact (kept 30 days). Load it with `docker load -i otel-agent-<sha>.tar.gz`.
 
 ## Quick Start
 
