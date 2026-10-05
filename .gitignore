@@ -24,3 +24,6 @@ frontend/dist/
 # Compound Engineering local config
 .compound-engineering/*.local.yaml
 .worktrees/
+
+# Claude Code local config
+.claude/
