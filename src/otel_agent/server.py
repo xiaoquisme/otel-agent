@@ -25,6 +25,7 @@ from otel_agent.converter import (
     openai_to_anthropic_request,
     openai_to_anthropic_response,
 )
+from otel_agent.body_elide import elide_body
 from otel_agent.logger import TelemetryLogger, redact_sensitive_headers
 from otel_agent.models import ModelCache, aggregate_models, fetch_provider_models
 from otel_agent.stream_capture import StreamCapture
@@ -38,11 +39,13 @@ from otel_agent.router import parse_model, resolve_provider
 
 logger = logging.getLogger(__name__)
 
-#: How much of a request or response body a telemetry row keeps. It bounds
-#: the DB row and the dashboard's render cost; the dashboard flags a body that
-#: ends at the cut. Streamed responses are reassembled (see
-#: ``stream_capture``) and stay well inside it in practice — their snapshot
-#: leads with usage so even a pathological cut cannot lose the analytics.
+#: How much of a request or response body a telemetry row keeps. Bodies over
+#: it are structurally elided (see ``body_elide``: media placeholders and
+#: message-boundary cuts that declare their own loss) rather than blindly
+#: cut, so the stored JSON stays valid and parseable. Streamed responses are
+#: reassembled (see ``stream_capture``) and stay well inside it in practice —
+#: their snapshot leads with usage so even a pathological shrink cannot lose
+#: the analytics.
 _TELEMETRY_BODY_LIMIT = 500_000
 
 
@@ -1148,7 +1151,7 @@ def _log_telemetry(
             model_name = model_name or None
         else:
             model_name = prefix_model_name(model_name or None, provider.name)
-        stored_body = request_body[:_TELEMETRY_BODY_LIMIT] if log_body else ""
+        stored_body = elide_body(request_body, _TELEMETRY_BODY_LIMIT) if log_body else ""
         stored_headers = redact_sensitive_headers(resp_headers) if resp_headers else {}
         stored_request_headers = dict(request.headers)
         if extra_headers:
@@ -1160,7 +1163,7 @@ def _log_telemetry(
             request_body=stored_body,
             response_status=status_code,
             response_headers=stored_headers,
-            response_body=body_str[:_TELEMETRY_BODY_LIMIT],
+            response_body=elide_body(body_str, _TELEMETRY_BODY_LIMIT),
             latency_ms=latency_ms,
             upstream=provider.base_url,
             model_name=model_name,

@@ -139,7 +139,9 @@ def test_log_telemetry_empty_body_when_log_body_false():
         assert row[0] == ""
 
 
-def test_log_telemetry_truncates_long_body():
+def test_log_telemetry_elides_long_body():
+    """Oversized bodies are structurally elided: head and tail kept around a
+    loss-declaring marker, never blindly cut mid-content."""
     with tempfile.TemporaryDirectory() as td:
         db = Path(td) / "test.sqlite"
         telemetry = TelemetryLogger(db)
@@ -152,7 +154,34 @@ def test_log_telemetry_truncates_long_body():
         conn = sqlite3.connect(str(db))
         row = conn.execute("SELECT request_body FROM requests").fetchone()
         conn.close()
-        assert len(row[0]) == 500_000
+        stored = row[0]
+        assert len(stored) <= 500_000
+        assert stored.startswith("xxx")
+        assert stored.endswith("xxx")
+        assert "otel-agent elided" in stored
+
+
+def test_log_telemetry_elides_long_json_body_as_valid_json():
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "test.sqlite"
+        telemetry = TelemetryLogger(db)
+        long_body = json.dumps({"messages": [
+            {"role": "user", "content": f"msg{i} " + "x" * 20_000}
+            for i in range(30)
+        ]})
+        _log_telemetry(
+            telemetry, _make_request(), 200, {}, 100.0,
+            _make_provider(), request_body=long_body,
+        )
+        telemetry.close()
+        conn = sqlite3.connect(str(db))
+        row = conn.execute("SELECT request_body FROM requests").fetchone()
+        conn.close()
+        stored = row[0]
+        assert len(stored) <= 500_000
+        parsed = json.loads(stored)  # valid JSON — no bracket repair needed
+        assert parsed["messages"][0]["content"].startswith("msg0 ")
+        assert parsed["messages"][-1]["content"].startswith("msg29 ")
 
 
 # ------------------------------------------------------------------
