@@ -122,11 +122,15 @@ def test_sqlite_legacy_schema_upgrade(tmp_path):
     logger.close()
     conn = sqlite3.connect(str(db_path))
     columns = [r[1] for r in conn.execute("PRAGMA table_info(requests)").fetchall()]
+    indexes = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'index'"
+    ).fetchall()]
     conn.close()
     assert "model_name" in columns
     assert "input_tokens" in columns
     assert "output_tokens" in columns
     assert "total_tokens" in columns
+    assert "idx_requests_usage" in indexes
 
 
 def test_sqlite_analytics_columns_persist(tmp_path):
