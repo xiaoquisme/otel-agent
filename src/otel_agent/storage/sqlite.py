@@ -117,6 +117,26 @@ class SQLiteStorage(StorageBackend):
             WHERE session_id IS NOT NULL
             """
         )
+        # Usage summary and series seek idx_requests_status for every 2xx
+        # row, then read token columns stored after the request and response
+        # bodies. Rows inside the range pull those overflow pages (tens of
+        # seconds, cold, when the range covers most of the table). Timestamp
+        # leads this index so the range is a seek; the other columns make
+        # the aggregate covering.
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_requests_usage ON requests (
+                timestamp,
+                response_status,
+                model_name,
+                input_tokens,
+                output_tokens,
+                total_tokens,
+                cache_read_tokens,
+                cache_creation_tokens
+            )
+            """
+        )
         conn.commit()
 
     def log_request(

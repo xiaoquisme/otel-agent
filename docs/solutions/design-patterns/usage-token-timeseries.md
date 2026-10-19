@@ -26,6 +26,7 @@ tags:
 
 - Keep the summary endpoint unchanged. Serve marks from `GET /api/usage/series?start&end&bucket&tz`.
 - Group in SQLite by UTC minute (`substr(timestamp, 1, 16)`), using the same `200–299` status filter as `get_usage_summary`. Fold minutes into hour, day, week (Monday), or month in Python with `zoneinfo`.
+- Those aggregates must stay on `idx_requests_usage` (a covering index led by `timestamp`). The status index cannot seek the range and pulls every 2xx row's request and response body.
 - Default `tz` is UTC. The browser sends `Intl.DateTimeFormat().resolvedOptions().timeZone`. `bucket_start` is the UTC instant of the local boundary, so `new Date(bucket_start)` labels correctly.
 - Choose the bucket from the span when the client omits it: hour ≤ 36h, day ≤ 45d, week ≤ 180d, else month. Coarsen anything that would draw more than 400 marks. All-time series start at the first bucket that has tokens.
 - Do not fill marks after the current instant unless a recorded minute falls there.
@@ -42,5 +43,6 @@ Shifting with one fixed offset mis-assigns tokens across a DST change, and group
 ## Related
 
 - `src/otel_agent/usage_series.py`
+- `docs/solutions/performance-issues/usage-query-covering-index.md`
 - `frontend/src/components/UsageChart.tsx`
 - `docs/solutions/design-patterns/light-theme-token-roles.md` — chart colors read the same CSS variables as the rest of the dashboard
