@@ -1,4 +1,4 @@
-import type { RequestDetail, RequestsResponse, UsageSummary, RequestListParams } from './types'
+import type { RequestDetail, RequestsResponse, UsageSeries, UsageSummary, RequestListParams } from './types'
 
 const API_BASE = '/api'
 
@@ -29,6 +29,23 @@ export async function fetchUsage(start: string, end: string): Promise<UsageSumma
     throw new Error(err.error || `Failed to fetch usage: ${resp.status}`)
   }
   return resp.json() as Promise<UsageSummary>
+}
+
+export async function fetchUsageSeries(
+  start: string,
+  end: string,
+  bucket?: string,
+  tz?: string,
+): Promise<UsageSeries> {
+  const query = new URLSearchParams({ start, end })
+  if (bucket) query.set('bucket', bucket)
+  if (tz) query.set('tz', tz)
+  const resp = await fetch(`${API_BASE}/usage/series?${query.toString()}`)
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: 'Failed to load usage series' }))
+    throw new Error(err.error || `Failed to fetch usage series: ${resp.status}`)
+  }
+  return resp.json() as Promise<UsageSeries>
 }
 
 export function exportData(format: 'csv' | 'json', params: RequestListParams = {}): void {

@@ -1,7 +1,7 @@
 """Abstract base class for storage backends.
 
 Every storage backend must subclass :class:`StorageBackend` and implement
-all eight abstract methods.  The factory :func:`create_storage` instantiates
+all abstract methods.  The factory :func:`create_storage` instantiates
 the correct backend based on the ``storage`` config key.
 """
 
@@ -108,6 +108,21 @@ class StorageBackend(ABC):
     @abstractmethod
     def get_usage_summary(self, start: str, end: str) -> dict:
         """Return completed request usage for a UTC half-open range."""
+
+    @abstractmethod
+    def get_usage_series(
+        self,
+        start: str,
+        end: str,
+        bucket: str | None = None,
+        tz: str | None = None,
+    ) -> dict:
+        """Return token totals bucketed across a UTC half-open range.
+
+        ``bucket`` is ``hour``, ``day``, ``week``, ``month``, or ``None``
+        to choose from the span. ``tz`` is an IANA timezone name; ``None``
+        buckets in UTC.
+        """
 
     @abstractmethod
     def close(self) -> None:

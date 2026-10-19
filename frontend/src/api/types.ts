@@ -53,6 +53,24 @@ export interface ModelUsage {
   cache_hit_rate?: number | null
 }
 
+export type UsageBucket = 'hour' | 'day' | 'week' | 'month'
+
+export interface UsageSeriesPoint {
+  bucket_start: string
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  request_count: number
+}
+
+export interface UsageSeries {
+  start: string
+  end: string
+  bucket: UsageBucket
+  timezone: string
+  points: UsageSeriesPoint[]
+}
+
 export interface UsageSummary {
   start: string
   end: string
