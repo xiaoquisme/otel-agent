@@ -14,11 +14,16 @@ from otel_agent.commands import update as update_mod
 from otel_agent.commands.update import (
     GIT_INSTALL,
     DistInfo,
+    GitProbe,
     InstallFacts,
+    ProbeResult,
     collect_install_facts,
     dist_info_from_metadata,
     git_install_spec,
+    git_remote_from_spec,
     in_container,
+    parse_dry_run_package,
+    parse_ls_remote,
     parse_receipt_requirements,
     plan_update,
     prefix_is_uv_cache,
@@ -348,30 +353,199 @@ def test_read_tool_receipt(tmp_path):
     assert "otel-agent" in text
 
 
-def test_handle_update_prints_versions_and_runs(monkeypatch, capsys):
+def _git_facts(commit: str, receipt: str = RECEIPT_GIT) -> InstallFacts:
+    return _facts(
+        receipt_exists=True,
+        receipt_text=receipt,
+        dist=DistInfo(commit_id=commit, direct_kind="vcs", vcs="git"),
+    )
+
+
+def test_handle_update_current_git_does_not_install(monkeypatch, capsys):
+    local = "a" * 40
+
+    def fail_run(argv):
+        raise AssertionError(f"should not install {argv}")
+
+    def capture(argv, timeout=60):
+        assert argv[:3] == ["git", "ls-remote", "https://github.com/xiaoquisme/otel-agent.git"]
+        assert argv[-1] == "HEAD"
+        return 0, f"{local}\tHEAD\n", ""
+
+    monkeypatch.setattr(update_mod, "__version__", "0.1.0")
+    monkeypatch.setattr(update_mod, "collect_install_facts", lambda: _git_facts(local))
+    monkeypatch.setattr(update_mod, "_git_on_path", lambda: True)
+    monkeypatch.setattr(update_mod, "_capture", capture)
+    monkeypatch.setattr(update_mod, "_run", fail_run)
+
+    update_mod.handle_update(None)
+    captured = capsys.readouterr()
+    assert "Current version: otel-agent 0.1.0" in captured.out
+    assert f"Already up to date at {local} (HEAD)." in captured.out
+    assert "Updated version:" not in captured.out
+    assert "proxy restart" not in captured.out
+
+
+def test_handle_update_behind_git_installs(monkeypatch, capsys):
+    local = "a" * 40
+    remote = "b" * 40
     ran = {}
+
+    def capture(argv, timeout=60):
+        return 0, f"{remote}\tHEAD\n", ""
 
     def fake_run(argv):
         ran["argv"] = argv
         return 0
 
     monkeypatch.setattr(update_mod, "__version__", "0.1.0")
-    monkeypatch.setattr(update_mod, "collect_install_facts", lambda: _facts(
-        receipt_exists=True, receipt_text=RECEIPT_GIT,
-    ))
+    monkeypatch.setattr(update_mod, "collect_install_facts", lambda: _git_facts(local))
+    monkeypatch.setattr(update_mod, "_git_on_path", lambda: True)
     monkeypatch.setattr(update_mod, "_uv_on_path", lambda: True)
+    monkeypatch.setattr(update_mod, "_capture", capture)
     monkeypatch.setattr(update_mod, "_run", fake_run)
     monkeypatch.setattr(update_mod, "_installed_version_line", lambda: "otel-agent 0.1.0")
 
     update_mod.handle_update(None)
     captured = capsys.readouterr()
-    assert "Current version: otel-agent 0.1.0" in captured.out
-    assert "Updated version: otel-agent 0.1.0" in captured.out
-    assert "otel-agent proxy restart" in captured.out
+    assert f"Update available: {local} -> {remote} (HEAD)." in captured.out
     assert ran["argv"] == (
         "uv", "tool", "install", "--upgrade", "--reinstall", GIT_INSTALL,
     )
     assert "$ uv tool install --upgrade --reinstall" in captured.out
+    assert "Updated version: otel-agent 0.1.0" in captured.out
+    assert "otel-agent proxy restart" in captured.out
+
+
+def test_handle_update_probe_failure_does_not_install(monkeypatch, capsys):
+    def fail_run(argv):
+        raise AssertionError(f"should not install {argv}")
+
+    def capture(argv, timeout=60):
+        return 128, "", "fatal: unable to access 'https://github.com/xiaoquisme/otel-agent.git'"
+
+    monkeypatch.setattr(update_mod, "collect_install_facts", lambda: _git_facts("c" * 40))
+    monkeypatch.setattr(update_mod, "_git_on_path", lambda: True)
+    monkeypatch.setattr(update_mod, "_capture", capture)
+    monkeypatch.setattr(update_mod, "_run", fail_run)
+
+    with pytest.raises(SystemExit) as exc:
+        update_mod.handle_update(None)
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "unable to access" in captured.out
+    assert "Reinstall manually:" in captured.out
+    assert "uv tool install --upgrade --reinstall" in captured.out
+    assert "Updated version:" not in captured.out
+
+
+def test_handle_update_current_pip_git_does_not_install(monkeypatch, capsys):
+    local = "d" * 40
+    dist = dist_info_from_metadata(
+        "pip",
+        json.dumps({
+            "url": "https://github.com/xiaoquisme/otel-agent.git",
+            "vcs_info": {
+                "vcs": "git",
+                "commit_id": local,
+                "requested_revision": "main",
+            },
+        }),
+    )
+
+    def fail_run(argv):
+        raise AssertionError(f"should not install {argv}")
+
+    def capture(argv, timeout=60):
+        assert "refs/heads/main" in argv
+        return 0, f"{local}\trefs/heads/main\n", ""
+
+    monkeypatch.setattr(update_mod, "collect_install_facts", lambda: _facts(dist=dist))
+    monkeypatch.setattr(update_mod, "_git_on_path", lambda: True)
+    monkeypatch.setattr(update_mod, "_capture", capture)
+    monkeypatch.setattr(update_mod, "_run", fail_run)
+
+    update_mod.handle_update(None)
+    captured = capsys.readouterr()
+    assert f"Already up to date at {local} (main)." in captured.out
+    assert "pip install" not in captured.out.split("Already up to date", 1)[-1]
+
+
+def test_handle_update_missing_commit_does_not_probe(monkeypatch, capsys):
+    def fail_capture(argv, timeout=60):
+        raise AssertionError(f"should not probe {argv}")
+
+    def fail_run(argv):
+        raise AssertionError(f"should not install {argv}")
+
+    monkeypatch.setattr(update_mod, "collect_install_facts", lambda: _facts(
+        receipt_exists=True, receipt_text=RECEIPT_GIT,
+    ))
+    monkeypatch.setattr(update_mod, "_capture", fail_capture)
+    monkeypatch.setattr(update_mod, "_run", fail_run)
+
+    with pytest.raises(SystemExit) as exc:
+        update_mod.handle_update(None)
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "installed git commit is not recorded" in captured.out
+
+
+def test_handle_update_registry_current_and_behind(monkeypatch, capsys):
+    ran = {}
+
+    def capture_current(argv, timeout=60):
+        assert argv[:6] == ["uv", "pip", "install", "--dry-run", "--upgrade", "--no-deps"]
+        assert argv[-1] == "otel-agent==0.1.0"
+        return 0, "Resolved 1 package\nWould make no changes\n", ""
+
+    monkeypatch.setattr(update_mod, "collect_install_facts", lambda: _facts(
+        receipt_exists=True, receipt_text=RECEIPT_REGISTRY, python="/usr/bin/python3",
+    ))
+    def fail_run(argv):
+        raise AssertionError(f"should not install {argv}")
+
+    monkeypatch.setattr(update_mod, "_uv_on_path", lambda: True)
+    monkeypatch.setattr(update_mod, "_capture", capture_current)
+    monkeypatch.setattr(update_mod, "_run", fail_run)
+
+    update_mod.handle_update(None)
+    assert "Already up to date (otel-agent==0.1.0)." in capsys.readouterr().out
+
+    def capture_behind(argv, timeout=60):
+        return 0, " - otel-agent==0.1.0\n + otel-agent==0.2.0\n", ""
+
+    def fake_run(argv):
+        ran["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(update_mod, "_capture", capture_behind)
+    monkeypatch.setattr(update_mod, "_run", fake_run)
+    monkeypatch.setattr(update_mod, "_installed_version_line", lambda: "otel-agent 0.2.0")
+    update_mod.handle_update(None)
+    captured = capsys.readouterr()
+    assert "Update available: 0.1.0 -> 0.2.0." in captured.out
+    assert ran["argv"] == ("uv", "tool", "upgrade", "otel-agent")
+    assert "Updated version: otel-agent 0.2.0" in captured.out
+
+
+def test_handle_update_registry_probe_failure(monkeypatch, capsys):
+    def fail_run(argv):
+        raise AssertionError(f"should not install {argv}")
+
+    monkeypatch.setattr(update_mod, "collect_install_facts", lambda: _facts(
+        receipt_exists=True, receipt_text=RECEIPT_REGISTRY,
+    ))
+    monkeypatch.setattr(update_mod, "_uv_on_path", lambda: True)
+    monkeypatch.setattr(update_mod, "_capture", lambda argv, timeout=60: (1, "", "error: No solution found"))
+    monkeypatch.setattr(update_mod, "_run", fail_run)
+
+    with pytest.raises(SystemExit) as exc:
+        update_mod.handle_update(None)
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert "No solution found" in captured.out
+    assert "Reinstall manually:" in captured.out
 
 
 def test_handle_update_reports_a_new_version(monkeypatch, capsys):
@@ -379,6 +553,7 @@ def test_handle_update_reports_a_new_version(monkeypatch, capsys):
     monkeypatch.setattr(update_mod, "collect_install_facts", lambda: _facts(
         receipt_exists=True, receipt_text=RECEIPT_GIT,
     ))
+    monkeypatch.setattr(update_mod, "probe_update", lambda plan: ProbeResult("update", "Update available."))
     monkeypatch.setattr(update_mod, "_uv_on_path", lambda: True)
     monkeypatch.setattr(update_mod, "_run", lambda argv: 0)
     monkeypatch.setattr(update_mod, "_installed_version_line", lambda: "otel-agent 0.2.0")
@@ -412,6 +587,7 @@ def test_handle_update_missing_uv(monkeypatch, capsys):
     monkeypatch.setattr(update_mod, "collect_install_facts", lambda: _facts(
         receipt_exists=True, receipt_text=RECEIPT_GIT,
     ))
+    monkeypatch.setattr(update_mod, "probe_update", lambda plan: ProbeResult("update", "Update available."))
     monkeypatch.setattr(update_mod, "_uv_on_path", lambda: False)
     monkeypatch.setattr(update_mod, "_run", fail_run)
 
@@ -427,6 +603,7 @@ def test_handle_update_command_failure(monkeypatch, capsys):
     monkeypatch.setattr(update_mod, "collect_install_facts", lambda: _facts(
         receipt_exists=True, receipt_text=RECEIPT_GIT,
     ))
+    monkeypatch.setattr(update_mod, "probe_update", lambda plan: ProbeResult("update", "Update available."))
     monkeypatch.setattr(update_mod, "_uv_on_path", lambda: True)
     monkeypatch.setattr(update_mod, "_run", lambda argv: 2)
 
@@ -473,3 +650,62 @@ def test_collect_install_facts_does_not_touch_network():
     plan = plan_update(facts)
     assert isinstance(plan.execute, bool)
     assert plan.message
+
+
+def test_git_remote_and_ls_remote_parsing():
+    url, ref = git_remote_from_spec(GIT_INSTALL)
+    assert url == "https://github.com/xiaoquisme/otel-agent.git"
+    assert ref is None
+
+    url, ref = git_remote_from_spec(f"{GIT_INSTALL}@main")
+    assert url == "https://github.com/xiaoquisme/otel-agent.git"
+    assert ref == "main"
+
+    url, ref = git_remote_from_spec("git+ssh://git@github.com/example/otel-agent.git@dev")
+    assert url == "ssh://git@github.com/example/otel-agent.git"
+    assert ref == "dev"
+
+    head = "a" * 40
+    assert parse_ls_remote(f"{head}\tHEAD\n", None) == head
+    assert parse_ls_remote(f"{head}\trefs/heads/main\n", None) is None
+
+    branch = "b" * 40
+    tag = "c" * 40
+    peeled = "d" * 40
+    text = "\n".join([
+        f"{branch}\trefs/heads/dev",
+        f"{tag}\trefs/tags/dev",
+        f"{peeled}\trefs/tags/dev^{{}}",
+    ])
+    assert parse_ls_remote(text, "dev") == branch
+    assert parse_ls_remote("\n".join([
+        f"{tag}\trefs/tags/v0.1.0",
+        f"{peeled}\trefs/tags/v0.1.0^{{}}",
+    ]), "v0.1.0") == peeled
+
+
+def test_parse_dry_run_package():
+    assert parse_dry_run_package("Resolved 1 package\nWould make no changes\n", "otel-agent") == "unchanged"
+    assert parse_dry_run_package(
+        " - otel-agent==0.1.0\n + otel-agent==0.2.0\n",
+        "otel-agent",
+    ) == ("0.1.0", "0.2.0")
+    assert parse_dry_run_package(" - idna==3.18\n + idna==3.20\n", "otel-agent") is None
+
+
+def test_git_plan_records_installed_commit_for_probe():
+    local = "e" * 40
+    plan = plan_update(_facts(
+        receipt_exists=True,
+        receipt_text=RECEIPT_GIT_MAIN,
+        dist=DistInfo(commit_id=local),
+    ))
+    assert isinstance(plan.probe, GitProbe)
+    assert plan.probe.url == "https://github.com/xiaoquisme/otel-agent.git"
+    assert plan.probe.ref == "main"
+    assert plan.probe.local_commit == local
+
+    pinned = plan_update(_facts(receipt_exists=True, receipt_text=RECEIPT_GIT_SHA))
+    assert isinstance(pinned.probe, GitProbe)
+    assert pinned.probe.ref is None
+    assert pinned.probe.local_commit == "0123456789abcdef0123456789abcdef01234567"
