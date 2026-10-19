@@ -30,6 +30,8 @@ class RequestRecord(TypedDict, total=False):
     response_body: str
     latency_ms: float
     format: str | None
+    session_id: str | None
+    session_step: str | None
 
 
 class StorageBackend(ABC):
@@ -63,8 +65,14 @@ class StorageBackend(ABC):
         cache_creation_tokens: int | None = None,
         timestamp: str | None = None,
         format: str | None = None,
+        session_id: str | None = None,
+        session_step: str | None = None,
     ) -> None:
-        """Insert a single request record."""
+        """Insert a single request record.
+
+        ``session_id`` and ``session_step`` are optional. Omit them (or pass
+        ``None``) and the row is stored with those columns null.
+        """
 
     @abstractmethod
     def get_requests(
@@ -103,6 +111,26 @@ class StorageBackend(ABC):
         """Return **all** matching requests (no pagination).
 
         Used for CSV/JSON export.
+        """
+
+    @abstractmethod
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> dict:
+        """Return recent agent sessions, newest activity first.
+
+        Rows with a null ``session_id`` are not sessions. Each item carries
+        request count, token sums, first/last timestamps, and model/upstream
+        summaries. Returns ``data``, ``total``, ``offset``, ``limit``, and
+        ``has_more``.
+        """
+
+    @abstractmethod
+    def get_session(self, session_id: str) -> dict | None:
+        """Return one session as chronological steps plus rollups.
+
+        Returns ``None`` when no row uses that id. Steps include the fields
+        needed for a trajectory (time, endpoint, model, status, latency,
+        tokens) and a short request-body preview. Full bodies stay on the
+        single-request detail endpoint.
         """
 
     @abstractmethod

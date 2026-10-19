@@ -392,8 +392,13 @@ def test_config_keeps_a_declared_model_source(tmp_path):
     assert cfg.get_provider("codex").models_from == "codex-cli"
 
 
-def test_config_without_a_model_source_queries_upstream(tmp_path):
+def test_config_without_a_model_source_queries_upstream(tmp_path, monkeypatch):
     """No declaration — the catalog is discovered from the upstream, as before."""
+    async def _bearer(provider):
+        return "test-token"
+
+    # A missing local Codex grant must not decide whether upstream is asked.
+    monkeypatch.setattr("otel_agent.provider_utils.resolve_bearer_async", _bearer)
     cfg = _codex_cli_config(tmp_path, "")
     provider = cfg.get_provider("codex")
     assert provider.models_from == ""

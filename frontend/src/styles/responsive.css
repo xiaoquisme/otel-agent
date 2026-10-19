@@ -2,6 +2,10 @@
 
 /* Mobile (default) */
 @media (max-width: 640px) {
+  .session-col-optional {
+    display: none;
+  }
+
   .usage-grid {
     grid-template-columns: 1fr;
   }

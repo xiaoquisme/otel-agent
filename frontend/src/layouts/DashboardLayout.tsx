@@ -71,6 +71,7 @@ export default function DashboardLayout() {
         </div>
         <nav style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }} aria-label="Main navigation">
           <NavLink to="/" end style={navLinkStyle}>Requests</NavLink>
+          <NavLink to="/sessions" style={navLinkStyle}>Sessions</NavLink>
           <NavLink to="/usage" style={navLinkStyle}>Usage</NavLink>
         </nav>
       </header>

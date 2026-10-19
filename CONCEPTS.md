@@ -14,5 +14,11 @@ A personal ChatGPT Plus / Codex OAuth token pair, adopted once from a sibling CL
 ### Responses Chat Compat
 The gateway path that lets a Responses-only client use a Chat Completions provider. Distinct from the Codex Grant pass-through, which forwards to an upstream that already speaks Responses and applies that upstream's accommodations. This path translates, and it must not reuse those accommodations.
 
+### Agent Session
+A client-supplied run id stored on each logged gateway request. The header is `X-Otel-Session`; `X-Session-ID` is accepted only when that header is absent. A missing or blank value leaves `session_id` null, so the request stays an ordinary telemetry row. One Agent Session is the time-ordered set of calls that share the id — the unit a trajectory view inspects (steps, failures, cumulative tokens). It is not an auth session and not a provider conversation id.
+
+### Session Step
+Optional turn label from `X-Otel-Session-Step` on a logged request inside an Agent Session. It names a step; it does not create a session by itself.
+
 ### Model Capability Metadata
 The four optional fields on each `/v1/models` entry — `context_length`, `max_output_tokens` (numbers), `input_modalities`, `output_modalities` (string arrays) — sourced in order: upstream passthrough, then OpenRouter public-catalog backfill (whole-catalog cache, normalized exact id match, stale-on-error), then omission. Never guessed and never hand-declared in config — a missing value means the field is absent, not zero.

@@ -111,6 +111,16 @@ class DashboardAPI:
         """Return an empty requests response."""
         return {"data": [], "total": 0, "cursor": cursor, "next_cursor": 0, "has_more": False}
 
+    def _empty_sessions(self, offset: int = 0, limit: int = 50) -> dict:
+        """Return an empty session list."""
+        return {
+            "data": [],
+            "total": 0,
+            "offset": offset,
+            "limit": limit,
+            "has_more": False,
+        }
+
     def _empty_usage(self, start: str, end: str) -> dict:
         """Return an empty usage response."""
         return {"start": start, "end": end, "total_tokens": 0, "input_tokens": 0,
@@ -165,6 +175,30 @@ class DashboardAPI:
         if not self.db_path.exists():
             return []
         return self._get_storage().get_all_filtered(search, method, status)
+
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> dict:
+        """Recent agent sessions, newest activity first.
+
+        Follows the same proxy-then-storage path as :meth:`get_requests`.
+        """
+        params = {"limit": limit, "offset": offset}
+        result = self._http_get("/api/sessions", params)
+        if result is not None:
+            return result
+        if self._proxy_port is not None or not self.db_path.exists():
+            return self._empty_sessions(offset, limit)
+        return self._get_storage().list_sessions(limit=limit, offset=offset)
+
+    def get_session(self, session_id: str) -> dict | None:
+        """One session trajectory, or None when that id was never logged."""
+        from urllib.parse import quote
+
+        result = self._http_get(f"/api/sessions/{quote(session_id, safe='')}")
+        if result is not None:
+            return result
+        if self._proxy_port is not None or not self.db_path.exists():
+            return None
+        return self._get_storage().get_session(session_id)
 
     def get_usage_summary(self, start: str, end: str) -> dict:
         """Return usage summary for the requested UTC range."""
