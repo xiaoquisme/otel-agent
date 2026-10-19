@@ -105,7 +105,7 @@ Everything after the first `/` is the **upstream model name** forwarded to that 
 
 ```
 otel-agent --version          Print version
-otel-agent update             Upgrade the installed CLI from git (or print how, if it cannot)
+otel-agent update             Upgrade when the git tip or index version is newer
 otel-agent init               Create default config file
 otel-agent proxy              Start gateway in background
 otel-agent proxy stop         Stop the running gateway
@@ -130,7 +130,7 @@ otel-agent auth --no-browser    Print the login URL instead of opening a browser
 otel-agent doctor             Check installation health
 ```
 
-`otel-agent update` upgrades a `uv tool` or pip install of this package to the latest commit of its git source. A `uv tool install git+https://github.com/xiaoquisme/otel-agent.git` install is reinstalled from that URL (`uv tool upgrade` can report nothing to do when the package version does not change). Editable checkouts and local directories are left alone, with the reinstall command printed instead. The published container image is updated by pulling a new build (`docker pull ghcr.io/xiaoquisme/otel-agent:latest`) and recreating the container. If the gateway is already running, restart it afterwards with `otel-agent proxy restart`.
+`otel-agent update` checks whether a `uv tool` or pip install is behind its source, and runs the installer only when it is. A git install is compared with `git ls-remote` (default branch, or the branch or tag recorded at install). The package version is not used for that check, because it stays the same across commits. A uv tool installed from a package index is checked with `uv pip install --dry-run` and then `uv tool upgrade` only if the resolved version changed. If the check fails (offline, missing `git`, index error), the command prints the error and the reinstall command and does not install. Editable checkouts and local directories are left alone. The published container image is updated by pulling a new build (`docker pull ghcr.io/xiaoquisme/otel-agent:latest`) and recreating the container. After an install, restart a running gateway with `otel-agent proxy restart`.
 
 ## Web Dashboard
 

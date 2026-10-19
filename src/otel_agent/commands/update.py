@@ -1,10 +1,11 @@
 """otel-agent update — upgrade the installed CLI from its original channel.
 
-``uv tool upgrade`` keeps the receipt's requirement and can report "Nothing
-to upgrade" for a git install whose package version did not change (this
-project stays on one version across commits). A git install is therefore
-reinstalled from that git URL. Local checkouts, editable installs, and
-container images are left alone.
+Git installs are compared to the remote tip with ``git ls-remote`` before any
+reinstall. The package version is not bumped on every commit, so version
+equality is not the signal. Registry uv-tool installs are checked with
+``uv pip install --dry-run`` and upgraded only when that resolution changes
+the package. Local checkouts, editable installs, and container images are
+left alone. A failed probe does not install.
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ class DistInfo:
     vcs: str = ""
     vcs_url: str = ""
     requested_revision: str = ""
+    commit_id: str = ""
     direct_kind: str = ""  # "", "vcs", "file", "url", "invalid"
 
 
@@ -58,16 +60,42 @@ class InstallFacts:
 
 
 @dataclass(frozen=True)
+class GitProbe:
+    """Compare an installed commit to a remote ref. ``ref`` None means HEAD."""
+
+    url: str
+    ref: str | None
+    local_commit: str
+
+
+@dataclass(frozen=True)
+class RegistryProbe:
+    """Resolve one index requirement without installing it."""
+
+    requirement: str
+    python: str
+
+
+@dataclass(frozen=True)
 class UpdatePlan:
     """Either an installer command to run, or guidance and no mutation."""
 
     execute: bool
     argv: tuple[str, ...]
     message: str
+    probe: GitProbe | RegistryProbe | None = None
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    """Outcome of a pre-install check. ``status`` is current, update, or error."""
+
+    status: str
+    message: str
 
 
 def handle_update(args) -> None:
-    """Upgrade this install, or print the command the user should run."""
+    """Upgrade this install when the probe says the remote is ahead."""
     del args  # reserved for future flags; the command takes none today
     before = f"otel-agent {__version__}"
     print(f"Current version: {before}")
@@ -75,6 +103,20 @@ def handle_update(args) -> None:
     plan = plan_update(collect_install_facts())
     print(plan.message)
     if not plan.execute:
+        sys.exit(1)
+
+    outcome = probe_update(plan)
+    print(outcome.message)
+    if outcome.status == "error":
+        print("The install was not changed.")
+        if plan.argv:
+            print("Reinstall manually:")
+            print("  " + shlex.join(plan.argv))
+        sys.exit(1)
+    if outcome.status == "current":
+        return
+    if outcome.status != "update":
+        print("The install was not changed.")
         sys.exit(1)
 
     if plan.argv and plan.argv[0] == "uv" and not _uv_on_path():
@@ -108,7 +150,11 @@ def plan_update(facts: InstallFacts) -> UpdatePlan:
     if facts.ephemeral_uv and not facts.receipt_exists:
         return UpdatePlan(False, (), _uvx_message())
     if facts.receipt_exists:
-        return _plan_from_receipt(facts.receipt_text)
+        return _plan_from_receipt(
+            facts.receipt_text,
+            local_commit=_local_commit(facts.dist),
+            python=facts.python,
+        )
     # The published image is a pip install of the build context, not a git
     # checkout. Recreating the container is the upgrade. A git install inside
     # a container can still be reinstalled in place.
@@ -214,6 +260,7 @@ def dist_info_from_metadata(installer: str | None, direct_raw: str | None) -> Di
             vcs=str(vcs_info.get("vcs") or ""),
             vcs_url=url,
             requested_revision=str(vcs_info.get("requested_revision") or ""),
+            commit_id=str(vcs_info.get("commit_id") or ""),
             direct_kind="vcs",
         )
     if url.startswith("file:"):
@@ -302,7 +349,7 @@ def git_install_spec(git_value: str, subdirectory: str | None = None) -> tuple[s
     return spec, dropped
 
 
-def _plan_from_receipt(text: str | None) -> UpdatePlan:
+def _plan_from_receipt(text: str | None, *, local_commit: str, python: str) -> UpdatePlan:
     if text is None:
         return UpdatePlan(False, (), _unreadable_receipt_message())
     requirements = parse_receipt_requirements(text)
@@ -328,7 +375,8 @@ def _plan_from_receipt(text: str | None) -> UpdatePlan:
                 return UpdatePlan(False, (), _extras_message())
             with_args.extend(["--with", rendered])
         argv = ("uv", "tool", "install", "--upgrade", "--reinstall", *with_args, spec)
-        return UpdatePlan(True, argv, _git_message(spec, dropped))
+        installed = local_commit or (dropped or "")
+        return UpdatePlan(True, argv, _git_message(spec, dropped), _git_probe(spec, installed))
     if primary.get("url"):
         return UpdatePlan(False, (), _pinned_url_message(primary["url"]))
     if not primary.get("name"):
@@ -336,7 +384,12 @@ def _plan_from_receipt(text: str | None) -> UpdatePlan:
 
     specifier = primary.get("specifier", "")
     argv = ("uv", "tool", "upgrade", TOOL_NAME)
-    return UpdatePlan(True, argv, _registry_message(specifier))
+    return UpdatePlan(
+        True,
+        argv,
+        _registry_message(specifier),
+        RegistryProbe(requirement=f"{TOOL_NAME}{specifier}", python=python),
+    )
 
 
 def _plan_from_dist(dist: DistInfo, python: str) -> UpdatePlan:
@@ -365,10 +418,12 @@ def _plan_from_dist(dist: DistInfo, python: str) -> UpdatePlan:
         elif revision:
             spec = _append_rev(spec, revision)
         argv = _pip_argv(python, dist.installer, spec)
+        installed = _local_commit(dist) or (dropped or "")
         return UpdatePlan(
             True,
             argv,
             _pip_git_message(spec, dropped=dropped, revision=revision, installer=dist.installer),
+            _git_probe(spec, installed),
         )
     if dist.direct_kind == "url":
         return UpdatePlan(False, (), _pinned_url_message(dist.location))
@@ -404,12 +459,12 @@ def _extra_spec(req: dict[str, str]) -> str | None:
 
 def _git_message(spec: str, dropped_rev: str | None) -> str:
     lines = [
-        "Installed with uv tool from git. Reinstalling the latest commit of that source.",
+        "Installed with uv tool from git.",
         "A plain `uv tool upgrade` can leave a git install unchanged when the package version does not move.",
     ]
     if dropped_rev:
         lines.append(
-            f"The receipt pinned commit {dropped_rev}; the reinstall follows the default branch instead."
+            f"The receipt pinned commit {dropped_rev}; an update follows the default branch instead."
         )
     lines.append(f"Source: {spec}")
     return "\n".join(lines)
@@ -418,8 +473,8 @@ def _git_message(spec: str, dropped_rev: str | None) -> str:
 def _pip_git_message(spec: str, *, dropped: str | None, revision: str, installer: str) -> str:
     tool = "uv pip" if installer.startswith("uv") else "pip"
     lines = [
-        f"Installed with {tool} from git. Reinstalling that source.",
-        "The package version is not bumped on every commit, so the reinstall is forced.",
+        f"Installed with {tool} from git.",
+        "The package version is not bumped on every commit, so the installed commit is compared to the remote tip.",
     ]
     if revision and not _COMMIT_REV.match(revision):
         lines.append(f"Tracking revision {revision}.")
@@ -427,7 +482,7 @@ def _pip_git_message(spec: str, *, dropped: str | None, revision: str, installer
         commit = dropped or revision
         if commit:
             lines.append(
-                f"Recorded commit {commit} is not kept; the default branch is installed instead."
+                f"Recorded commit {commit} is compared with the default branch tip."
             )
     lines.append(f"Source: {spec}")
     return "\n".join(lines)
@@ -560,6 +615,225 @@ def _unknown_message(python: str) -> str:
         "Docker / GHCR:",
         f"  docker pull {GHCR_IMAGE}",
     ])
+
+
+def _local_commit(dist: DistInfo | None) -> str:
+    """Installed git commit from dist-info, or a requested SHA if that is all we have."""
+    if dist is None:
+        return ""
+    if dist.commit_id and _COMMIT_REV.match(dist.commit_id):
+        return dist.commit_id
+    if dist.requested_revision and _COMMIT_REV.match(dist.requested_revision):
+        return dist.requested_revision
+    return ""
+
+
+def _git_probe(spec: str, local_commit: str) -> GitProbe:
+    url, ref = git_remote_from_spec(spec)
+    return GitProbe(url=url, ref=ref, local_commit=local_commit)
+
+
+def git_remote_from_spec(spec: str) -> tuple[str, str | None]:
+    """Split a ``git+`` install spec into a clone URL and an optional ref name.
+
+    A missing ref means the default branch (``HEAD``). A commit SHA is not a
+    ref here; those specs already follow the default branch.
+    """
+    raw = spec[4:] if spec.startswith("git+") else spec
+    base = raw.split("?", 1)[0].split("#", 1)[0]
+    tail = base.rsplit("/", 1)[-1]
+    ref: str | None = None
+    if "@" in tail:
+        path, ref = tail.rsplit("@", 1)
+        base = base[: -len(tail)] + path
+        if not ref or _COMMIT_REV.match(ref):
+            ref = None
+    return base, ref
+
+
+def probe_update(plan: UpdatePlan) -> ProbeResult:
+    """Ask the remote whether ``plan`` would change this install. No install."""
+    if isinstance(plan.probe, GitProbe):
+        return probe_git(plan.probe)
+    if isinstance(plan.probe, RegistryProbe):
+        return probe_registry(plan.probe)
+    return ProbeResult("error", "This install has no update probe, so nothing was installed.")
+
+
+def probe_git(probe: GitProbe) -> ProbeResult:
+    """Compare the installed commit to ``git ls-remote`` for the tracked ref."""
+    if not probe.local_commit:
+        return ProbeResult(
+            "error",
+            "The installed git commit is not recorded, so this command will not reinstall.",
+        )
+    if not probe.url:
+        return ProbeResult("error", "The git remote URL is missing, so this command will not reinstall.")
+    if not _git_on_path():
+        return ProbeResult(
+            "error",
+            "git is not on PATH, so the remote revision could not be checked.",
+        )
+    if probe.ref is None:
+        argv = ["git", "ls-remote", probe.url, "HEAD"]
+    else:
+        argv = [
+            "git", "ls-remote", probe.url,
+            f"refs/heads/{probe.ref}",
+            f"refs/tags/{probe.ref}",
+        ]
+    code, out, err = _capture(argv)
+    if code != 0:
+        detail = (err or out).strip() or f"exit {code}"
+        return ProbeResult("error", f"Could not read the remote git revision: {detail}")
+    remote = parse_ls_remote(out, probe.ref)
+    if not remote:
+        label = probe.ref or "HEAD"
+        return ProbeResult("error", f"git ls-remote returned no revision for {label}.")
+    label = probe.ref or "HEAD"
+    if _same_commit(probe.local_commit, remote):
+        return ProbeResult("current", f"Already up to date at {remote} ({label}).")
+    return ProbeResult(
+        "update",
+        f"Update available: {probe.local_commit} -> {remote} ({label}).",
+    )
+
+
+def probe_registry(probe: RegistryProbe) -> ProbeResult:
+    """Resolve the index requirement with ``uv pip install --dry-run``."""
+    if not probe.requirement:
+        return ProbeResult("error", "The package requirement is missing, so nothing was installed.")
+    if not _uv_on_path():
+        return ProbeResult(
+            "error",
+            "uv is not on PATH, so the package index could not be checked.",
+        )
+    argv = [
+        "uv", "pip", "install", "--dry-run", "--upgrade", "--no-deps",
+        "--python", probe.python, probe.requirement,
+    ]
+    code, out, err = _capture(argv)
+    text = f"{out}\n{err}"
+    if code != 0:
+        detail = (err or out).strip() or f"exit {code}"
+        return ProbeResult("error", f"Could not resolve {probe.requirement}: {detail}")
+    change = parse_dry_run_package(text, TOOL_NAME)
+    if change == "unchanged":
+        return ProbeResult("current", f"Already up to date ({probe.requirement}).")
+    if change is None:
+        return ProbeResult(
+            "error",
+            "The index check did not say whether otel-agent would change, so nothing was installed.",
+        )
+    old, new = change
+    if old == new:
+        return ProbeResult("current", f"Already up to date at {new}.")
+    shown_old = old or "unknown"
+    return ProbeResult("update", f"Update available: {shown_old} -> {new}.")
+
+
+def parse_ls_remote(text: str, ref: str | None) -> str | None:
+    """Pick the commit from ``git ls-remote`` output.
+
+    ``ref`` None selects ``HEAD``. A name prefers ``refs/heads/<name>``, then
+    the peeled tag commit, then the tag object.
+    """
+    found: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if "\t" not in line:
+            continue
+        sha, name = line.split("\t", 1)
+        sha = sha.strip()
+        name = name.strip()
+        if _COMMIT_REV.match(sha):
+            found.append((sha, name))
+    if not found:
+        return None
+    if ref is None:
+        for sha, name in found:
+            if name == "HEAD":
+                return sha
+        return None
+    for sha, name in found:
+        if name == f"refs/heads/{ref}":
+            return sha
+    peeled = "refs/tags/" + ref + "^{}"
+    for sha, name in found:
+        if name == peeled:
+            return sha
+    for sha, name in found:
+        if name == f"refs/tags/{ref}":
+            return sha
+    return None
+
+
+def parse_dry_run_package(text: str, name: str) -> str | tuple[str, str] | None:
+    """Read a ``uv pip install --dry-run`` transcript for one package.
+
+    Returns ``"unchanged"``, ``(old, new)`` when the package would change, or
+    ``None`` when the transcript does not answer.
+    """
+    wanted = name.lower().replace("_", "-")
+    old = ""
+    new = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if len(stripped) < 3 or stripped[1] != " ":
+            continue
+        sign = stripped[0]
+        if sign not in "+-":
+            continue
+        body = stripped[2:]
+        pkg, sep, version = body.partition("==")
+        if not sep:
+            continue
+        if pkg.lower().replace("_", "-") != wanted:
+            continue
+        version = version.split()[0]
+        if sign == "-":
+            old = version
+        else:
+            new = version
+    if new and new != old:
+        return (old, new)
+    if "Would make no changes" in text:
+        return "unchanged"
+    if new and new == old:
+        return "unchanged"
+    return None
+
+
+def _same_commit(local: str, remote: str) -> bool:
+    left = local.strip().lower()
+    right = remote.strip().lower()
+    if left == right:
+        return True
+    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+    return len(shorter) >= 7 and _COMMIT_REV.match(shorter) and longer.startswith(shorter)
+
+
+def _git_on_path() -> bool:
+    return shutil.which("git") is not None
+
+
+def _capture(argv: list[str], timeout: int = 60) -> tuple[int, str, str]:
+    """Run a probe command. Git credential prompts fail instead of waiting."""
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return 1, "", f"timed out after {timeout}s"
+    except OSError as exc:
+        return 1, "", str(exc)
+    return proc.returncode, proc.stdout or "", proc.stderr or ""
 
 
 def _extract_bracket_block(text: str, key: str) -> str | None:
