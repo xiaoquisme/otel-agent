@@ -231,7 +231,7 @@ def list_sessions(
 
 @router.get("/sessions/{session_id:path}")
 def get_session(session_id: str) -> JSONResponse:
-    """One session as chronological steps with cumulative tokens."""
+    """One session as chronological steps, cumulative tokens, and waste findings."""
     session_id = session_id.strip().strip("/")
     cleaned = clean_session_label(session_id, MAX_SESSION_ID_LEN)
     if cleaned is None:

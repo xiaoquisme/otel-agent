@@ -20,5 +20,8 @@ A client-supplied run id stored on each logged gateway request. The header is `X
 ### Session Step
 Optional turn label from `X-Otel-Session-Step` on a logged request inside an Agent Session. It names a step; it does not create a session by itself.
 
+### Session Waste Finding
+A deterministic note attached to an Agent Session trajectory. It has a rule id, a severity (`info` or `warn`), the request ids it touches, and a short English explanation. The rules are failed steps, slow steps, retry bursts, near-duplicate calls, token spikes, and heavy requests with little or failed output. Thresholds live in `otel_agent.waste`. A finding is not a model judgment and does not propose a prompt or skill edit.
+
 ### Model Capability Metadata
 The four optional fields on each `/v1/models` entry — `context_length`, `max_output_tokens` (numbers), `input_modalities`, `output_modalities` (string arrays) — sourced in order: upstream passthrough, then OpenRouter public-catalog backfill (whole-catalog cache, normalized exact id match, stale-on-error), then omission. Never guessed and never hand-declared in config — a missing value means the field is absent, not zero.

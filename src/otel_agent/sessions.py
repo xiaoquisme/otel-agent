@@ -129,7 +129,9 @@ def assemble_session(session_id: str, rows: list[dict]) -> dict:
     """Turn chronological request rows into one trajectory with running totals.
 
     Token totals add only steps that reported a count. A step with no usage
-    keeps its own fields null and does not move the running total.
+    keeps its own fields null and does not move the running total. Waste
+    findings are attached from the same rows; body rules use length and a
+    bounded suffix when those fields or ``request_body`` are present.
     """
     steps: list[dict] = []
     cum_in = 0
@@ -193,7 +195,7 @@ def assemble_session(session_id: str, rows: list[dict]) -> dict:
         })
 
     error_count = sum(1 for step in steps if "failed" in step["flags"])
-    return {
+    detail = {
         "session_id": session_id,
         "request_count": len(steps),
         "total_tokens": cum_total,
@@ -209,3 +211,6 @@ def assemble_session(session_id: str, rows: list[dict]) -> dict:
         "slow_latency_ms": SLOW_STEP_MS,
         "steps": steps,
     }
+    from otel_agent.waste import apply_waste_findings
+
+    return apply_waste_findings(detail, rows)

@@ -66,6 +66,17 @@ def format_session_detail(detail: dict) -> str:
             f"tokens={step.get('total_tokens')}  cum={step.get('cumulative_total_tokens')}"
             f"{step_text}{flag_text}"
         )
+    findings = detail.get("findings") or []
+    if findings:
+        lines.append(f"findings ({len(findings)}):")
+        for finding in findings:
+            ids = ",".join(str(request_id) for request_id in finding.get("request_ids") or [])
+            tokens = finding.get("tokens_involved")
+            token_text = f"  tokens={tokens}" if tokens is not None else ""
+            lines.append(
+                f"  [{finding.get('severity')}] {finding.get('rule_id')}  "
+                f"requests={ids}{token_text}  {finding.get('message')}"
+            )
     return "\n".join(lines)
 
 

@@ -129,7 +129,9 @@ class StorageBackend(ABC):
 
         Returns ``None`` when no row uses that id. Steps include the fields
         needed for a trajectory (time, endpoint, model, status, latency,
-        tokens) and a short request-body preview. Full bodies stay on the
+        tokens) and a short request-body preview. The detail also carries
+        ``findings``, ``finding_counts``, and ``flagged_request_ids`` from
+        the deterministic waste rules. Full bodies stay on the
         single-request detail endpoint.
         """
 
