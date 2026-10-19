@@ -179,6 +179,65 @@ class DashboardAPI:
             return self._empty_usage(start, end)
         return self._get_storage().get_usage_summary(start, end)
 
+    def get_usage_series(
+        self,
+        start: str,
+        end: str,
+        bucket: str | None = None,
+        tz: str | None = None,
+    ) -> dict:
+        """Return bucketed token totals for the requested UTC range.
+
+        Follows the same proxy-then-storage path as :meth:`get_usage_summary`.
+        """
+        params: dict[str, str] = {"start": start, "end": end}
+        if bucket:
+            params["bucket"] = bucket
+        if tz:
+            params["tz"] = tz
+        result = self._http_get("/api/usage/series", params)
+        if result is not None:
+            return result
+
+        if self._proxy_port is not None or not self.db_path.exists():
+            return self._empty_usage_series(start, end, bucket, tz)
+        return self._get_storage().get_usage_series(start, end, bucket, tz)
+
+    def _empty_usage_series(
+        self,
+        start: str,
+        end: str,
+        bucket: str | None,
+        tz: str | None,
+    ) -> dict:
+        """Zero-filled series when the database cannot be read."""
+        from datetime import datetime, timezone
+
+        from otel_agent.usage_series import (
+            build_usage_series,
+            resolve_timezone,
+            select_bucket,
+        )
+
+        try:
+            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=timezone.utc)
+            zone = resolve_timezone(tz)
+            now = datetime.now(timezone.utc)
+            chosen = select_bucket(start_dt, end_dt, bucket, zone, now)
+        except (ValueError, TypeError, AttributeError):
+            return {
+                "start": start, "end": end, "bucket": "hour",
+                "timezone": "UTC", "points": [],
+            }
+        return build_usage_series(
+            start, end, start_dt, end_dt, chosen, [], zone, now=now,
+        )
+
     def get_structured_request(self, request_id: int) -> dict | None:
         """Get a request with parsed structured messages for frontend rendering."""
         result = self.get_request(request_id)

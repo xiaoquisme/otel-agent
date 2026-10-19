@@ -8,6 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from otel_agent.storage.base import StorageBackend
+from otel_agent.usage_series import (
+    build_usage_series,
+    resolve_timezone,
+    select_bucket,
+)
 
 
 def _hit_rate(cache_read: int, cacheable_input: int) -> float | None:
@@ -278,6 +283,44 @@ class SQLiteStorage(StorageBackend):
             "eligible_request_count": totals[6], "excluded_request_count": totals[7],
             "models": [model_row(row) for row in rows],
         }
+
+    def get_usage_series(
+        self,
+        start: str,
+        end: str,
+        bucket: str | None = None,
+        tz: str | None = None,
+    ) -> dict:
+        """Bucket completed-request tokens across ``[start, end)``.
+
+        Rows are grouped by UTC minute in SQL, then folded into local
+        hour, day, week, or month marks. The same status filter as
+        :meth:`get_usage_summary` applies, so series totals match that
+        summary for the same range.
+        """
+        from datetime import datetime, timezone
+
+        start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+        if start_dt.tzinfo is None:
+            start_dt = start_dt.replace(tzinfo=timezone.utc)
+        if end_dt.tzinfo is None:
+            end_dt = end_dt.replace(tzinfo=timezone.utc)
+        zone = resolve_timezone(tz)
+        now = datetime.now(timezone.utc)
+        chosen = select_bucket(start_dt, end_dt, bucket, zone, now)
+        conn = self._get_conn()
+        where = "timestamp >= ? AND timestamp < ? AND response_status BETWEEN 200 AND 299"
+        rows = conn.execute(
+            "SELECT substr(timestamp, 1, 16), "
+            "COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), "
+            "COALESCE(SUM(total_tokens), 0), COUNT(total_tokens) "
+            f"FROM requests WHERE {where} GROUP BY 1",
+            (start, end),
+        ).fetchall()
+        return build_usage_series(
+            start, end, start_dt, end_dt, chosen, rows, zone, now=now,
+        )
 
     def close(self) -> None:
         if self._conn is not None:

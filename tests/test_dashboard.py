@@ -625,6 +625,56 @@ def test_route_usage_yesterday_empty(tmp_path):
     api.close()
 
 
+def test_route_usage_series_buckets_tokens(tmp_path):
+    db = tmp_path / "series.sqlite"
+    _create_usage_db(db, [{
+        "timestamp": "2026-03-02T15:10:00+00:00",
+        "model_name": "openai/gpt-4o",
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "total_tokens": 15,
+        "response_status": 200,
+    }])
+    client, api = _make_client(db)
+    resp = client.get(
+        "/api/usage/series",
+        params={"start": "2026-03-02T00:00:00Z", "end": "2026-03-03T00:00:00Z", "bucket": "hour"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bucket"] == "hour"
+    assert len(body["points"]) == 24
+    hour = next(point for point in body["points"] if point["bucket_start"] == "2026-03-02T15:00:00Z")
+    assert hour["total_tokens"] == 15
+    assert hour["input_tokens"] == 10
+    assert hour["output_tokens"] == 5
+    api.close()
+
+
+def test_route_usage_series_rejects_bad_bucket_and_timezone(tmp_path):
+    db = tmp_path / "series.sqlite"
+    _create_usage_db(db, [])
+    client, api = _make_client(db)
+    bad_bucket = client.get(
+        "/api/usage/series",
+        params={"start": "2026-03-02T00:00:00Z", "end": "2026-03-03T00:00:00Z", "bucket": "minute"},
+    )
+    assert bad_bucket.status_code == 400
+    assert "Invalid bucket" in bad_bucket.json()["error"]
+    bad_tz = client.get(
+        "/api/usage/series",
+        params={"start": "2026-03-02T00:00:00Z", "end": "2026-03-03T00:00:00Z", "tz": "Not/AZone"},
+    )
+    assert bad_tz.status_code == 400
+    assert "Unknown timezone" in bad_tz.json()["error"]
+    reversed_range = client.get(
+        "/api/usage/series",
+        params={"start": "2026-03-03T00:00:00Z", "end": "2026-03-02T00:00:00Z"},
+    )
+    assert reversed_range.status_code == 400
+    api.close()
+
+
 def test_route_usage_wide_range(tmp_path):
     """Usage endpoint should accept ranges wider than 48 hours (week/month/all-time)."""
     db = tmp_path / "test.sqlite"
