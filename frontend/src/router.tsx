@@ -3,6 +3,8 @@ import DashboardLayout from './layouts/DashboardLayout'
 import ListPage from './pages/ListPage'
 import DetailPage from './pages/DetailPage'
 import UsagePage from './pages/UsagePage'
+import SessionsPage from './pages/SessionsPage'
+import SessionPage from './pages/SessionPage'
 
 const router = createBrowserRouter([
   {
@@ -11,6 +13,8 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <ListPage /> },
       { path: 'request/:id', element: <DetailPage /> },
+      { path: 'sessions', element: <SessionsPage /> },
+      { path: 'sessions/*', element: <SessionPage /> },
       { path: 'usage', element: <UsagePage /> },
     ],
   },

@@ -7,6 +7,13 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from otel_agent.sessions import (
+    MAX_SESSION_ID_LEN,
+    MAX_SESSION_STEP_LEN,
+    assemble_session,
+    clean_session_label,
+    session_summary_from_row,
+)
 from otel_agent.storage.base import StorageBackend
 from otel_agent.usage_series import (
     build_usage_series,
@@ -88,11 +95,28 @@ class SQLiteStorage(StorageBackend):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_requests_status ON requests(response_status)"
         )
-        for column in ("model_name TEXT", "input_tokens INTEGER", "output_tokens INTEGER", "total_tokens INTEGER", "cache_read_tokens INTEGER", "cache_creation_tokens INTEGER", "format TEXT"):
+        for column in (
+            "model_name TEXT",
+            "input_tokens INTEGER",
+            "output_tokens INTEGER",
+            "total_tokens INTEGER",
+            "cache_read_tokens INTEGER",
+            "cache_creation_tokens INTEGER",
+            "format TEXT",
+            "session_id TEXT",
+            "session_step TEXT",
+        ):
             try:
                 conn.execute(f"ALTER TABLE requests ADD COLUMN {column}")
             except sqlite3.OperationalError:
                 pass
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_requests_session_time
+            ON requests (session_id, timestamp, id)
+            WHERE session_id IS NOT NULL
+            """
+        )
         conn.commit()
 
     def log_request(
@@ -110,6 +134,8 @@ class SQLiteStorage(StorageBackend):
         total_tokens: int | None = None, timestamp: str | None = None,
         cache_read_tokens: int | None = None, cache_creation_tokens: int | None = None,
         format: str | None = None,
+        session_id: str | None = None,
+        session_step: str | None = None,
     ) -> None:
         from datetime import datetime, timezone
 
@@ -118,8 +144,9 @@ class SQLiteStorage(StorageBackend):
             """INSERT INTO requests
                (timestamp, method, url, upstream, request_headers, request_body,
                 response_status, response_headers, response_body, latency_ms, model_name,
-                input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_creation_tokens, format)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_creation_tokens, format,
+                session_id, session_step)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 timestamp or datetime.now(timezone.utc).isoformat(),
                 method,
@@ -132,6 +159,8 @@ class SQLiteStorage(StorageBackend):
                 response_body,
                 latency_ms, model_name, input_tokens, output_tokens, total_tokens,
                 cache_read_tokens, cache_creation_tokens, format,
+                clean_session_label(session_id, MAX_SESSION_ID_LEN),
+                clean_session_label(session_step, MAX_SESSION_STEP_LEN),
             ),
         )
         conn.commit()
@@ -321,6 +350,90 @@ class SQLiteStorage(StorageBackend):
         return build_usage_series(
             start, end, start_dt, end_dt, chosen, rows, zone, now=now,
         )
+
+    def _column_names(self) -> set[str]:
+        """Column names on ``requests``, or empty when the table is absent."""
+        conn = self._get_conn()
+        try:
+            rows = conn.execute("PRAGMA table_info(requests)").fetchall()
+        except sqlite3.OperationalError:
+            return set()
+        return {row[1] for row in rows}
+
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> dict:
+        """Recent sessions ordered by last activity, then session id."""
+        limit = max(int(limit), 0)
+        offset = max(int(offset), 0)
+        empty = {
+            "data": [],
+            "total": 0,
+            "offset": offset,
+            "limit": limit,
+            "has_more": False,
+        }
+        if "session_id" not in self._column_names():
+            return empty
+        conn = self._get_conn()
+        where = "session_id IS NOT NULL AND session_id != ''"
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM (SELECT session_id FROM requests WHERE {where} GROUP BY session_id)"
+        ).fetchone()[0]
+        rows = conn.execute(
+            f"""
+            SELECT session_id,
+                   COUNT(*) AS request_count,
+                   COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COUNT(total_tokens) AS token_request_count,
+                   MIN(timestamp) AS first_timestamp,
+                   MAX(timestamp) AS last_timestamp,
+                   SUM(CASE
+                         WHEN response_status IS NULL
+                           OR response_status < 200
+                           OR response_status >= 400
+                         THEN 1 ELSE 0 END) AS error_count,
+                   COALESCE(SUM(latency_ms), 0) AS total_latency_ms,
+                   GROUP_CONCAT(DISTINCT model_name) AS models,
+                   GROUP_CONCAT(DISTINCT upstream) AS upstreams
+            FROM requests
+            WHERE {where}
+            GROUP BY session_id
+            ORDER BY last_timestamp DESC, session_id ASC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        ).fetchall()
+        data = [session_summary_from_row(self._row_to_dict(row)) for row in rows]
+        return {
+            "data": data,
+            "total": int(total),
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset + len(data) < int(total),
+        }
+
+    def get_session(self, session_id: str) -> dict | None:
+        """One session's requests in timestamp order, with running token totals."""
+        cleaned = clean_session_label(session_id, MAX_SESSION_ID_LEN)
+        if cleaned is None or "session_id" not in self._column_names():
+            return None
+        conn = self._get_conn()
+        rows = conn.execute(
+            """
+            SELECT id, timestamp, method, url, upstream, response_status, latency_ms,
+                   model_name, input_tokens, output_tokens, total_tokens,
+                   cache_read_tokens, cache_creation_tokens, format, session_step,
+                   substr(request_body, 1, 240) AS request_preview
+            FROM requests
+            WHERE session_id = ?
+            ORDER BY timestamp ASC, id ASC
+            """,
+            (cleaned,),
+        ).fetchall()
+        if not rows:
+            return None
+        return assemble_session(cleaned, [self._row_to_dict(row) for row in rows])
 
     def close(self) -> None:
         if self._conn is not None:

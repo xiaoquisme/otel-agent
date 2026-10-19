@@ -119,6 +119,8 @@ otel-agent dashboard status   Check if standalone dashboard is running
 otel-agent dashboard logs     View standalone dashboard logs
 otel-agent dashboard --foreground  Run standalone dashboard in foreground
 otel-agent view               View logged requests (CLI)
+otel-agent view --sessions    List recent agent sessions
+otel-agent view --session ID  Print one session trajectory
 otel-agent config path|show|edit  Manage configuration
 otel-agent auth status          Show xAI / Codex login status
 otel-agent auth login           SuperGrok / xAI device-code login
@@ -146,7 +148,24 @@ Features:
 - Request detail in its own window: full request/response bodies, LLM message trajectory, and a rendered message viewer
 - Download a request as JSON
 - Token usage view — today / week / month totals and per-model breakdown (refreshes every 30s)
+- Sessions view — agent runs grouped by `X-Otel-Session`, with a chronological trajectory, cumulative tokens, and failed/slow markers
 - CSV/JSON export of the request log (`GET /api/export?format=csv|json`)
+
+### Agent sessions
+
+Requests are logged one by one unless the client sends a session id. Use the same id on every call in an agent run:
+
+```bash
+curl http://localhost:45638/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Otel-Session: my-run-1" \
+  -H "X-Otel-Session-Step: plan" \
+  -d '{"model":"openai/gpt-4o","messages":[{"role":"user","content":"hi"}]}'
+```
+
+`X-Otel-Session` is the run id (stored as `session_id`). `X-Session-ID` is accepted as an alias when `X-Otel-Session` is absent. `X-Otel-Session-Step` is an optional turn label. Omit the headers and the request is logged as before, with a null session id — existing databases pick the new columns up on the next proxy start, and older rows stay null.
+
+Open **Sessions** at `http://localhost:45638/sessions` to list recent runs and open one trajectory (time, endpoint, status, latency, tokens, and a running token total). A non-success status is marked failed, and a step at or above 10s is marked slow. Click a step to open the existing request detail. From the CLI: `otel-agent view --sessions` and `otel-agent view --session my-run-1`.
 
 ## API Endpoints
 

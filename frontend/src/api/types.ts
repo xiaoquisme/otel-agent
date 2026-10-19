@@ -86,6 +86,58 @@ export interface UsageSummary {
   cache_hit_rate?: number | null
 }
 
+export interface SessionSummary {
+  session_id: string
+  request_count: number
+  total_tokens: number
+  input_tokens: number
+  output_tokens: number
+  token_request_count: number
+  first_timestamp: string
+  last_timestamp: string
+  error_count: number
+  total_latency_ms: number
+  models: string[]
+  upstreams: string[]
+}
+
+export interface SessionStep {
+  id: number
+  timestamp: string
+  method: string
+  url: string
+  upstream: string | null
+  response_status: number | null
+  latency_ms: number | null
+  model_name: string | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  cache_read_tokens: number | null
+  cache_creation_tokens: number | null
+  format: string | null
+  session_step: string | null
+  cumulative_input_tokens: number
+  cumulative_output_tokens: number
+  cumulative_total_tokens: number
+  cumulative_latency_ms: number
+  flags: string[]
+  request_preview: string
+}
+
+export interface SessionDetail extends SessionSummary {
+  slow_latency_ms: number
+  steps: SessionStep[]
+}
+
+export interface SessionsResponse {
+  data: SessionSummary[]
+  total: number
+  offset: number
+  limit: number
+  has_more: boolean
+}
+
 export interface RequestListParams {
   search?: string
   method?: string

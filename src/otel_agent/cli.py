@@ -72,6 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     view_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.sqlite", help="Telemetry database path")
     view_p.add_argument("-f", "--filter", type=str, default="", help="Filter by upstream (substring match)")
     view_p.add_argument("-n", "--limit", type=int, default=20, help="Max rows to display (default: 20)")
+    view_p.add_argument("--sessions", action="store_true", help="List recent agent sessions")
+    view_p.add_argument("--session", type=str, default="", help="Show one session trajectory by id")
 
     # --- config ---
     config_p = sub.add_parser("config", help="Manage configuration")

@@ -1,4 +1,4 @@
-import type { RequestDetail, RequestsResponse, UsageSeries, UsageSummary, RequestListParams } from './types'
+import type { RequestDetail, RequestListParams, RequestsResponse, SessionDetail, SessionsResponse, UsageSeries, UsageSummary } from './types'
 
 const API_BASE = '/api'
 
@@ -46,6 +46,23 @@ export async function fetchUsageSeries(
     throw new Error(err.error || `Failed to fetch usage series: ${resp.status}`)
   }
   return resp.json() as Promise<UsageSeries>
+}
+
+export async function fetchSessions(offset = 0, limit = 50): Promise<SessionsResponse> {
+  const query = new URLSearchParams({ offset: String(offset), limit: String(limit) })
+  const resp = await fetch(`${API_BASE}/sessions?${query.toString()}`)
+  if (!resp.ok) throw new Error(`Failed to fetch sessions: ${resp.status}`)
+  return resp.json() as Promise<SessionsResponse>
+}
+
+export async function fetchSession(sessionId: string): Promise<SessionDetail> {
+  const resp = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}`)
+  if (resp.status === 404) throw new Error('Session not found')
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: 'Failed to load session' }))
+    throw new Error(err.error || `Failed to fetch session: ${resp.status}`)
+  }
+  return resp.json() as Promise<SessionDetail>
 }
 
 export function exportData(format: 'csv' | 'json', params: RequestListParams = {}): void {

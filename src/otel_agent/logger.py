@@ -40,6 +40,7 @@ class TelemetryLogger:
         output_tokens: int | None = None, total_tokens: int | None = None,
         cache_read_tokens: int | None = None, cache_creation_tokens: int | None = None,
         timestamp: str | None = None, format: str | None = None,
+        session_id: str | None = None, session_step: str | None = None,
     ):
         self.storage.log_request(
             method=method,
@@ -56,6 +57,8 @@ class TelemetryLogger:
             cache_creation_tokens=cache_creation_tokens,
             timestamp=timestamp,
             format=format,
+            session_id=session_id,
+            session_step=session_step,
         )
 
     def close(self):

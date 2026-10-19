@@ -9,6 +9,8 @@ Provides the dashboard JSON endpoints:
   GET /api/cache/clear — clear the COUNT cache
   GET /api/usage     — usage summary for a time range
   GET /api/usage/series — token totals bucketed across a time range
+  GET /api/sessions  — recent agent sessions with rollups
+  GET /api/sessions/{session_id} — one session as a chronological trajectory
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse, Response
 
 from otel_agent.dashboard.api import DashboardAPI
+from otel_agent.sessions import MAX_SESSION_ID_LEN, clean_session_label
 from otel_agent.usage_series import USAGE_BUCKETS
 
 router = APIRouter(prefix="/api")
@@ -212,4 +215,28 @@ def usage_series(
         result = get_api().get_usage_series(start, end, bucket or None, tz or None)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse(result)
+
+
+@router.get("/sessions")
+def list_sessions(
+    limit: int = Query(50),
+    offset: int = Query(0),
+) -> dict:
+    """Recent agent sessions with request, token, and time rollups."""
+    limit = min(max(limit, 1), 200)
+    offset = max(offset, 0)
+    return get_api().list_sessions(limit=limit, offset=offset)
+
+
+@router.get("/sessions/{session_id:path}")
+def get_session(session_id: str) -> JSONResponse:
+    """One session as chronological steps with cumulative tokens."""
+    session_id = session_id.strip().strip("/")
+    cleaned = clean_session_label(session_id, MAX_SESSION_ID_LEN)
+    if cleaned is None:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    result = get_api().get_session(cleaned)
+    if result is None:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
     return JSONResponse(result)
