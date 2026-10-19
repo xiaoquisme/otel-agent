@@ -103,6 +103,9 @@ def build_parser() -> argparse.ArgumentParser:
     logs_p.add_argument("-F", "--follow", action="store_true", help="Stream logs in real-time")
     logs_p.add_argument("-n", "--lines", type=int, default=50, help="Number of recent lines (default: 50)")
 
+    # --- update ---
+    sub.add_parser("update", help="Upgrade the installed otel-agent tool")
+
     # --- auth ---
     auth_p = sub.add_parser("auth", help="Sign in to SuperGrok / xAI OAuth or Codex")
     auth_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
@@ -152,6 +155,9 @@ def main() -> None:
     elif args.command == "auth":
         from otel_agent.commands.auth_cmd import handle_auth
         handle_auth(args)
+    elif args.command == "update":
+        from otel_agent.commands.update import handle_update
+        handle_update(args)
     else:
         parser.print_help()
         sys.exit(1)
