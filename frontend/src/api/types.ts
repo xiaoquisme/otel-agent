@@ -123,11 +123,23 @@ export interface SessionStep {
   cumulative_latency_ms: number
   flags: string[]
   request_preview: string
+  waste_rules?: string[]
+}
+
+export interface WasteFinding {
+  rule_id: string
+  severity: 'info' | 'warn'
+  request_ids: number[]
+  message: string
+  tokens_involved: number | null
 }
 
 export interface SessionDetail extends SessionSummary {
   slow_latency_ms: number
   steps: SessionStep[]
+  findings?: WasteFinding[]
+  finding_counts?: Record<string, number>
+  flagged_request_ids?: number[]
 }
 
 export interface SessionsResponse {

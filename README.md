@@ -168,7 +168,7 @@ curl http://localhost:45638/v1/chat/completions \
 
 `X-Otel-Session` is the run id (stored as `session_id`). `X-Session-ID` is accepted as an alias when `X-Otel-Session` is absent. `X-Otel-Session-Step` is an optional turn label. Omit the headers and the request is logged as before, with a null session id — existing databases pick the new columns up on the next proxy start, and older rows stay null.
 
-Open **Sessions** at `http://localhost:45638/sessions` to list recent runs and open one trajectory (time, endpoint, status, latency, tokens, and a running token total). A non-success status is marked failed, and a step at or above 10s is marked slow. Click a step to open the existing request detail. From the CLI: `otel-agent view --sessions` and `otel-agent view --session my-run-1`.
+Open **Sessions** at `http://localhost:45638/sessions` to list recent runs and open one trajectory (time, endpoint, status, latency, tokens, and a running token total). A non-success status is marked failed, and a step at or above 10s is marked slow. The trajectory also lists waste findings from fixed rules: retry bursts, near-duplicate calls, token spikes, and heavy requests that return little or no output. A clean run says there are no findings. Click a finding to scroll to the step, and click a step to open the existing request detail. From the CLI: `otel-agent view --sessions` and `otel-agent view --session my-run-1` (the session view prints the findings when there are any). Thresholds live in `src/otel_agent/waste.py`.
 
 ## API Endpoints
 

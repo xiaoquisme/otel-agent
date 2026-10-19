@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { fetchSession } from '../api/client'
-import type { SessionDetail, SessionStep } from '../api/types'
+import type { SessionDetail, SessionStep, WasteFinding } from '../api/types'
 import { Badge } from '../components/ui'
 import { ArrowLeftIcon } from '../components/ui/icons'
 import { openRequestWindow } from '../lib/openRequestWindow'
@@ -52,12 +52,35 @@ function accentFor(step: SessionStep): string {
   return 'var(--color-accent-green)'
 }
 
+const RULE_LABELS: Record<string, string> = {
+  failed_step: 'failed',
+  slow_step: 'slow',
+  retry_burst: 'retry',
+  duplicate_call: 'duplicate',
+  token_spike: 'token spike',
+  heavy_context: 'heavy context',
+}
+
+function ruleLabel(ruleId: string): string {
+  return RULE_LABELS[ruleId] ?? ruleId
+}
+
+function severitySummary(findings: WasteFinding[]): string {
+  const warnings = findings.filter((finding) => finding.severity === 'warn').length
+  const notes = findings.length - warnings
+  const parts: string[] = []
+  if (warnings > 0) parts.push(`${warnings} warning${warnings === 1 ? '' : 's'}`)
+  if (notes > 0) parts.push(`${notes} note${notes === 1 ? '' : 's'}`)
+  return parts.join(', ')
+}
+
 export default function SessionPage() {
   const params = useParams()
   const sessionId = params['*'] ?? ''
   const [session, setSession] = useState<SessionDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [pinnedId, setPinnedId] = useState<number | null>(null)
 
   useEffect(() => {
     if (!sessionId) {
@@ -123,17 +146,27 @@ export default function SessionPage() {
             </p>
           )}
 
+          <FindingsPanel
+            findings={session.findings ?? []}
+            onFocus={(requestId) => {
+              setPinnedId(requestId)
+              document.getElementById(`step-${requestId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }}
+          />
+
           <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
             {session.steps.map((step, index) => (
-              <li key={step.id}>
+              <li key={step.id} id={`step-${step.id}`} style={{ scrollMargin: 'var(--space-4)' }}>
                 <button
                   type="button"
                   onClick={() => openRequestWindow(step.id)}
                   style={{
                     width: '100%',
                     textAlign: 'left',
-                    background: 'var(--color-bg-surface)',
-                    border: '1px solid var(--color-border-default)',
+                    background: pinnedId === step.id ? 'var(--color-bg-overlay)' : 'var(--color-bg-surface)',
+                    border: pinnedId === step.id
+                      ? '1px solid var(--color-accent-blue)'
+                      : '1px solid var(--color-border-default)',
                     borderLeft: `3px solid ${accentFor(step)}`,
                     borderRadius: 'var(--radius-md)',
                     padding: 'var(--space-3)',
@@ -184,6 +217,11 @@ export default function SessionPage() {
                         slow
                       </Badge>
                     )}
+                    {(step.waste_rules ?? [])
+                      .filter((rule) => rule !== 'failed_step' && rule !== 'slow_step')
+                      .map((rule) => (
+                        <Badge key={rule} variant="warning" size="sm">{ruleLabel(rule)}</Badge>
+                      ))}
                   </div>
                   {step.request_preview && (
                     <div style={{
@@ -205,6 +243,81 @@ export default function SessionPage() {
         </>
       )}
     </div>
+  )
+}
+
+function FindingsPanel({
+  findings,
+  onFocus,
+}: {
+  findings: WasteFinding[]
+  onFocus: (requestId: number) => void
+}) {
+  return (
+    <section
+      aria-label="Waste findings"
+      style={{
+        background: 'var(--color-bg-surface)',
+        border: '1px solid var(--color-border-default)',
+        borderRadius: 'var(--radius-lg)',
+        padding: 'var(--space-3)',
+        marginBottom: 'var(--space-4)',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+          Waste findings
+        </div>
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
+          {findings.length === 0 ? 'None' : severitySummary(findings)}
+        </div>
+      </div>
+      {findings.length === 0 ? (
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', margin: 'var(--space-2) 0 0' }}>
+          No waste findings on this trajectory.
+        </p>
+      ) : (
+        <ul style={{ listStyle: 'none', margin: 'var(--space-2) 0 0', padding: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', maxHeight: 240, overflow: 'auto' }}>
+          {findings.map((finding, index) => {
+            const target = finding.request_ids[0]
+            return (
+              <li key={`${finding.rule_id}-${index}`}>
+                <button
+                  type="button"
+                  disabled={target == null}
+                  title={target != null ? 'Scroll to step' : undefined}
+                  onClick={() => { if (target != null) onFocus(target) }}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    display: 'flex',
+                    gap: 'var(--space-2)',
+                    alignItems: 'baseline',
+                    flexWrap: 'wrap',
+                    background: 'transparent',
+                    border: 'none',
+                    padding: 0,
+                    cursor: target == null ? 'default' : 'pointer',
+                    color: 'inherit',
+                    font: 'inherit',
+                  }}
+                >
+                  <Badge variant={finding.rule_id === 'failed_step' ? 'error' : finding.severity === 'warn' ? 'warning' : 'info'} size="sm">
+                    {ruleLabel(finding.rule_id)}
+                  </Badge>
+                  <span style={{ fontSize: 'var(--text-sm)', flex: '1 1 16rem' }}>{finding.message}</span>
+                  {finding.tokens_involved != null && (
+                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+                      {formatTokens(finding.tokens_involved)} tok
+                    </span>
+                  )}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </section>
   )
 }
 
