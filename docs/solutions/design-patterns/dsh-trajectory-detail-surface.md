@@ -8,7 +8,7 @@ component: frontend_stimulus
 severity: medium
 applies_when:
   - Restyling /request/:id toward deepseek-harness Trajectory
-  - Adding kind-tag or selection treatment on trajectory cells
+  - Adding kind-tag, overview, or selection treatment on trajectory cells
 tags:
   - trajectory
   - dsh
@@ -30,7 +30,7 @@ tags:
 - Kind tags stay shrink-wrapped in an 80px slot (height 22px, radius 6px): SYSTEM secondary/platform, USER success, ASSISTANT brand mix, TOOL warn, REASONING a separate purple.
 - Do not paint request-level latency or token totals onto every cell. Those numbers belong in the request header and the Timing / Summary inspector. Per-step elapsed time is not on `RequestDetail`.
 - Leave the shared `Tabs` primitive alone. The inspector draws its own 34px tab strip so other pages keep their chrome.
-- Arrow keys move the listbox selection. Do not port the harness toolbar, timeline, virtualization, or turn collapse for visual parity.
+- Arrow keys move the listbox selection. A 50px overview sits under the request header: three lanes (User / Msg / Tool), DSH span colors, click selects that cell. Segment width is the square root of the step's text length, capped at 2000 characters. The request has one `latency_ms`, so the strip is not a duration axis. Do not port the live toolbar, viewport brush, virtualization, or turn collapse.
 
 ## Why This Matters
 

@@ -5,6 +5,7 @@ import type { RequestDetail } from '../api/types'
 import { Skeleton, CodeBlock } from '../components/ui'
 import { buildTrajectoryCells } from '../components/trajectory/buildTrajectoryCells'
 import TrajectoryLedger from '../components/trajectory/TrajectoryLedger'
+import TrajectoryOverview from '../components/trajectory/TrajectoryOverview'
 import EventDetails from '../components/trajectory/EventDetails'
 import '../components/trajectory/trajectory.css'
 
@@ -127,14 +128,21 @@ export default function DetailPage() {
           <CodeBlock data={detail.response_body} title="Response body" />
         </div>
       ) : (
-        <div className="dsh-split">
-          <TrajectoryLedger
+        <>
+          <TrajectoryOverview
             cells={cells}
             selectedId={selectedCellId}
             onSelect={setSelectedCellId}
           />
-          <EventDetails detail={detail} cell={selectedCell} />
-        </div>
+          <div className="dsh-split">
+            <TrajectoryLedger
+              cells={cells}
+              selectedId={selectedCellId}
+              onSelect={setSelectedCellId}
+            />
+            <EventDetails detail={detail} cell={selectedCell} />
+          </div>
+        </>
       )}
     </div>
   )
