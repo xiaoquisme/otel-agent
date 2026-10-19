@@ -5,7 +5,9 @@ import type { RequestDetail } from '../api/types'
 import { Skeleton, CodeBlock } from '../components/ui'
 import { buildTrajectoryCells } from '../components/trajectory/buildTrajectoryCells'
 import TrajectoryLedger from '../components/trajectory/TrajectoryLedger'
+import TrajectoryOverview from '../components/trajectory/TrajectoryOverview'
 import EventDetails from '../components/trajectory/EventDetails'
+import '../components/trajectory/trajectory.css'
 
 export default function DetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -37,13 +39,40 @@ export default function DetailPage() {
 
   const selectedCell = cells.find((c) => c.id === selectedCellId) ?? null
 
+  useEffect(() => {
+    if (cells.length === 0) return
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+      const target = event.target
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement
+      ) {
+        return
+      }
+      if (target instanceof Element && target.closest('.dsh-ledger')) return
+      const current = cells.findIndex((cell) => cell.id === selectedCellId)
+      const next = event.key === 'ArrowDown'
+        ? (current < 0 ? 0 : Math.min(cells.length - 1, current + 1))
+        : Math.max(0, current < 0 ? 0 : current - 1)
+      const id = cells[next]?.id
+      if (!id) return
+      event.preventDefault()
+      setSelectedCellId(id)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [cells, selectedCellId])
+
   if (loading) {
     return (
-      <div style={{ padding: 'var(--space-4)' }}>
-        <Skeleton width="40%" height="18px" />
-        <div style={{ marginTop: 'var(--space-4)' }}>
+      <div className="dsh-trajectory">
+        <div className="dsh-loading">
+          <Skeleton width="40%" height="14px" />
+          <div style={{ height: 12 }} />
           {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} style={{ marginBottom: 'var(--space-2)' }}>
+            <div key={i} className="dsh-loading-row">
               <Skeleton width="100%" height="38px" />
             </div>
           ))}
@@ -54,97 +83,66 @@ export default function DetailPage() {
 
   if (!detail) {
     return (
-      <div style={{ textAlign: 'center', padding: 'var(--space-12)', color: 'var(--color-text-secondary)' }}>
-        Request not found
+      <div className="dsh-trajectory">
+        <div className="dsh-missing">Request not found</div>
       </div>
     )
   }
 
+  const totalTokens = detail.metadata?.usage?.total_tokens
+  const statusBad = detail.response_status >= 400
+
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
-        minHeight: 0,
-        flex: 1,
-        background: 'var(--color-bg-base)',
-      }}
-    >
-      <header
-        style={{
-          flexShrink: 0,
-          padding: 'var(--space-3) var(--space-4)',
-          borderBottom: '1px solid var(--color-border-default)',
-          background: 'var(--color-bg-surface)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 'var(--space-3)',
-          flexWrap: 'wrap',
-        }}
-      >
-        <span
-          style={{
-            fontWeight: 'var(--font-semibold)',
-            fontSize: 'var(--text-xs)',
-            padding: 'var(--space-1) var(--space-2)',
-            borderRadius: 'var(--radius-sm)',
-            background: detail.method === 'POST' ? 'var(--color-accent-purple-muted)' : 'var(--color-accent-green-muted)',
-            color: detail.method === 'POST' ? 'var(--color-accent-purple)' : 'var(--color-accent-green)',
-          }}
-        >
-          {detail.method}
+    <div className="dsh-trajectory">
+      <header className="dsh-header">
+        <span className="dsh-method">{detail.method}</span>
+        <span className="dsh-url" title={detail.url}>{detail.url}</span>
+        <span className="dsh-meta">
+          <span className={statusBad ? 'dsh-status dsh-status-bad' : 'dsh-status'}>
+            {detail.response_status}
+          </span>
+          <span className="dsh-dot" aria-hidden="true">·</span>
+          <span>{detail.latency_ms?.toFixed(0) ?? 0}ms</span>
+          {detail.model_name && (
+            <>
+              <span className="dsh-dot" aria-hidden="true">·</span>
+              <span className="dsh-model" title={detail.model_name}>{detail.model_name}</span>
+            </>
+          )}
+          {totalTokens != null && (
+            <>
+              <span className="dsh-dot" aria-hidden="true">·</span>
+              <span>{totalTokens.toLocaleString()} tok</span>
+            </>
+          )}
         </span>
-        <span style={{ fontSize: 'var(--text-sm)', wordBreak: 'break-all', flex: 1, minWidth: 0 }}>
-          {detail.url}
-        </span>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
-          {detail.response_status} · {detail.latency_ms?.toFixed(0) ?? 0}ms
-          {detail.model_name ? ` · ${detail.model_name}` : ''}
-        </span>
-        <button
-          type="button"
-          onClick={() => downloadRequestJson(detail)}
-          style={{
-            flexShrink: 0,
-            fontSize: 'var(--text-xs)',
-            color: 'var(--color-text-secondary)',
-            background: 'var(--color-bg-base)',
-            border: '1px solid var(--color-border-default)',
-            borderRadius: 'var(--radius-sm)',
-            padding: 'var(--space-1) var(--space-2)',
-            cursor: 'pointer',
-          }}
-        >
+        <button type="button" className="dsh-download" onClick={() => downloadRequestJson(detail)}>
           Download JSON
         </button>
       </header>
 
       {cells.length === 0 ? (
-        <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4)' }}>
+        <div className="dsh-fallback">
           <CodeBlock data={detail.request_body} title="Request body" />
-          <div style={{ height: 'var(--space-4)' }} />
+          <div style={{ height: 12 }} />
           <CodeBlock data={detail.response_body} title="Response body" />
         </div>
       ) : (
-        <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
-          <div style={{ flex: '1 1 58%', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <>
+          <TrajectoryOverview
+            cells={cells}
+            selectedId={selectedCellId}
+            onSelect={setSelectedCellId}
+          />
+          <div className="dsh-split">
             <TrajectoryLedger
               cells={cells}
               selectedId={selectedCellId}
               onSelect={setSelectedCellId}
             />
-          </div>
-          <div
-            style={{
-              flex: '0 0 42%',
-              minWidth: 280,
-              borderLeft: '1px solid var(--color-border-default)',
-            }}
-          >
             <EventDetails detail={detail} cell={selectedCell} />
           </div>
-        </div>
+        </>
       )}
     </div>
   )
