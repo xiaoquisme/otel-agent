@@ -20,7 +20,7 @@ tags:
 
 ## Context
 
-An Agent Session is the time-ordered gateway calls that share `X-Otel-Session`. The trajectory already showed failed and slow steps. It did not say which calls looked like retries, duplicated work, or a token spike, so a person still had to scan the whole run before editing a prompt or skill.
+An Agent Session is the time-ordered gateway calls that share a session id (`X-Otel-Session`, or an inferred id when that header is absent). The trajectory already showed failed and slow steps. It did not say which calls looked like retries, duplicated work, or a token spike, so a person still had to scan the whole run before editing a prompt or skill.
 
 ## Guidance
 

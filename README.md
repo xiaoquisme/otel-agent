@@ -151,12 +151,12 @@ Features:
 - Request detail in its own window: full request/response bodies, LLM message trajectory, and a rendered message viewer
 - Download a request as JSON
 - Token usage view — today / week / month totals and per-model breakdown (refreshes every 30s)
-- Sessions view — agent runs grouped by `X-Otel-Session`, with a chronological trajectory, cumulative tokens, and failed/slow markers
+- Sessions view — agent runs grouped by session id (`X-Otel-Session`, or an `inferred-` id when the client sends none), with a chronological trajectory, cumulative tokens, and failed/slow markers
 - CSV/JSON export of the request log (`GET /api/export?format=csv|json`)
 
 ### Agent sessions
 
-Requests are logged one by one unless the client sends a session id. Use the same id on every call in an agent run:
+Requests that share a session id are one agent run. Send the same id on every call:
 
 ```bash
 curl http://localhost:45638/v1/chat/completions \
@@ -166,7 +166,24 @@ curl http://localhost:45638/v1/chat/completions \
   -d '{"model":"openai/gpt-4o","messages":[{"role":"user","content":"hi"}]}'
 ```
 
-`X-Otel-Session` is the run id (stored as `session_id`). `X-Session-ID` is accepted as an alias when `X-Otel-Session` is absent. `X-Otel-Session-Step` is an optional turn label. Omit the headers and the request is logged as before, with a null session id — existing databases pick the new columns up on the next proxy start, and older rows stay null.
+`X-Otel-Session` is the run id (stored as `session_id`). When that header is missing or blank, `X-Session-ID` is the alias. Pi affinity headers are accepted after those two, in order: `session_id`, `x-session-affinity`, `x-client-request-id`. A client that puts a unique per-request value in `x-client-request-id` gets one session per call; send `X-Otel-Session` to override it. `X-Otel-Session-Step` is an optional turn label and is never invented.
+
+If none of those headers is set, the gateway derives `inferred-` plus 16 hex chars from the conversation root: the leading system (or developer) text and the first user text. Later messages are not part of the hash, so a growing `messages` array, an Anthropic `messages` body, or a Responses `input` array stays one session across process restarts. The same root produces the same id on each of those shapes. Text is Unicode-normalized and edge-stripped; images and tool payloads are ignored. An empty body, an image prompt, or a chat with no textual user turn stays null. The id is a pure function of that root, so the same conversation matches after a restart.
+
+Two unrelated chats that start with the same system text and the same first user text share an inferred id. A system prompt that changes every turn (a timestamp, a growing instruction) will not stay together. A client that sends only the latest turn has no stable root in the body, so those calls do not join the earlier ones.
+
+```bash
+# No session header. Turn 2 appends history; both calls share one inferred id.
+curl http://localhost:45638/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"openai/gpt-4o","messages":[{"role":"system","content":"You are a coding agent."},{"role":"user","content":"Rename the helper."}]}'
+
+curl http://localhost:45638/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"openai/gpt-4o","messages":[{"role":"system","content":"You are a coding agent."},{"role":"user","content":"Rename the helper."},{"role":"assistant","content":"Done."},{"role":"user","content":"Now add a test."}]}'
+```
+
+`otel-agent view --sessions` then shows one `inferred-…` row. `otel-agent view --session <that-id>` prints the two-step trajectory. Existing databases pick the session columns up on the next proxy start, and older rows stay null.
 
 Open **Sessions** at `http://localhost:45638/sessions` to list recent runs and open one trajectory (time, endpoint, status, latency, tokens, and a running token total). A non-success status is marked failed, and a step at or above 10s is marked slow. The trajectory also lists waste findings from fixed rules: retry bursts, near-duplicate calls, token spikes, and heavy requests that return little or no output. A clean run says there are no findings. Click a finding to scroll to the step, and click a step to open the existing request detail. From the CLI: `otel-agent view --sessions` and `otel-agent view --session my-run-1` (the session view prints the findings when there are any). Thresholds live in `src/otel_agent/waste.py`.
 

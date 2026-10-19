@@ -14,9 +14,12 @@ from otel_agent.dashboard.routes import set_api as set_dashboard_api
 from otel_agent.logger import TelemetryLogger
 from otel_agent.server import _log_telemetry, create_app
 from otel_agent.sessions import (
+    MAX_SESSION_ID_LEN,
     SLOW_STEP_MS,
     assemble_session,
+    infer_session_id,
     session_fields_from_headers,
+    session_fields_from_request,
     step_flags,
 )
 from otel_agent.viewer import format_session_detail, format_session_summary, query_session
@@ -109,6 +112,160 @@ def test_session_headers_primary_alias_and_blank():
     })
     assert session_id == "s" * 256
     assert step == "turn1"
+
+
+def test_affinity_headers_rank_below_otel_and_session_id():
+    assert session_fields_from_headers({
+        "X-Otel-Session": "explicit-1",
+        "X-Session-ID": "alias",
+        "session_id": "pi",
+        "x-session-affinity": "aff",
+        "x-client-request-id": "req",
+    }) == ("explicit-1", None)
+    assert session_fields_from_headers({
+        "X-Session-ID": "alias-1",
+        "session_id": "pi",
+        "x-client-request-id": "req",
+    }) == ("alias-1", None)
+    assert session_fields_from_headers({"Session_ID": " pi-session "}) == ("pi-session", None)
+    assert session_fields_from_headers({"x-session-affinity": "aff"}) == ("aff", None)
+    assert session_fields_from_headers({
+        "session_id": "   ",
+        "x-session-affinity": "",
+        "x-client-request-id": "req",
+    }) == ("req", None)
+    assert session_fields_from_headers({"X-Otel-Session-Step": "plan"}) == (None, "plan")
+    assert session_fields_from_headers({
+        "X-Otel-Session": "   ",
+        "X-Session-ID": "alias-blank-primary",
+    }) == ("alias-blank-primary", None)
+
+
+def _root_chat(extra: list[dict] | None = None) -> dict:
+    messages = [
+        {"role": "system", "content": "You are a coding agent."},
+        {"role": "user", "content": "Rename the helper."},
+    ]
+    if extra:
+        messages.extend(extra)
+    return {"model": "openai/gpt-4o", "messages": messages}
+
+
+def test_header_wins_over_inferred_body():
+    body = _root_chat([
+        {"role": "assistant", "content": "Done."},
+        {"role": "user", "content": "Now add a test."},
+    ])
+    assert session_fields_from_request({"X-Otel-Session": "explicit-1"}, body) == ("explicit-1", None)
+    assert session_fields_from_request(
+        {"X-Session-ID": "alias-1", "session_id": "pi"},
+        json.dumps(body),
+    )[0] == "alias-1"
+    assert session_fields_from_request({"x-session-affinity": "aff"}, body)[0] == "aff"
+    inferred, step = session_fields_from_request(
+        {"X-Otel-Session": "  ", "X-Session-ID": "", "X-Otel-Session-Step": "plan"},
+        body,
+    )
+    assert inferred == infer_session_id(body)
+    assert inferred is not None and inferred.startswith("inferred-")
+    assert step == "plan"
+
+
+def test_growing_history_keeps_the_same_inferred_id():
+    first = _root_chat()
+    grown = _root_chat([
+        {"role": "assistant", "content": "Done.", "tool_calls": [{"id": "c1", "function": {"name": "read", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "file contents"},
+        {"role": "user", "content": "Now add a test."},
+    ])
+    image_shifted = {
+        "messages": [
+            {"role": "developer", "content": " You are a coding agent. "},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Rename the helper."},
+                {"type": "image_url", "image_url": {"url": "https://example.test/a.png"}},
+            ]},
+            {"role": "assistant", "content": "Done."},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Rename the helper."},
+                {"type": "image_url", "image_url": {"url": "https://example.test/b.png"}},
+            ]},
+        ],
+    }
+    assert infer_session_id(first) == infer_session_id(grown) == infer_session_id(image_shifted)
+    assert infer_session_id(first) != infer_session_id(
+        {"messages": [{"role": "system", "content": "You are a coding agent."}, {"role": "user", "content": "Different task."}]}
+    )
+    assert infer_session_id(first) != infer_session_id(
+        {"messages": [{"role": "system", "content": "Different instructions."}, {"role": "user", "content": "Rename the helper."}]}
+    )
+
+
+def test_inferred_id_is_a_stable_pure_function():
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    assert infer_session_id(body) == "inferred-dfb4eb0c36a42d62"
+    assert infer_session_id(json.dumps(body)) == "inferred-dfb4eb0c36a42d62"
+    assert infer_session_id(json.dumps(body).encode()) == "inferred-dfb4eb0c36a42d62"
+    assert infer_session_id({"messages": [{"role": "user", "content": " hi "}]}) == "inferred-dfb4eb0c36a42d62"
+    assert len("inferred-dfb4eb0c36a42d62") <= MAX_SESSION_ID_LEN
+    # Unrelated chats that share this first user text share the id.
+    assert infer_session_id({"messages": [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "a different reply"},
+    ]}) == "inferred-dfb4eb0c36a42d62"
+
+
+def test_empty_or_non_conversation_body_stays_null():
+    assert infer_session_id(None) is None
+    assert infer_session_id("") is None
+    assert infer_session_id(b"\xff") is None
+    assert infer_session_id("not json") is None
+    assert infer_session_id("[]") is None
+    assert infer_session_id({}) is None
+    assert infer_session_id({"messages": []}) is None
+    assert infer_session_id({"messages": [{"role": "system", "content": "only a prompt"}]}) is None
+    assert infer_session_id({"messages": [{"role": "user", "content": "   "}]}) is None
+    assert infer_session_id({"messages": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.test/a.png"}}]}]}) is None
+    assert infer_session_id({"model": "openai/dall-e-3", "prompt": "a cat", "n": 1}) is None
+    assert infer_session_id("multipart form: ['image', 'prompt']") is None
+    assert session_fields_from_request({}, None) == (None, None)
+    assert session_fields_from_request({}, {"prompt": "a cat"})[1] is None
+
+
+def test_anthropic_and_responses_roots_match_chat():
+    chat = _root_chat()
+    expected = infer_session_id(chat)
+    anthropic_turn1 = {
+        "system": [{"type": "text", "text": "You are a coding agent.", "cache_control": {"type": "ephemeral"}}],
+        "messages": [{"role": "user", "content": "Rename the helper."}],
+    }
+    anthropic_turn2 = {
+        "system": "You are a coding agent.",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Rename the helper."}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Done."}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}, {"type": "text", "text": "Now add a test."}]},
+        ],
+    }
+    responses_string = {"instructions": "You are a coding agent.", "input": "Rename the helper."}
+    responses_grown = {
+        "instructions": "You are a coding agent.",
+        "input": [
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Rename the helper."}]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Done."}]},
+            {"type": "function_call", "name": "read", "arguments": "{}"},
+            {"role": "user", "content": "Now add a test."},
+        ],
+    }
+    assert infer_session_id(anthropic_turn1) == expected
+    assert infer_session_id(anthropic_turn2) == expected
+    assert infer_session_id(responses_string) == expected
+    assert infer_session_id(responses_grown) == expected
+    assert infer_session_id({"input": ["Rename the helper."]}) == infer_session_id(
+        {"messages": [{"role": "user", "content": "Rename the helper."}]}
+    )
+    # Latest-turn-only input has no shared root with the original conversation.
+    assert infer_session_id({"instructions": "You are a coding agent.", "input": "Now add a test."}) != expected
 
 
 def test_step_flags_mark_failures_and_slow_calls():
@@ -403,19 +560,149 @@ def test_gateway_paths_share_one_session(tmp_path):
     assert summary.startswith("agent-run")
 
 
-def test_gateway_omitted_header_logs_null_session(tmp_path):
+def test_log_telemetry_infers_session_and_keeps_explicit_header(tmp_path):
+    db = tmp_path / "t.sqlite"
+    telemetry = TelemetryLogger(db)
+    first = json.dumps(_root_chat())
+    grown = json.dumps(_root_chat([
+        {"role": "assistant", "content": "Done."},
+        {"role": "user", "content": "Now add a test."},
+    ]))
+    anthropic = json.dumps({
+        "system": "You are a coding agent.",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Rename the helper."}]}],
+    })
+    responses = json.dumps({"instructions": "You are a coding agent.", "input": "Rename the helper."})
+    expected = infer_session_id(first)
+    _log_telemetry(telemetry, _make_request(), 200, {}, 10.0, _make_provider(), request_body=first)
+    _log_telemetry(telemetry, _make_request(), 200, {}, 11.0, _make_provider(), request_body=grown)
+    _log_telemetry(telemetry, _make_request(), 200, {}, 12.0, _make_provider(), request_body=anthropic)
+    _log_telemetry(telemetry, _make_request(), 200, {}, 13.0, _make_provider(), request_body=responses)
+    _log_telemetry(
+        telemetry, _make_request({"X-Otel-Session": "explicit-1"}),
+        200, {}, 14.0, _make_provider(), request_body=grown,
+    )
+    _log_telemetry(
+        telemetry, _make_request({"X-Otel-Session-Step": "plan"}),
+        200, {}, 15.0, _make_provider(), request_body=first,
+    )
+    _log_telemetry(
+        telemetry, _make_request(), 200, {}, 16.0, _make_provider(),
+        request_body=first, log_body=False,
+    )
+    _log_telemetry(
+        telemetry, _make_request(), 200, {}, 17.0, _make_provider(),
+        request_body='{"model":"openai/dall-e-3","prompt":"a cat"}',
+    )
+    _log_telemetry(telemetry, _make_request(), 200, {}, 18.0, _make_provider(), request_body="{}")
+    telemetry.close()
+
+    conn = sqlite3.connect(str(db))
+    rows = conn.execute(
+        "SELECT session_id, session_step, request_body FROM requests ORDER BY id"
+    ).fetchall()
+    conn.close()
+    assert rows[0][0] == rows[1][0] == rows[2][0] == rows[3][0] == expected
+    assert rows[0][1] is None
+    assert rows[4] == ("explicit-1", None, grown)
+    assert rows[5][0] == expected and rows[5][1] == "plan"
+    assert rows[6][0] == expected and rows[6][2] == ""
+    assert rows[7][0] is None
+    assert rows[8][0] is None
+
+
+def test_gateway_infers_one_trajectory_from_growing_history(tmp_path):
+    """No session header, same first user turn, longer history → one session."""
     db = tmp_path / "t.sqlite"
     telemetry = TelemetryLogger(db)
     app = create_app(_config(tmp_path), telemetry)
+    turn1 = {
+        "model": "openai/gpt-4",
+        "messages": [
+            {"role": "system", "content": "You are a coding agent."},
+            {"role": "user", "content": "Rename the helper."},
+        ],
+    }
+    turn2 = {
+        "model": "openai/gpt-4",
+        "messages": [
+            *turn1["messages"],
+            {"role": "assistant", "content": "Done."},
+            {"role": "user", "content": "Now add a test."},
+        ],
+    }
+    turn3 = {
+        "model": "openai/gpt-4",
+        "stream": True,
+        "messages": [
+            *turn2["messages"],
+            {"role": "assistant", "content": "Added."},
+            {"role": "user", "content": "Ship it."},
+        ],
+    }
+    anthropic = {
+        "model": "openai/gpt-4",
+        "max_tokens": 16,
+        "system": "You are a coding agent.",
+        "messages": [
+            {"role": "user", "content": "Rename the helper."},
+            {"role": "assistant", "content": "Done."},
+            {"role": "user", "content": "Now add a test."},
+        ],
+    }
+    responses = {
+        "model": "openai/gpt-4",
+        "instructions": "You are a coding agent.",
+        "input": [
+            {"role": "user", "content": "Rename the helper."},
+            {"role": "assistant", "content": "Done."},
+            {"role": "user", "content": "Now add a test."},
+        ],
+    }
     with TestClient(app) as client:
         with patch("httpx.AsyncClient.post", return_value=_upstream_ok()):
-            resp = client.post(
+            assert client.post("/v1/chat/completions", json=turn1).status_code == 200
+            assert client.post("/v1/chat/completions", json=turn2).status_code == 200
+            assert client.post(
                 "/v1/chat/completions",
-                json={"model": "openai/gpt-4", "messages": [{"role": "user", "content": "hi"}]},
-            )
-            assert resp.status_code == 200
+                headers={"X-Otel-Session": "explicit-1"},
+                json=turn2,
+            ).status_code == 200
+            assert client.post(
+                "/v1/messages",
+                json=anthropic,
+            ).status_code == 200
+            assert client.post("/v1/responses", json=responses).status_code == 200
+            assert client.post(
+                "/v1/chat/completions",
+                json={"model": "openai/gpt-4"},
+            ).status_code == 200
+        chunks = [{"choices": [{"delta": {"content": "Hi"}, "index": 0}]}]
+        with patch("httpx.AsyncClient.stream", return_value=_SSE(chunks)):
+            streamed = client.post("/v1/chat/completions", json=turn3)
+            assert streamed.status_code == 200
+            streamed.read()
+        listing = client.get("/api/sessions")
+        assert listing.status_code == 200
+        listed = listing.json()
     telemetry.close()
+
+    inferred = infer_session_id(turn1)
+    assert inferred == infer_session_id(turn2) == infer_session_id(anthropic) == infer_session_id(responses)
+    assert {row["session_id"] for row in listed["data"]} == {inferred, "explicit-1"}
+    assert listed["total"] == 2
+
+    detail = query_session(db, inferred)
+    assert detail is not None
+    assert detail["request_count"] == 5
+    assert all(step["session_step"] is None for step in detail["steps"])
+    text = format_session_detail(detail)
+    assert inferred in text
+    explicit = query_session(db, "explicit-1")
+    assert explicit is not None
+    assert explicit["request_count"] == 1
+
     conn = sqlite3.connect(str(db))
-    row = conn.execute("SELECT session_id FROM requests").fetchone()
+    nulls = conn.execute("SELECT COUNT(*) FROM requests WHERE session_id IS NULL").fetchone()[0]
     conn.close()
-    assert row[0] is None
+    assert nulls == 1
