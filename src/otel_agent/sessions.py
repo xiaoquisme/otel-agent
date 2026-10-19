@@ -1,22 +1,44 @@
 """Agent session ids carried on gateway requests.
 
-A session is one agent run: every logged call that shares ``X-Otel-Session``
-(or the ``X-Session-ID`` alias already named in the routing notes). A missing
-or blank header stays null, so older clients keep logging one row per request.
+A session is one agent run. ``X-Otel-Session`` wins, then ``X-Session-ID``,
+then the Pi affinity headers (``session_id``, ``x-session-affinity``,
+``x-client-request-id``). When every session header is missing or blank, a
+deterministic ``inferred-`` id is taken from the conversation root in the
+request body (leading system text plus the first user text). A payload with
+no textual root stays null. ``X-Otel-Session-Step`` is only a label.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+import unicodedata
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 SESSION_HEADER = "x-otel-session"
 SESSION_HEADER_ALIAS = "x-session-id"
 SESSION_STEP_HEADER = "x-otel-session-step"
+# Lower priority than the two headers above. Pi sets all three to the same
+# session id when ``sendSessionAffinityHeaders`` is on. ``x-client-request-id``
+# is last because other clients use it as a per-request id.
+SESSION_AFFINITY_HEADERS = (
+    "session_id",
+    "x-session-affinity",
+    "x-client-request-id",
+)
 
 MAX_SESSION_ID_LEN = 256
 MAX_SESSION_STEP_LEN = 128
 SLOW_STEP_MS = 10_000
 PREVIEW_CHARS = 160
+
+INFERRED_SESSION_PREFIX = "inferred-"
+_INFERRED_DIGEST_HEX = 16
+_ROOT_VERSION = "v1"
+_TEXT_PART_TYPES = frozenset({"text", "input_text", "output_text"})
 
 
 def _header_value(headers: dict, name: str) -> str | None:
@@ -47,19 +69,176 @@ def clean_session_label(value: str | None, limit: int) -> str | None:
 def session_fields_from_headers(headers: dict | None) -> tuple[str | None, str | None]:
     """Read ``(session_id, session_step)`` from a request header mapping.
 
-    ``X-Otel-Session`` wins over ``X-Session-ID``. Either may be absent.
+    ``X-Otel-Session`` wins, then ``X-Session-ID``, then the Pi affinity
+    headers in ``SESSION_AFFINITY_HEADERS``. The first non-blank value wins.
     ``X-Otel-Session-Step`` is an optional turn label and does not create a
     session by itself.
     """
     headers = headers or {}
-    raw_id = _header_value(headers, SESSION_HEADER)
-    if clean_session_label(raw_id, MAX_SESSION_ID_LEN) is None:
-        raw_id = _header_value(headers, SESSION_HEADER_ALIAS)
-    session_id = clean_session_label(raw_id, MAX_SESSION_ID_LEN)
+    session_id = None
+    for name in (SESSION_HEADER, SESSION_HEADER_ALIAS, *SESSION_AFFINITY_HEADERS):
+        session_id = clean_session_label(_header_value(headers, name), MAX_SESSION_ID_LEN)
+        if session_id is not None:
+            break
     step = clean_session_label(
         _header_value(headers, SESSION_STEP_HEADER), MAX_SESSION_STEP_LEN
     )
     return session_id, step
+
+
+def session_fields_from_request(
+    headers: dict | None,
+    body: str | bytes | dict | None = None,
+) -> tuple[str | None, str | None]:
+    """Header session id wins. Otherwise fingerprint the conversation root.
+
+    ``session_step`` still comes only from ``X-Otel-Session-Step``.
+    """
+    session_id, step = session_fields_from_headers(headers)
+    if session_id is None:
+        session_id = infer_session_id(body)
+    return session_id, step
+
+
+def infer_session_id(body: str | bytes | dict | None) -> str | None:
+    """Return ``inferred-<hex>`` for a stable conversation root, or None.
+
+    The root is the leading system / developer text plus the first user text.
+    Later turns are ignored, so a growing ``messages`` or Responses ``input``
+    array keeps the same id. Empty bodies, image prompts, and chats with no
+    textual user turn stay None. The id is a pure function of that root.
+    """
+    parsed = _coerce_json_object(body)
+    if parsed is None:
+        return None
+    try:
+        root = _conversation_root(parsed)
+    except Exception:
+        logger.debug("session inference failed", exc_info=True)
+        return None
+    if not root:
+        return None
+    return _fingerprint(root)
+
+
+def _coerce_json_object(body: str | bytes | dict | None) -> dict | None:
+    if isinstance(body, dict):
+        return body
+    if isinstance(body, bytes):
+        try:
+            body = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if not isinstance(body, str) or not body.strip():
+        return None
+    try:
+        parsed = json.loads(body)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return None
+    if isinstance(parsed, dict):
+        return parsed
+    return None
+
+
+def _conversation_root(body: dict) -> list[tuple[str, str]] | None:
+    """Leading system text and the first textual user turn, or None."""
+    messages = body.get("messages")
+    if isinstance(messages, list) and messages:
+        return _root_from_messages([*_system_messages(body.get("system")), *messages])
+    if "input" in body:
+        prefix = _system_messages(body.get("instructions"))
+        if not prefix:
+            prefix = _system_messages(body.get("system"))
+        return _root_from_messages([*prefix, *_input_items(body.get("input"))])
+    return None
+
+
+def _system_messages(value: Any) -> list[dict[str, str]]:
+    text = _message_text(value)
+    if not text:
+        return []
+    return [{"role": "system", "content": text}]
+
+
+def _input_items(raw: Any) -> list[Any]:
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, dict):
+        return [raw]
+    if isinstance(raw, list):
+        return raw
+    return []
+
+
+def _root_from_messages(messages: list[Any]) -> list[tuple[str, str]] | None:
+    root: list[tuple[str, str]] = []
+    for message in messages:
+        role, text = _role_and_text(message)
+        if role == "system":
+            if text:
+                root.append(("system", text))
+            continue
+        if role == "user":
+            if not text:
+                continue
+            root.append(("user", text))
+            return root
+    return None
+
+
+def _role_and_text(message: Any) -> tuple[str | None, str]:
+    if isinstance(message, str):
+        return "user", _normalize_text(message)
+    if not isinstance(message, dict):
+        return None, ""
+    role = message.get("role")
+    if not isinstance(role, str) or not role.strip():
+        return None, ""
+    role = role.strip().lower()
+    if role == "developer":
+        role = "system"
+    return role, _message_text(message.get("content"))
+
+
+def _message_text(content: Any) -> str:
+    """Flatten chat / Anthropic / Responses content to edge-stripped text."""
+    if isinstance(content, str):
+        return _normalize_text(content)
+    if isinstance(content, dict):
+        return _content_piece_text(content)
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                piece = _normalize_text(block)
+            elif isinstance(block, dict):
+                piece = _content_piece_text(block)
+            else:
+                piece = ""
+            if piece:
+                parts.append(piece)
+        return "\n".join(parts)
+    return ""
+
+
+def _content_piece_text(block: dict) -> str:
+    kind = block.get("type")
+    if kind is not None and kind not in _TEXT_PART_TYPES:
+        return ""
+    text = block.get("text")
+    if isinstance(text, str):
+        return _normalize_text(text)
+    return ""
+
+
+def _normalize_text(text: str) -> str:
+    return unicodedata.normalize("NFC", text).strip()
+
+
+def _fingerprint(root: list[tuple[str, str]]) -> str:
+    payload = _ROOT_VERSION + "\x1e" + "\x1e".join(f"{role}\x1f{text}" for role, text in root)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:_INFERRED_DIGEST_HEX]
+    return f"{INFERRED_SESSION_PREFIX}{digest}"
 
 
 def _as_int(value: Any) -> int | None:
