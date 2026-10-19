@@ -1,6 +1,7 @@
 """otel-agent configuration — provider registry with hot-reload."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -203,6 +204,8 @@ class Config:
     def __init__(self, path: Path) -> None:
         self.path = path
         self._mtime: float = 0
+        self._fs_mtime: float | None = None
+        self._digest: bytes | None = None
         self._providers: dict[str, Provider] = {}
         self._log_request_body: bool = True
         self._storage: str = "sqlite"
@@ -211,15 +214,29 @@ class Config:
     def _reload(self) -> None:
         if not self.path.exists():
             self._providers = {}
+            self._fs_mtime = None
+            self._digest = None
             return
 
-        stat = self.path.stat().st_mtime
-        if stat == self._mtime:
+        try:
+            fs_mtime = self.path.stat().st_mtime
+            raw_bytes = self.path.read_bytes()
+        except OSError:
             return
-        self._mtime = stat
+        # st_mtime can stay put when a rewrite lands in the same timestamp
+        # tick, so compare bytes too. ``_mtime`` is what ModelCache watches;
+        # bump it when the bytes change but the filesystem stamp does not.
+        digest = hashlib.sha256(raw_bytes).digest()
+        if digest == self._digest and fs_mtime == self._fs_mtime:
+            return
+        if fs_mtime != self._mtime:
+            self._mtime = fs_mtime
+        else:
+            self._mtime += 1
+        self._fs_mtime = fs_mtime
+        self._digest = digest
 
-        with open(self.path) as f:
-            data = yaml.safe_load(f) or {}
+        data = yaml.safe_load(raw_bytes) or {}
 
         providers: dict[str, Provider] = {}
         raw = data.get("providers") or []
