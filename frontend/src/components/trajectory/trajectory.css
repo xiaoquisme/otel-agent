@@ -149,7 +149,52 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
+.dsh-session {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-xxs-12);
+}
+
+.dsh-session-kicker {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.dsh-session-link {
+  min-width: 0;
+  color: var(--dsw-alias-state-business-primary);
+  font-family: var(--dsw-font-mono);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.dsh-session-link:hover {
+  text-decoration: underline;
+}
+
+.dsh-session-badge {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-module-platform);
+  font: 600 10px/16px var(--dsw-font-sans);
+  letter-spacing: 0.02em;
+}
+
 .dsh-download:focus-visible,
+.dsh-session-link:focus-visible,
 .dsh-tab:focus-visible,
 .dsh-cell:focus-visible {
   outline: 1px solid var(--dsw-alias-state-business-primary);

@@ -18,6 +18,7 @@ from otel_agent.sessions import (
     SLOW_STEP_MS,
     assemble_session,
     infer_session_id,
+    latest_user_turn_text,
     session_fields_from_headers,
     session_fields_from_request,
     step_flags,
@@ -276,6 +277,107 @@ def test_step_flags_mark_failures_and_slow_calls():
     assert step_flags(None, None) == ["failed"]
 
 
+def test_latest_user_turn_text_ignores_tool_results():
+    assert latest_user_turn_text({"messages": [
+        {"role": "user", "content": "Rename the helper."},
+        {"role": "assistant", "content": "ok"},
+        {"role": "tool", "content": "file"},
+    ]}) == "Rename the helper."
+    assert latest_user_turn_text({
+        "messages": [
+            {"role": "user", "content": "Rename the helper."},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]},
+        ]
+    }) == "Rename the helper."
+    assert latest_user_turn_text({
+        "messages": [
+            {"role": "user", "content": "Rename the helper."},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "t", "content": "ok"},
+                {"type": "text", "text": "Now add a test."},
+            ]},
+        ]
+    }) == "Now add a test."
+    assert latest_user_turn_text({"instructions": "sys", "input": [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Rename the helper."}]},
+        {"type": "function_call_output", "call_id": "c", "output": "ok"},
+    ]}) == "Rename the helper."
+    assert latest_user_turn_text({"model": "dall-e-3", "prompt": "a cat"}) is None
+    assert latest_user_turn_text(None) is None
+    assert latest_user_turn_text("not json") is None
+
+
+def test_assemble_session_groups_a_tool_loop_and_splits_on_a_new_user_message():
+    detail = assemble_session("run", [
+        {"id": 1, "timestamp": "t1", "method": "POST", "url": "/v1/chat/completions",
+         "response_status": 200, "latency_ms": 10, "total_tokens": 10,
+         "input_tokens": 8, "output_tokens": 2, "session_step": "plan",
+         "request_body": '{"messages":[{"role":"user","content":"Rename the helper."}]}'},
+        {"id": 2, "timestamp": "t2", "method": "POST", "url": "/v1/chat/completions",
+         "response_status": 200, "latency_ms": 12, "total_tokens": 4,
+         "input_tokens": 3, "output_tokens": 1, "session_step": "tool",
+         "request_body": json.dumps({"messages": [
+             {"role": "user", "content": "Rename the helper."},
+             {"role": "assistant", "content": "Reading."},
+             {"role": "tool", "content": "old name"},
+         ]})},
+        {"id": 3, "timestamp": "t3", "method": "POST", "url": "/v1/chat/completions",
+         "response_status": 200, "latency_ms": 8, "total_tokens": 6,
+         "input_tokens": 4, "output_tokens": 2, "session_step": "edit",
+         "request_body": json.dumps({"messages": [
+             {"role": "user", "content": "Rename the helper."},
+             {"role": "assistant", "content": "Done."},
+             {"role": "user", "content": "Now add a test."},
+         ]})},
+        {"id": 4, "timestamp": "t4", "method": "POST", "url": "/v1/images/generations",
+         "response_status": 200, "latency_ms": 5, "total_tokens": None,
+         "request_body": '{"model":"dall-e-3","prompt":"a cat"}'},
+    ])
+    assert [step["turn_index"] for step in detail["steps"]] == [1, 1, 2, 3]
+    assert detail["steps"][0]["turn_label"] == "Rename the helper."
+    assert detail["steps"][1]["turn_label"] == "Rename the helper."
+    assert detail["steps"][1]["session_step"] == "tool"
+    assert detail["steps"][2]["turn_label"] == "Now add a test."
+    assert detail["steps"][3]["turn_label"] is None
+    assert "request_body" not in detail["steps"][0]
+    text = format_session_detail(detail)
+    assert "turn 1  Rename the helper." in text
+    assert "turn 2  Now add a test." in text
+
+
+def test_session_route_exposes_turn_indexes(tmp_path):
+    db = tmp_path / "t.sqlite"
+    logger = TelemetryLogger(db)
+    _log(
+        logger, session_id="run", session_step="plan",
+        timestamp="2026-04-01T00:00:01+00:00",
+        request_body='{"messages":[{"role":"user","content":"Rename the helper."}]}',
+    )
+    _log(
+        logger, session_id="run", session_step="tool",
+        timestamp="2026-04-01T00:00:02+00:00",
+        request_body=json.dumps({"messages": [
+            {"role": "user", "content": "Rename the helper."},
+            {"role": "tool", "content": "old name"},
+        ]}),
+    )
+    _log(
+        logger, session_id="other",
+        timestamp="2026-04-01T00:00:03+00:00",
+        request_body='{"messages":[{"role":"user","content":"Rename the helper."}]}',
+    )
+    logger.close()
+    client, api = _client(db)
+    detail = client.get("/api/sessions/run").json()
+    assert [step["turn_index"] for step in detail["steps"]] == [1, 1]
+    assert detail["request_count"] == 2
+    assert "request_body" not in detail["steps"][0]
+    other = client.get("/api/sessions/other").json()
+    assert [step["id"] for step in other["steps"]] != [step["id"] for step in detail["steps"]]
+    assert other["steps"][0]["turn_index"] == 1
+    api.close()
+
+
 def test_assemble_session_cumulative_tokens_skip_missing_usage():
     detail = assemble_session("run", [
         {"id": 2, "timestamp": "t1", "method": "POST", "url": "/v1/chat/completions",
@@ -412,6 +514,46 @@ def test_session_routes(tmp_path):
     assert missing.status_code == 404
     empty = client.get("/api/sessions/%20")
     assert empty.status_code == 404
+    api.close()
+
+
+def test_request_detail_includes_session_fields(tmp_path):
+    """Detail keeps the stored session id so the page can link to that trajectory."""
+    db = tmp_path / "t.sqlite"
+    logger = TelemetryLogger(db)
+    inferred = infer_session_id({"messages": [{"role": "user", "content": "hello"}]})
+    assert inferred is not None and inferred.startswith("inferred-")
+    _log(logger, session_id="  agent-run  ", session_step=" plan ")
+    _log(logger, session_id=inferred, timestamp="2026-04-01T00:00:01+00:00")
+    _log(logger, timestamp="2026-04-01T00:00:02+00:00")
+    logger.close()
+    client, api = _client(db)
+
+    tagged = client.get("/api/requests/1")
+    assert tagged.status_code == 200
+    body = tagged.json()
+    assert body["session_id"] == "agent-run"
+    assert body["session_step"] == "plan"
+    assert "messages" in body
+
+    grouped = client.get("/api/requests/2").json()
+    assert grouped["session_id"] == inferred
+    assert grouped["session_step"] is None
+
+    bare = client.get("/api/requests/3").json()
+    assert bare["session_id"] is None
+    assert bare["session_step"] is None
+
+    downloaded = client.get("/api/requests/1/download")
+    assert downloaded.status_code == 200
+    assert downloaded.json()["session_id"] == "agent-run"
+    assert downloaded.json()["session_step"] == "plan"
+
+    listed = client.get("/api/sessions").json()
+    assert {row["session_id"] for row in listed["data"]} == {"agent-run", inferred}
+    trajectory = client.get(f"/api/sessions/{inferred}").json()
+    assert trajectory["request_count"] == 1
+    assert [step["id"] for step in trajectory["steps"]] == [2]
     api.close()
 
 

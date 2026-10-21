@@ -140,6 +140,41 @@ def _coerce_json_object(body: str | bytes | dict | None) -> dict | None:
     return None
 
 
+def latest_user_turn_text(body: str | bytes | dict | None) -> str | None:
+    """Text of the latest human user message, or None.
+
+    A session turn is one user round: the consecutive gateway calls that
+    still end on this text. OpenAI ``role=tool`` messages, Anthropic
+    ``tool_result`` blocks, and Responses ``function_call_output`` items
+    carry no user text, so a tool loop stays on the same turn. A new
+    textual user message starts the next one. Image prompts and other
+    bodies with no user text return None.
+    """
+    parsed = _coerce_json_object(body)
+    if parsed is None:
+        return None
+    try:
+        latest: str | None = None
+        for message in _turn_messages(parsed):
+            role, text = _role_and_text(message)
+            if role == "user" and text:
+                latest = text
+        return latest
+    except Exception:
+        logger.debug("turn text failed", exc_info=True)
+        return None
+
+
+def _turn_messages(body: dict) -> list[Any]:
+    """Chat / Anthropic ``messages``, or Responses ``input`` items."""
+    messages = body.get("messages")
+    if isinstance(messages, list) and messages:
+        return messages
+    if "input" in body:
+        return _input_items(body.get("input"))
+    return []
+
+
 def _conversation_root(body: dict) -> list[tuple[str, str]] | None:
     """Leading system text and the first textual user turn, or None."""
     messages = body.get("messages")
@@ -311,6 +346,10 @@ def assemble_session(session_id: str, rows: list[dict]) -> dict:
     keeps its own fields null and does not move the running total. Waste
     findings are attached from the same rows; body rules use length and a
     bounded suffix when those fields or ``request_body`` are present.
+
+    ``turn_index`` groups consecutive rows whose latest human user text is
+    the same. A row with no user text is its own turn. ``turn_label`` is a
+    short copy of that text. The request body is not copied onto the step.
     """
     steps: list[dict] = []
     cum_in = 0
@@ -323,7 +362,15 @@ def assemble_session(session_id: str, rows: list[dict]) -> dict:
     seen_upstreams: set[str] = set()
     token_request_count = 0
 
+    turn_index = 0
+    previous_turn: tuple[str, str] | None = None
     for row in rows:
+        user_text = latest_user_turn_text(row.get("request_body"))
+        # Missing user text is its own turn. session_step is a label, not a turn id.
+        turn_key = ("user", user_text) if user_text else ("request", str(row.get("id")))
+        if turn_key != previous_turn:
+            turn_index += 1
+            previous_turn = turn_key
         inp = _as_int(row.get("input_tokens"))
         out = _as_int(row.get("output_tokens"))
         total = _as_int(row.get("total_tokens"))
@@ -365,6 +412,8 @@ def assemble_session(session_id: str, rows: list[dict]) -> dict:
             "cache_creation_tokens": _as_int(row.get("cache_creation_tokens")),
             "format": row.get("format"),
             "session_step": row.get("session_step") or None,
+            "turn_index": turn_index,
+            "turn_label": preview_body(user_text) if user_text else None,
             "cumulative_input_tokens": cum_in,
             "cumulative_output_tokens": cum_out,
             "cumulative_total_tokens": cum_total,
