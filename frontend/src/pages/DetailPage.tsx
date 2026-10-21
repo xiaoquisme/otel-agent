@@ -8,6 +8,7 @@ import { buildTrajectoryCells } from '../components/trajectory/buildTrajectoryCe
 import TrajectoryLedger from '../components/trajectory/TrajectoryLedger'
 import TrajectoryOverview from '../components/trajectory/TrajectoryOverview'
 import EventDetails from '../components/trajectory/EventDetails'
+import TrajectorySplit from '../components/trajectory/TrajectorySplit'
 import '../components/trajectory/trajectory.css'
 
 export default function DetailPage() {
@@ -52,7 +53,7 @@ export default function DetailPage() {
       ) {
         return
       }
-      if (target instanceof Element && target.closest('.dsh-ledger')) return
+      if (target instanceof Element && target.closest('.dsh-ledger, .dsh-split-handle')) return
       const current = cells.findIndex((cell) => cell.id === selectedCellId)
       const next = event.key === 'ArrowDown'
         ? (current < 0 ? 0 : Math.min(cells.length - 1, current + 1))
@@ -161,14 +162,16 @@ export default function DetailPage() {
             selectedId={selectedCellId}
             onSelect={setSelectedCellId}
           />
-          <div className="dsh-split">
-            <TrajectoryLedger
-              cells={cells}
-              selectedId={selectedCellId}
-              onSelect={setSelectedCellId}
-            />
-            <EventDetails detail={detail} cell={selectedCell} />
-          </div>
+          <TrajectorySplit
+            ledger={
+              <TrajectoryLedger
+                cells={cells}
+                selectedId={selectedCellId}
+                onSelect={setSelectedCellId}
+              />
+            }
+            details={<EventDetails detail={detail} cell={selectedCell} />}
+          />
         </>
       )}
     </div>
