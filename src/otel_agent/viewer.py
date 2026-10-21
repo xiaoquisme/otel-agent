@@ -53,7 +53,13 @@ def format_session_detail(detail: dict) -> str:
         f"session {detail['session_id']}  {detail['request_count']} requests  "
         f"{detail['total_tokens']} tokens  {detail['total_latency_ms']:.0f}ms"
     ]
+    last_turn = None
     for index, step in enumerate(detail.get("steps") or [], start=1):
+        turn = step.get("turn_index")
+        if turn and turn != last_turn:
+            label = step.get("turn_label") or ""
+            lines.append(f"turn {turn}" + (f"  {label}" if label else ""))
+            last_turn = turn
         flags = ",".join(step.get("flags") or [])
         flag_text = f"  [{flags}]" if flags else ""
         step_label = step.get("session_step")

@@ -444,6 +444,7 @@ class SQLiteStorage(StorageBackend):
             SELECT id, timestamp, method, url, upstream, response_status, latency_ms,
                    model_name, input_tokens, output_tokens, total_tokens,
                    cache_read_tokens, cache_creation_tokens, format, session_step,
+                   request_body,
                    substr(request_body, 1, 240) AS request_preview,
                    length(request_body) AS request_bytes,
                    substr(request_body, -256) AS request_suffix

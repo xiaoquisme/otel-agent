@@ -121,6 +121,10 @@ export interface SessionStep {
   cache_creation_tokens: number | null
   format: string | null
   session_step: string | null
+  /** 1-based user round. Consecutive steps that share a latest user text share an index. */
+  turn_index: number
+  /** Short text of that user message. Null when the request has no user text. */
+  turn_label: string | null
   cumulative_input_tokens: number
   cumulative_output_tokens: number
   cumulative_total_tokens: number

@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { fetchSession } from '../api/client'
 import type { SessionDetail, SessionStep, WasteFinding } from '../api/types'
 import { Badge } from '../components/ui'
-import { ArrowLeftIcon } from '../components/ui/icons'
+import { ArrowLeftIcon, ChevronDownIcon, ChevronRightIcon } from '../components/ui/icons'
 import { openRequestWindow } from '../lib/openRequestWindow'
-import { isInferredSession } from '../lib/session'
+import { groupSessionTurns, isInferredSession, type SessionTurnGroup } from '../lib/session'
 
 function formatTokens(value: number | null | undefined): string {
   if (value == null) return '—'
@@ -82,6 +82,8 @@ export default function SessionPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [pinnedId, setPinnedId] = useState<number | null>(null)
+  const [collapsedTurns, setCollapsedTurns] = useState<Set<number>>(new Set())
+  const turns = useMemo(() => groupSessionTurns(session?.steps ?? []), [session])
 
   useEffect(() => {
     if (!sessionId) {
@@ -91,6 +93,8 @@ export default function SessionPage() {
     }
     setLoading(true)
     setError(null)
+    setPinnedId(null)
+    setCollapsedTurns(new Set())
     fetchSession(sessionId)
       .then(setSession)
       .catch((err: unknown) => {
@@ -99,6 +103,11 @@ export default function SessionPage() {
       })
       .finally(() => setLoading(false))
   }, [sessionId])
+
+  useEffect(() => {
+    if (pinnedId == null) return
+    document.getElementById(`step-${pinnedId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [pinnedId, session])
 
   return (
     <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4)' }}>
@@ -161,100 +170,232 @@ export default function SessionPage() {
           <FindingsPanel
             findings={session.findings ?? []}
             onFocus={(requestId) => {
+              const step = session.steps.find((item) => item.id === requestId)
+              if (step) {
+                setCollapsedTurns((current) => {
+                  if (!current.has(step.turn_index)) return current
+                  const next = new Set(current)
+                  next.delete(step.turn_index)
+                  return next
+                })
+              }
               setPinnedId(requestId)
-              document.getElementById(`step-${requestId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
             }}
           />
 
-          <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-            {session.steps.map((step, index) => (
-              <li key={step.id} id={`step-${step.id}`} style={{ scrollMargin: 'var(--space-4)' }}>
-                <button
-                  type="button"
-                  onClick={() => openRequestWindow(step.id)}
-                  style={{
-                    width: '100%',
-                    textAlign: 'left',
-                    background: pinnedId === step.id ? 'var(--color-bg-overlay)' : 'var(--color-bg-surface)',
-                    border: pinnedId === step.id
-                      ? '1px solid var(--color-accent-blue)'
-                      : '1px solid var(--color-border-default)',
-                    borderLeft: `3px solid ${accentFor(step)}`,
-                    borderRadius: 'var(--radius-md)',
-                    padding: 'var(--space-3)',
-                    cursor: 'pointer',
-                    color: 'inherit',
-                    font: 'inherit',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', minWidth: 0 }}>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', width: '1.5rem' }}>
-                        {String(index + 1).padStart(2, '0')}
-                      </span>
-                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
-                        {formatStamp(step.timestamp)}
-                      </span>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)' }}>
-                        {step.method}
-                      </span>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {endpointPath(step.url)}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', fontSize: 'var(--text-xs)' }}>
-                      <span style={{ color: statusColor(step.response_status), fontWeight: 'var(--font-semibold)' }}>
-                        {step.response_status ?? '—'}
-                      </span>
-                      <span style={{ color: 'var(--color-text-secondary)' }}>{formatLatency(step.latency_ms)}</span>
-                      <span style={{ color: 'var(--color-text-secondary)' }}>
-                        {formatTokens(step.total_tokens)} tok
-                      </span>
-                      <span style={{ color: 'var(--color-text-primary)', fontWeight: 'var(--font-medium)' }}>
-                        cum {formatTokens(step.cumulative_total_tokens)}
-                      </span>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginTop: 'var(--space-2)', flexWrap: 'wrap' }}>
-                    {step.session_step && <Badge size="sm">{step.session_step}</Badge>}
-                    {step.model_name && (
-                      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>{step.model_name}</span>
-                    )}
-                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
-                      in {formatTokens(step.input_tokens)} · out {formatTokens(step.output_tokens)}
-                    </span>
-                    {step.flags.includes('failed') && <Badge variant="error" size="sm">failed</Badge>}
-                    {step.flags.includes('slow') && (
-                      <Badge variant="warning" size="sm" title={`Latency at least ${formatLatency(session.slow_latency_ms)}`}>
-                        slow
-                      </Badge>
-                    )}
-                    {(step.waste_rules ?? [])
-                      .filter((rule) => rule !== 'failed_step' && rule !== 'slow_step')
-                      .map((rule) => (
-                        <Badge key={rule} variant="warning" size="sm">{ruleLabel(rule)}</Badge>
-                      ))}
-                  </div>
-                  {step.request_preview && (
-                    <div style={{
-                      marginTop: 'var(--space-2)',
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: 'var(--text-xs)',
-                      color: 'var(--color-text-secondary)',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}>
-                      {step.request_preview}
-                    </div>
-                  )}
-                </button>
-              </li>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+            {turns.map((turn) => (
+              <TurnSection
+                key={turn.index}
+                turn={turn}
+                collapsed={collapsedTurns.has(turn.index)}
+                onToggle={() => {
+                  setCollapsedTurns((current) => {
+                    const next = new Set(current)
+                    if (next.has(turn.index)) next.delete(turn.index)
+                    else next.add(turn.index)
+                    return next
+                  })
+                }}
+                pinnedId={pinnedId}
+                slowLatencyMs={session.slow_latency_ms}
+              />
             ))}
-          </ol>
+          </div>
         </>
       )}
     </div>
+  )
+}
+
+function turnTokens(turn: SessionTurnGroup): number {
+  return turn.steps.reduce((sum, item) => sum + (item.step.total_tokens ?? 0), 0)
+}
+
+function TurnSection({
+  turn,
+  collapsed,
+  onToggle,
+  pinnedId,
+  slowLatencyMs,
+}: {
+  turn: SessionTurnGroup
+  collapsed: boolean
+  onToggle: () => void
+  pinnedId: number | null
+  slowLatencyMs: number
+}) {
+  const count = turn.steps.length
+  const canCollapse = count > 1
+  const label = `Turn ${String(turn.index).padStart(2, '0')}`
+  return (
+    <section aria-label={label} style={{ minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
+        {canCollapse ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? `Expand ${label}` : `Collapse ${label}`}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 22,
+              height: 22,
+              flex: 'none',
+              marginTop: 1,
+              padding: 0,
+              border: '1px solid var(--color-border-default)',
+              borderRadius: 'var(--radius-sm)',
+              background: 'var(--color-bg-surface)',
+              color: 'var(--color-text-secondary)',
+              cursor: 'pointer',
+            }}
+          >
+            {collapsed ? <ChevronRightIcon size={14} /> : <ChevronDownIcon size={14} />}
+          </button>
+        ) : (
+          <span aria-hidden="true" style={{ width: 22, flex: 'none' }} />
+        )}
+        <div style={{ minWidth: 0, flex: '1 1 auto' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--color-accent-blue)' }}>
+              {label}
+            </span>
+            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+              {count} {count === 1 ? 'step' : 'steps'} · {formatTokens(turnTokens(turn))} tok
+            </span>
+          </div>
+          {turn.label && (
+            <div
+              title={turn.label}
+              style={{
+                marginTop: 2,
+                fontSize: 'var(--text-sm)',
+                color: 'var(--color-text-primary)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {turn.label}
+            </div>
+          )}
+        </div>
+      </div>
+      {!collapsed && (
+        <ol style={{
+          listStyle: 'none',
+          margin: 0,
+          padding: '0 0 0 var(--space-3)',
+          marginLeft: 10,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 'var(--space-2)',
+          borderLeft: '2px solid var(--color-accent-blue-muted)',
+        }}>
+          {turn.steps.map(({ step, number }) => (
+            <li key={step.id} id={`step-${step.id}`} style={{ scrollMargin: 'var(--space-4)' }}>
+              <StepButton step={step} number={number} pinned={pinnedId === step.id} slowLatencyMs={slowLatencyMs} />
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  )
+}
+
+function StepButton({
+  step,
+  number,
+  pinned,
+  slowLatencyMs,
+}: {
+  step: SessionStep
+  number: number
+  pinned: boolean
+  slowLatencyMs: number
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => openRequestWindow(step.id)}
+      style={{
+        width: '100%',
+        textAlign: 'left',
+        background: pinned ? 'var(--color-bg-overlay)' : 'var(--color-bg-surface)',
+        border: pinned ? '1px solid var(--color-accent-blue)' : '1px solid var(--color-border-default)',
+        borderLeft: `3px solid ${accentFor(step)}`,
+        borderRadius: 'var(--radius-md)',
+        padding: 'var(--space-3)',
+        cursor: 'pointer',
+        color: 'inherit',
+        font: 'inherit',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline', minWidth: 0 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', width: '1.5rem' }}>
+            {String(number).padStart(2, '0')}
+          </span>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}>
+            {formatStamp(step.timestamp)}
+          </span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)' }}>
+            {step.method}
+          </span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {endpointPath(step.url)}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', fontSize: 'var(--text-xs)' }}>
+          <span style={{ color: statusColor(step.response_status), fontWeight: 'var(--font-semibold)' }}>
+            {step.response_status ?? '—'}
+          </span>
+          <span style={{ color: 'var(--color-text-secondary)' }}>{formatLatency(step.latency_ms)}</span>
+          <span style={{ color: 'var(--color-text-secondary)' }}>
+            {formatTokens(step.total_tokens)} tok
+          </span>
+          <span style={{ color: 'var(--color-text-primary)', fontWeight: 'var(--font-medium)' }}>
+            cum {formatTokens(step.cumulative_total_tokens)}
+          </span>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginTop: 'var(--space-2)', flexWrap: 'wrap' }}>
+        {step.session_step && <Badge size="sm">{step.session_step}</Badge>}
+        {step.model_name && (
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>{step.model_name}</span>
+        )}
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+          in {formatTokens(step.input_tokens)} · out {formatTokens(step.output_tokens)}
+        </span>
+        {step.flags.includes('failed') && <Badge variant="error" size="sm">failed</Badge>}
+        {step.flags.includes('slow') && (
+          <Badge variant="warning" size="sm" title={`Latency at least ${formatLatency(slowLatencyMs)}`}>
+            slow
+          </Badge>
+        )}
+        {(step.waste_rules ?? [])
+          .filter((rule) => rule !== 'failed_step' && rule !== 'slow_step')
+          .map((rule) => (
+            <Badge key={rule} variant="warning" size="sm">{ruleLabel(rule)}</Badge>
+          ))}
+      </div>
+      {step.request_preview && (
+        <div style={{
+          marginTop: 'var(--space-2)',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 'var(--text-xs)',
+          color: 'var(--color-text-secondary)',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}>
+          {step.request_preview}
+        </div>
+      )}
+    </button>
   )
 }
 
