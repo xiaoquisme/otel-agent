@@ -42,7 +42,7 @@ export default function EventDetails({ detail, cell }: EventDetailsProps) {
 
   if (!cell) {
     return (
-      <aside className="dsh-details" aria-label="Event details">
+      <aside id="dsh-event-details" className="dsh-details" aria-label="Event details">
         <div className="dsh-details-empty">Select a step</div>
       </aside>
     )
@@ -83,7 +83,7 @@ export default function EventDetails({ detail, cell }: EventDetailsProps) {
   }
 
   return (
-    <aside className="dsh-details" aria-label="Event details">
+    <aside id="dsh-event-details" className="dsh-details" aria-label="Event details">
       <div className="dsh-details-header">
         <div className="dsh-details-title">
           <span className="dsh-details-name">{title}</span>

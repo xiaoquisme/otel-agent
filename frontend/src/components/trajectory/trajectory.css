@@ -485,12 +485,60 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+.dsh-split-handle {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.dsh-split-handle::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 10px;
+}
+
+.dsh-split-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -1px;
+  width: 2px;
+  background: transparent;
+  pointer-events: none;
+}
+
+.dsh-split-handle:hover::after,
+.dsh-split[data-dragging='true'] .dsh-split-handle::after,
+.dsh-split-handle:focus-visible::after {
+  background: var(--dsw-alias-brand-primary-new-colorprimary-new-color);
+}
+
+.dsh-split-handle:focus {
+  outline: none;
+}
+
+.dsh-split[data-dragging='true'] {
+  cursor: col-resize;
+  user-select: none;
+}
+
 .dsh-details {
   position: relative;
   display: flex;
   flex: none;
   flex-direction: column;
-  width: clamp(320px, 38%, 440px);
+  width: var(--dsh-details-width, clamp(320px, 38%, 440px));
   max-width: calc(100% - 280px);
   min-width: 0;
   min-height: 0;
@@ -652,9 +700,15 @@
   margin-bottom: 6px;
 }
 
+/* Stacked layout, including phone widths around 390px. The drag handle
+   is removed and the inspector uses the full width of the column. */
 @media (max-width: 860px) {
   .dsh-split {
     flex-direction: column;
+  }
+
+  .dsh-split-handle {
+    display: none;
   }
 
   .dsh-details {

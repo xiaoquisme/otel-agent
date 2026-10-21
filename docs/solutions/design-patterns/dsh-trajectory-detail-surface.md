@@ -50,4 +50,5 @@ A global token swap would restyle the ledger, sessions, and usage pages. An oute
 
 - `docs/plans/2026-08-17-002-feat-request-detail-trajectory-plan.md`
 - `docs/solutions/design-patterns/request-detail-trajectory-window.md`
+- `docs/solutions/design-patterns/request-detail-split-resize.md`
 - `docs/solutions/design-patterns/light-theme-token-roles.md`
