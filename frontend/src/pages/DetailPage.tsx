@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
 import { fetchRequestDetail, downloadRequestJson } from '../api/client'
 import type { RequestDetail } from '../api/types'
 import { Skeleton, CodeBlock } from '../components/ui'
+import { isInferredSession, sessionPath } from '../lib/session'
 import { buildTrajectoryCells } from '../components/trajectory/buildTrajectoryCells'
 import TrajectoryLedger from '../components/trajectory/TrajectoryLedger'
 import TrajectoryOverview from '../components/trajectory/TrajectoryOverview'
@@ -120,6 +121,32 @@ export default function DetailPage() {
           Download JSON
         </button>
       </header>
+
+      {detail.session_id && (
+        <div className="dsh-session">
+          <span className="dsh-session-kicker">This request is one step in</span>
+          <Link
+            className="dsh-session-link"
+            to={sessionPath(detail.session_id)}
+            title={detail.session_id}
+          >
+            {detail.session_id}
+          </Link>
+          {detail.session_step && (
+            <span className="dsh-session-badge" title="X-Otel-Session-Step">
+              {detail.session_step}
+            </span>
+          )}
+          {isInferredSession(detail.session_id) && (
+            <span
+              className="dsh-session-badge"
+              title="No session header was sent. This id is a hash of the conversation root."
+            >
+              inferred
+            </span>
+          )}
+        </div>
+      )}
 
       {cells.length === 0 ? (
         <div className="dsh-fallback">

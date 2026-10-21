@@ -3,7 +3,8 @@
 Provides the dashboard JSON endpoints:
   GET /              — index.html (served by server.py mount)
   GET /api/requests  — paginated request list
-  GET /api/requests/{id} — single request detail with structured messages
+  GET /api/requests/{id} — single request detail with structured messages,
+                            session_id, and session_step
   GET /api/requests/{id}/download — pretty-printed JSON attachment
   GET /api/export    — CSV/JSON export
   GET /api/cache/clear — clear the COUNT cache
@@ -72,7 +73,7 @@ def get_requests(
 
 @router.get("/requests/{request_id}")
 def get_request_detail(request_id: int) -> JSONResponse:
-    """Single request detail with structured messages for frontend rendering."""
+    """Single request detail with structured messages, session_id, and session_step."""
     api = get_api()
     result = api.get_structured_request(request_id)
     if result is None:

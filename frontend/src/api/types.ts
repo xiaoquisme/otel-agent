@@ -31,6 +31,10 @@ export interface RequestDetail extends RequestItem {
   response_headers: Record<string, string> | string | null
   messages: StructuredMessage[]
   metadata: MessageMetadata
+  /** Agent run this call belongs to. Null when the row has no session. */
+  session_id?: string | null
+  /** Optional turn label from X-Otel-Session-Step. Never invented. */
+  session_step?: string | null
 }
 
 export interface RequestsResponse {

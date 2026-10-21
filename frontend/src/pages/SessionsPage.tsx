@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { fetchSessions } from '../api/client'
 import type { SessionSummary } from '../api/types'
 import { Badge } from '../components/ui'
+import { isInferredSession, sessionPath } from '../lib/session'
 
 const PAGE_SIZE = 50
 
@@ -57,7 +58,7 @@ export default function SessionsPage() {
   }, [load])
 
   const openSession = (sessionId: string) => {
-    navigate(`/sessions/${encodeURIComponent(sessionId)}`)
+    navigate(sessionPath(sessionId))
   }
 
   return (
@@ -71,7 +72,8 @@ export default function SessionsPage() {
         </span>
       </div>
       <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', marginTop: 0, marginBottom: 'var(--space-4)' }}>
-        One row is an agent run. Send <code>X-Otel-Session</code> on each gateway call to stitch those calls into a trajectory.
+        One row groups every gateway call that shares a session id. Open a row to see those requests in time order.
+        An <strong>inferred</strong> badge means the id came from the conversation root because no session header was sent.
       </p>
 
       {loading && <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>Loading sessions…</p>}
@@ -122,8 +124,19 @@ export default function SessionsPage() {
                     style={{ cursor: 'pointer', borderTop: '1px solid var(--color-border-muted)' }}
                   >
                     <td style={tdStyle}>
-                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', wordBreak: 'break-all' }}>
-                        {session.session_id}
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-2)' }}>
+                        <div style={{ flex: '1 1 auto', minWidth: 0, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', wordBreak: 'break-all' }}>
+                          {session.session_id}
+                        </div>
+                        {isInferredSession(session.session_id) && (
+                          <Badge
+                            variant="info"
+                            size="sm"
+                            title="Grouped from the conversation root because no session header was sent"
+                          >
+                            inferred
+                          </Badge>
+                        )}
                       </div>
                       {session.error_count > 0 && (
                         <div style={{ marginTop: 'var(--space-1)' }}>

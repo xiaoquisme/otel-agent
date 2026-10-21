@@ -5,6 +5,7 @@ import type { SessionDetail, SessionStep, WasteFinding } from '../api/types'
 import { Badge } from '../components/ui'
 import { ArrowLeftIcon } from '../components/ui/icons'
 import { openRequestWindow } from '../lib/openRequestWindow'
+import { isInferredSession } from '../lib/session'
 
 function formatTokens(value: number | null | undefined): string {
   if (value == null) return '—'
@@ -124,9 +125,20 @@ export default function SessionPage() {
 
       {session && (
         <>
-          <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-semibold)', margin: '0 0 var(--space-1)', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
-            {session.session_id}
-          </h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap', margin: '0 0 var(--space-1)' }}>
+            <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-semibold)', margin: 0, fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
+              {session.session_id}
+            </h2>
+            {isInferredSession(session.session_id) && (
+              <Badge
+                variant="info"
+                size="sm"
+                title="Grouped from the conversation root because no session header was sent"
+              >
+                inferred
+              </Badge>
+            )}
+          </div>
           <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', marginTop: 0 }}>
             {formatStamp(session.first_timestamp)} – {formatStamp(session.last_timestamp)}
             {session.models.length > 0 ? ` · ${session.models.join(', ')}` : ''}

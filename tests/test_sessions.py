@@ -415,6 +415,46 @@ def test_session_routes(tmp_path):
     api.close()
 
 
+def test_request_detail_includes_session_fields(tmp_path):
+    """Detail keeps the stored session id so the page can link to that trajectory."""
+    db = tmp_path / "t.sqlite"
+    logger = TelemetryLogger(db)
+    inferred = infer_session_id({"messages": [{"role": "user", "content": "hello"}]})
+    assert inferred is not None and inferred.startswith("inferred-")
+    _log(logger, session_id="  agent-run  ", session_step=" plan ")
+    _log(logger, session_id=inferred, timestamp="2026-04-01T00:00:01+00:00")
+    _log(logger, timestamp="2026-04-01T00:00:02+00:00")
+    logger.close()
+    client, api = _client(db)
+
+    tagged = client.get("/api/requests/1")
+    assert tagged.status_code == 200
+    body = tagged.json()
+    assert body["session_id"] == "agent-run"
+    assert body["session_step"] == "plan"
+    assert "messages" in body
+
+    grouped = client.get("/api/requests/2").json()
+    assert grouped["session_id"] == inferred
+    assert grouped["session_step"] is None
+
+    bare = client.get("/api/requests/3").json()
+    assert bare["session_id"] is None
+    assert bare["session_step"] is None
+
+    downloaded = client.get("/api/requests/1/download")
+    assert downloaded.status_code == 200
+    assert downloaded.json()["session_id"] == "agent-run"
+    assert downloaded.json()["session_step"] == "plan"
+
+    listed = client.get("/api/sessions").json()
+    assert {row["session_id"] for row in listed["data"]} == {"agent-run", inferred}
+    trajectory = client.get(f"/api/sessions/{inferred}").json()
+    assert trajectory["request_count"] == 1
+    assert [step["id"] for step in trajectory["steps"]] == [2]
+    api.close()
+
+
 def test_dashboard_api_prefers_proxy_and_does_not_read_db(tmp_path):
     db = tmp_path / "t.sqlite"
     logger = TelemetryLogger(db)
