@@ -117,6 +117,30 @@ class SQLiteStorage(StorageBackend):
             WHERE session_id IS NOT NULL
             """
         )
+        # The session list groups every tagged row, then reads tokens, status,
+        # latency, model, and upstream. Those columns are stored after the
+        # request and response bodies. idx_requests_session_time can group by
+        # session_id, but each row still looks up the table and pulls those
+        # overflow pages — the whole tagged history, not a time window.
+        # session_id leads so GROUP BY is ordered; the other columns make
+        # the aggregate covering. Detail reads stay on idx_requests_session_time
+        # because they need the body and (timestamp, id) order.
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_requests_session_summary ON requests (
+                session_id,
+                timestamp,
+                response_status,
+                latency_ms,
+                model_name,
+                upstream,
+                input_tokens,
+                output_tokens,
+                total_tokens
+            )
+            WHERE session_id IS NOT NULL
+            """
+        )
         # Usage summary and series seek idx_requests_status for every 2xx
         # row, then read token columns stored after the request and response
         # bodies. Rows inside the range pull those overflow pages (tens of
@@ -398,6 +422,8 @@ class SQLiteStorage(StorageBackend):
         total = conn.execute(
             f"SELECT COUNT(*) FROM (SELECT session_id FROM requests WHERE {where} GROUP BY session_id)"
         ).fetchone()[0]
+        # Every column below is in idx_requests_session_summary. A new
+        # column from the table row makes this scan read stored bodies.
         rows = conn.execute(
             f"""
             SELECT session_id,

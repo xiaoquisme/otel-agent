@@ -431,6 +431,7 @@ def test_legacy_schema_gains_session_columns_and_keeps_old_rows(tmp_path):
     assert "session_id" in columns
     assert "session_step" in columns
     assert "idx_requests_session_time" in indexes
+    assert "idx_requests_session_summary" in indexes
     assert rows[0] == (None, None)
     assert rows[1] == ("run-new", "draft")
 
@@ -493,6 +494,127 @@ def test_list_and_get_session_order_and_rollups(tmp_path):
     assert slow["steps"][0]["session_step"] == "retry"
     assert api.get_session("missing") is None
     api.close()
+
+
+def _select_plans(storage, fn) -> tuple[object, list[str]]:
+    """Run ``fn`` and return its result plus EXPLAIN plans for its SELECTs."""
+    conn = storage._get_conn()
+    statements: list[str] = []
+
+    def trace(sql: str) -> None:
+        if sql.lstrip().upper().startswith("SELECT"):
+            statements.append(sql)
+
+    conn.set_trace_callback(trace)
+    try:
+        result = fn()
+    finally:
+        conn.set_trace_callback(None)
+    plans = []
+    for sql in statements:
+        rows = conn.execute("EXPLAIN QUERY PLAN " + sql).fetchall()
+        plans.append(" | ".join(str(row[-1]) for row in rows))
+    return result, plans
+
+
+def test_list_sessions_reads_covering_index_not_bodies(tmp_path):
+    """Session rollups stay correct and come from idx_requests_session_summary.
+
+    ``idx_requests_session_time`` groups by session id, then looks up each
+    row. Token and status columns sit after the body columns, so that
+    lookup reads request and response overflow pages for every tagged row.
+    """
+    logger = TelemetryLogger(tmp_path / "covering.sqlite")
+    body = "y" * 2048
+    conn = logger.storage._get_conn()
+    rows = []
+    for i in range(30):
+        later = i >= 10
+        sid = "later" if later else "early"
+        minute = i - 10 if later else i
+        hour = 1 if later else 0
+        status = 500 if i == 3 else 200
+        reported = i != 3
+        model = "openai/gpt-4o-mini" if later and i % 2 == 0 else "openai/gpt-4o"
+        upstream = "https://b.example" if later else "https://a.example"
+        # Early rows are real chats so the detail page still groups turns.
+        # The first five share a user text; the next five start the next turn.
+        if later:
+            request_body = body
+        else:
+            user = "alpha question" if i < 5 else "beta question"
+            request_body = json.dumps({"messages": [{"role": "user", "content": user}]})
+        rows.append((
+            f"2026-04-01T{hour:02d}:{minute:02d}:00+00:00",
+            "POST", "https://example.test/v1/chat/completions", upstream, "{}",
+            request_body, status, "{}", body, 25.0 if later else 10.0, model,
+            8 if reported else None, 2 if reported else None, 10 if reported else None,
+            None, None, "openai", sid, None,
+        ))
+    rows.append((
+        "2026-04-01T03:00:00+00:00", "POST", "https://example.test/v1", "https://a.example", "{}",
+        body, 200, "{}", body, 5.0, "openai/gpt-4o",
+        1, 1, 2, None, None, "openai", None, None,
+    ))
+    rows.append((
+        "2026-04-01T03:01:00+00:00", "POST", "https://example.test/v1", "https://a.example", "{}",
+        body, 200, "{}", body, 5.0, "openai/gpt-4o",
+        1, 1, 2, None, None, "openai", "", None,
+    ))
+    conn.executemany(
+        """INSERT INTO requests
+           (timestamp, method, url, upstream, request_headers, request_body,
+            response_status, response_headers, response_body, latency_ms, model_name,
+            input_tokens, output_tokens, total_tokens, cache_read_tokens,
+            cache_creation_tokens, format, session_id, session_step)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        rows,
+    )
+    conn.commit()
+
+    listed, plans = _select_plans(
+        logger.storage, lambda: logger.storage.list_sessions(limit=1, offset=0),
+    )
+    early = logger.storage.list_sessions(limit=1, offset=1)["data"][0]
+    detail = logger.storage.get_session("early")
+    logger.close()
+
+    assert listed["total"] == 2
+    assert listed["has_more"] is True
+    assert listed["data"][0]["session_id"] == "later"
+    assert listed["data"][0]["request_count"] == 20
+    assert listed["data"][0]["total_tokens"] == 200
+    assert listed["data"][0]["input_tokens"] == 160
+    assert listed["data"][0]["output_tokens"] == 40
+    assert listed["data"][0]["token_request_count"] == 20
+    assert listed["data"][0]["error_count"] == 0
+    assert listed["data"][0]["total_latency_ms"] == 500
+    assert set(listed["data"][0]["models"]) == {"openai/gpt-4o", "openai/gpt-4o-mini"}
+    assert listed["data"][0]["upstreams"] == ["https://b.example"]
+    assert early["session_id"] == "early"
+    assert early["request_count"] == 10
+    assert early["error_count"] == 1
+    assert early["total_tokens"] == 90
+    assert early["token_request_count"] == 9
+    assert early["total_latency_ms"] == 100
+
+    summary_plans = [plan for plan in plans if "group_concat" in plan or "idx_requests_session_summary" in plan]
+    count_plans = [plan for plan in plans if "subquery" in plan]
+    assert summary_plans, plans
+    assert count_plans, plans
+    for plan in summary_plans:
+        assert "COVERING INDEX idx_requests_session_summary" in plan, plan
+        assert "idx_requests_session_time" not in plan, plan
+    for plan in count_plans:
+        assert "COVERING INDEX idx_requests_session_time" in plan, plan
+
+    assert detail is not None
+    assert detail["request_count"] == 10
+    assert [step["turn_index"] for step in detail["steps"]] == [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]
+    assert detail["steps"][0]["turn_label"] == "alpha question"
+    assert detail["steps"][5]["turn_label"] == "beta question"
+    assert detail["steps"][3]["flags"] == ["failed"]
+    assert "request_body" not in detail["steps"][0]
 
 
 def test_session_routes(tmp_path):
