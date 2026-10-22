@@ -131,6 +131,7 @@ def test_sqlite_legacy_schema_upgrade(tmp_path):
     assert "output_tokens" in columns
     assert "total_tokens" in columns
     assert "idx_requests_usage" in indexes
+    assert "idx_requests_session_summary" in indexes
 
 
 def test_sqlite_analytics_columns_persist(tmp_path):
