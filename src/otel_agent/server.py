@@ -508,16 +508,17 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
 
         raw_models: dict[str, list] = {}
         failures: dict[str, str] = {}
+        discovery_errors: dict[str, str] = {}
         for name, prov in providers.items():
             cached = model_cache.get(name)
             if cached is not None:
                 raw_models[name] = cached
             else:
-                fetched = await fetch_provider_models(client, prov, failures=failures)
-                # A credential failure is not cached: it would hold the empty
-                # list in place for a whole TTL after the operator re-adopts,
-                # which is the same silent absence in slower motion.
-                if name not in failures:
+                fetched = await fetch_provider_models(
+                    client, prov, failures=failures, discovery_errors=discovery_errors,
+                )
+                # Failed catalogs must recover immediately, not after an empty-list TTL.
+                if name not in failures and name not in discovery_errors:
                     model_cache.put(name, fetched)
                 raw_models[name] = fetched
 
@@ -537,7 +538,39 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
                 status_code=503,
             )
 
-        return JSONResponse(aggregate_models(raw_models, failures))
+        if provider is not None and provider in discovery_errors:
+            return JSONResponse(
+                {"error": {"message": discovery_errors[provider], "type": "model_discovery_error", "provider": provider}},
+                status_code=502,
+            )
+
+        return JSONResponse(aggregate_models(raw_models, failures, discovery_errors))
+
+    @app.get("/api/debug/models", response_model=None)
+    async def debug_models(request: Request):
+        """Project discovery into text-debug choices without exposing provider config.
+
+        Execution stays on the real gateway routes: no second credential,
+        upstream request, telemetry path, or status-masking response wrapper.
+        """
+        listed = await list_models(request)
+        body = json.loads(listed.body)
+        models = []
+        for model in body["data"]:
+            outputs = model.get("output_modalities")
+            if outputs and "text" not in outputs:
+                continue
+            prov = config.get_provider(model["owned_by"])
+            if prov is None:  # Config may have reloaded while discovery was awaiting I/O.
+                continue
+            if serves_only_responses(prov):
+                endpoint = "/v1/responses"
+            elif prov.api_format == "anthropic":
+                endpoint = "/v1/messages"
+            else:
+                endpoint = "/v1/chat/completions"
+            models.append({"id": model["id"], "owned_by": model["owned_by"], "endpoint": endpoint})
+        return {"data": models, "errors": body.get("errors", []), "log_request_body": config.log_request_body}
 
     # ------------------------------------------------------------------
     # Health check

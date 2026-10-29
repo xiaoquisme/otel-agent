@@ -62,6 +62,7 @@ async def fetch_provider_models(
     provider: Provider,
     *,
     failures: dict[str, str] | None = None,
+    discovery_errors: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch model list from a single provider via GET /v1/models.
 
@@ -88,6 +89,8 @@ async def fetch_provider_models(
     ``{provider_name: message}``. The empty list alone cannot carry that: it is
     exactly what a provider with no models returns, so a caller that has to
     tell the operator which provider is broken needs the distinction (KTD6).
+    ``discovery_errors`` records non-credential failures using safe summaries,
+    never upstream bodies or exception strings that could contain secrets.
     """
     if provider.models:
         # Ids are stored unprefixed here and prefixed with the provider name
@@ -110,7 +113,7 @@ async def fetch_provider_models(
     from urllib.parse import urlparse
 
     from otel_agent.auth_vault import AuthError
-    from otel_agent.provider_utils import resolve_bearer_async
+    from otel_agent.provider_utils import build_request_headers, build_upstream_url
 
     host = (urlparse(provider.base_url).hostname or "").lower()
     if provider.name == "cursor" and host in ("127.0.0.1", "localhost"):
@@ -122,24 +125,35 @@ async def fetch_provider_models(
             for model_id in ids
         ]
 
-    url = f"{provider.base_url.rstrip('/')}/models"
+    base = provider.base_url.rstrip("/")
+    if provider.api_format == "anthropic":
+        base = build_upstream_url(provider).rsplit("/", 1)[0]
+    url = f"{base}/models"
 
     try:
         # Inside the try on purpose: resolving a subscription bearer can fail,
         # and this function is called once per provider by an endpoint that
         # must not lose the other providers' models over it (KTD6).
-        headers = {"Authorization": f"Bearer {await resolve_bearer_async(provider)}"}
+        headers = await build_request_headers(provider)
+        headers.pop("Content-Type", None)  # GET has no JSON body.
         resp = await client.get(url, headers=headers, timeout=10.0)
         if resp.status_code != 200:
             logger.warning(
                 "Provider '%s' returned status %d from %s",
                 provider.name, resp.status_code, url,
             )
+            if discovery_errors is not None:
+                discovery_errors[provider.name] = f"Models endpoint returned HTTP {resp.status_code}"
             return []
 
         data = resp.json()
-        raw_models = data.get("data", [])
-        if not isinstance(raw_models, list):
+        raw_models = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(raw_models, list) or any(
+            not isinstance(model, dict) or not isinstance(model.get("id"), str) or not model["id"].strip()
+            for model in raw_models
+        ):
+            if discovery_errors is not None:
+                discovery_errors[provider.name] = "Models endpoint returned an invalid catalog"
             return []
 
         return raw_models
@@ -148,11 +162,15 @@ async def fetch_provider_models(
         if failures is not None:
             failures[provider.name] = str(e)
         return []
-    except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadError) as e:
+    except httpx.RequestError as e:
         logger.warning("Failed to fetch models from provider '%s': %s", provider.name, e)
+        if discovery_errors is not None:
+            discovery_errors[provider.name] = "Could not reach models endpoint"
         return []
     except Exception as e:
         logger.warning("Unexpected error fetching models from '%s': %s", provider.name, e)
+        if discovery_errors is not None:
+            discovery_errors[provider.name] = "Could not read models catalog"
         return []
 
 
@@ -173,6 +191,7 @@ def _entry_capabilities(model: dict[str, Any], entry_id: str) -> dict[str, Any]:
 def aggregate_models(
     raw_models: dict[str, list[dict[str, Any]]],
     failures: dict[str, str] | None = None,
+    discovery_errors: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Aggregate model lists from multiple providers into OpenAI /v1/models format.
 
@@ -207,9 +226,13 @@ def aggregate_models(
             result.append(entry)
 
     body: dict[str, Any] = {"object": "list", "data": result}
-    if failures:
-        body["errors"] = [
-            {"provider": name, "message": message, "type": "credential_error"}
-            for name, message in sorted(failures.items())
-        ]
+    errors = [
+        {"provider": name, "message": message, "type": "credential_error"}
+        for name, message in sorted((failures or {}).items())
+    ] + [
+        {"provider": name, "message": message, "type": "model_discovery_error"}
+        for name, message in sorted((discovery_errors or {}).items())
+    ]
+    if errors:
+        body["errors"] = errors
     return body
