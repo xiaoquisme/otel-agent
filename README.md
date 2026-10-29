@@ -105,6 +105,7 @@ Everything after the first `/` is the **upstream model name** forwarded to that 
 
 ```
 otel-agent --version          Print version
+otel-agent update             Upgrade when the git tip or index version is newer
 otel-agent init               Create default config file
 otel-agent proxy              Start gateway in background
 otel-agent proxy stop         Stop the running gateway
@@ -119,6 +120,8 @@ otel-agent dashboard status   Check if standalone dashboard is running
 otel-agent dashboard logs     View standalone dashboard logs
 otel-agent dashboard --foreground  Run standalone dashboard in foreground
 otel-agent view               View logged requests (CLI)
+otel-agent view --sessions    List recent agent sessions
+otel-agent view --session ID  Print one session trajectory
 otel-agent config path|show|edit  Manage configuration
 otel-agent auth status          Show xAI / Codex login status
 otel-agent auth login           SuperGrok / xAI device-code login
@@ -128,6 +131,8 @@ otel-agent auth import-codex    Adopt a codex CLI grant
 otel-agent auth --no-browser    Print the login URL instead of opening a browser
 otel-agent doctor             Check installation health
 ```
+
+`otel-agent update` checks whether a `uv tool` or pip install is behind its source, and runs the installer only when it is. A git install is compared with `git ls-remote` (default branch, or the branch or tag recorded at install). The package version is not used for that check, because it stays the same across commits. A uv tool installed from a package index is checked with `uv pip install --dry-run` and then `uv tool upgrade` only if the resolved version changed. If the check fails (offline, missing `git`, index error), the command prints the error and the reinstall command and does not install. Editable checkouts and local directories are left alone. The published container image is updated by pulling a new build (`docker pull ghcr.io/xiaoquisme/otel-agent:latest`) and recreating the container. After an install, restart a running gateway with `otel-agent proxy restart`.
 
 ## Web Dashboard
 
@@ -146,7 +151,41 @@ Features:
 - Request detail in its own window: full request/response bodies, LLM message trajectory, and a rendered message viewer
 - Download a request as JSON
 - Token usage view — today / week / month totals and per-model breakdown (refreshes every 30s)
+- Sessions view — agent runs grouped by session id (`X-Otel-Session`, or an `inferred-` id when the client sends none), with a chronological trajectory, cumulative tokens, and failed/slow markers
 - CSV/JSON export of the request log (`GET /api/export?format=csv|json`)
+
+### Agent sessions
+
+Requests that share a session id are one agent run. Send the same id on every call:
+
+```bash
+curl http://localhost:45638/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Otel-Session: my-run-1" \
+  -H "X-Otel-Session-Step: plan" \
+  -d '{"model":"openai/gpt-4o","messages":[{"role":"user","content":"hi"}]}'
+```
+
+`X-Otel-Session` is the run id (stored as `session_id`). When that header is missing or blank, `X-Session-ID` is the alias. Pi affinity headers are accepted after those two, in order: `session_id`, `x-session-affinity`, `x-client-request-id`. A client that puts a unique per-request value in `x-client-request-id` gets one session per call; send `X-Otel-Session` to override it. `X-Otel-Session-Step` is an optional turn label and is never invented.
+
+If none of those headers is set, the gateway derives `inferred-` plus 16 hex chars from the conversation root: the leading system (or developer) text and the first user text. Later messages are not part of the hash, so a growing `messages` array, an Anthropic `messages` body, or a Responses `input` array stays one session across process restarts. The same root produces the same id on each of those shapes. Text is Unicode-normalized and edge-stripped; images and tool payloads are ignored. An empty body, an image prompt, or a chat with no textual user turn stays null. The id is a pure function of that root, so the same conversation matches after a restart.
+
+Two unrelated chats that start with the same system text and the same first user text share an inferred id. A system prompt that changes every turn (a timestamp, a growing instruction) will not stay together. A client that sends only the latest turn has no stable root in the body, so those calls do not join the earlier ones.
+
+```bash
+# No session header. Turn 2 appends history; both calls share one inferred id.
+curl http://localhost:45638/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"openai/gpt-4o","messages":[{"role":"system","content":"You are a coding agent."},{"role":"user","content":"Rename the helper."}]}'
+
+curl http://localhost:45638/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"openai/gpt-4o","messages":[{"role":"system","content":"You are a coding agent."},{"role":"user","content":"Rename the helper."},{"role":"assistant","content":"Done."},{"role":"user","content":"Now add a test."}]}'
+```
+
+`otel-agent view --sessions` then shows one `inferred-…` row. `otel-agent view --session <that-id>` prints the two-step trajectory. Existing databases pick the session columns up on the next proxy start, and older rows stay null.
+
+Open **Sessions** at `http://localhost:45638/sessions` to list recent runs and open one trajectory (time, endpoint, status, latency, tokens, and a running token total). A non-success status is marked failed, and a step at or above 10s is marked slow. The trajectory also lists waste findings from fixed rules: retry bursts, near-duplicate calls, token spikes, and heavy requests that return little or no output. A clean run says there are no findings. Click a finding to scroll to the step, and click a step to open the existing request detail. From the CLI: `otel-agent view --sessions` and `otel-agent view --session my-run-1` (the session view prints the findings when there are any). Thresholds live in `src/otel_agent/waste.py`.
 
 ## API Endpoints
 

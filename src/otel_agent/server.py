@@ -27,6 +27,7 @@ from otel_agent.converter import (
 )
 from otel_agent.body_elide import elide_body
 from otel_agent.logger import TelemetryLogger, redact_sensitive_headers
+from otel_agent.sessions import session_fields_from_request
 from otel_agent.models import ModelCache, aggregate_models, fetch_provider_models
 from otel_agent.stream_capture import StreamCapture
 from otel_agent.responses_compat import (
@@ -1189,6 +1190,11 @@ def _log_telemetry(
         stored_request_headers = dict(request.headers)
         if extra_headers:
             stored_request_headers.update(extra_headers)
+        # Headers win. With none, fingerprint the conversation root in the
+        # original body (not the elided copy) so log_body=False still groups.
+        session_id, session_step = session_fields_from_request(
+            stored_request_headers, request_body
+        )
         telemetry.log_request(
             method=request.method,
             url=str(request.url),
@@ -1205,6 +1211,8 @@ def _log_telemetry(
             cache_read_tokens=cache["cache_read_tokens"],
             cache_creation_tokens=cache["cache_creation_tokens"],
             format=source_format,
+            session_id=session_id,
+            session_step=session_step,
         )
     except Exception:
         logger.exception("Failed to log telemetry")

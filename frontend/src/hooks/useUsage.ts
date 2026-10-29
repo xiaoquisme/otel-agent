@@ -1,8 +1,22 @@
 import { useState, useEffect } from 'react'
-import type { UsageSummary } from '../api/types'
-import { fetchUsage } from '../api/client'
+import type { UsageBucket, UsageSeries, UsageSummary } from '../api/types'
+import { fetchUsage, fetchUsageSeries } from '../api/client'
 
 export type UsagePeriod = 'today' | 'week' | 'month' | 'all'
+
+export function bucketForPeriod(period: UsagePeriod): UsageBucket | undefined {
+  if (period === 'today') return 'hour'
+  if (period === 'week' || period === 'month') return 'day'
+  return undefined
+}
+
+export function browserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  } catch {
+    return 'UTC'
+  }
+}
 
 function toUTC(d: Date): string {
   return d.toISOString().replace(/\.\\d{3}Z$/, 'Z')
@@ -40,6 +54,7 @@ function getRange(period: UsagePeriod): { start: string; end: string } {
 
 export function useUsage(period: UsagePeriod = 'today') {
   const [usage, setUsage] = useState<UsageSummary | null>(null)
+  const [series, setSeries] = useState<UsageSeries | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -49,13 +64,22 @@ export function useUsage(period: UsagePeriod = 'today') {
     async function load() {
       try {
         const { start, end } = getRange(period)
-        const data = await fetchUsage(start, end)
-        if (!cancelled) setUsage(data)
+        const bucket = bucketForPeriod(period)
+        const tz = browserTimeZone()
+        const [usageResult, seriesResult] = await Promise.all([
+          fetchUsage(start, end),
+          fetchUsageSeries(start, end, bucket, tz).catch(() => null),
+        ])
+        if (!cancelled) {
+          setUsage(usageResult)
+          setSeries(seriesResult)
+        }
       } catch {}
       if (!cancelled) setLoading(false)
     }
 
     setLoading(true)
+    setSeries(null)
     load()
     interval = setInterval(load, 30000)
     return () => {
@@ -64,5 +88,5 @@ export function useUsage(period: UsagePeriod = 'today') {
     }
   }, [period])
 
-  return { usage, loading }
+  return { usage, series, loading }
 }

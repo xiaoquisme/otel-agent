@@ -1,13 +1,17 @@
 """FastAPI router for the otel-agent dashboard.
 
-Provides 7 endpoints:
+Provides the dashboard JSON endpoints:
   GET /              — index.html (served by server.py mount)
   GET /api/requests  — paginated request list
-  GET /api/requests/{id} — single request detail with structured messages
+  GET /api/requests/{id} — single request detail with structured messages,
+                            session_id, and session_step
   GET /api/requests/{id}/download — pretty-printed JSON attachment
   GET /api/export    — CSV/JSON export
   GET /api/cache/clear — clear the COUNT cache
   GET /api/usage     — usage summary for a time range
+  GET /api/usage/series — token totals bucketed across a time range
+  GET /api/sessions  — recent agent sessions with rollups
+  GET /api/sessions/{session_id} — one session as a chronological trajectory
 """
 from __future__ import annotations
 
@@ -22,6 +26,8 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse, Response
 
 from otel_agent.dashboard.api import DashboardAPI
+from otel_agent.sessions import MAX_SESSION_ID_LEN, clean_session_label
+from otel_agent.usage_series import USAGE_BUCKETS
 
 router = APIRouter(prefix="/api")
 
@@ -67,7 +73,7 @@ def get_requests(
 
 @router.get("/requests/{request_id}")
 def get_request_detail(request_id: int) -> JSONResponse:
-    """Single request detail with structured messages for frontend rendering."""
+    """Single request detail with structured messages, session_id, and session_step."""
     api = get_api()
     result = api.get_structured_request(request_id)
     if result is None:
@@ -156,15 +162,8 @@ def cache_clear() -> dict:
     return {"status": "ok"}
 
 
-@router.get("/usage")
-def usage_summary(
-    start: str = Query(...),
-    end: str = Query(...),
-) -> JSONResponse:
-    """Usage summary for a UTC time range."""
-    api = get_api()
-
-    # Validate ISO-8601 format
+def _parse_usage_range(start: str, end: str) -> tuple[datetime, datetime] | JSONResponse:
+    """Validate a half-open UTC range shared by the usage endpoints."""
     try:
         start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
         end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
@@ -173,9 +172,72 @@ def usage_summary(
             {"error": "Invalid datetime format. Use ISO-8601 UTC."},
             status_code=400,
         )
-
     if end_dt <= start_dt:
         return JSONResponse({"error": "end must be after start"}, status_code=400)
+    return start_dt, end_dt
 
-    result = api.get_usage_summary(start, end)
+
+@router.get("/usage")
+def usage_summary(
+    start: str = Query(...),
+    end: str = Query(...),
+) -> JSONResponse:
+    """Usage summary for a UTC time range."""
+    parsed = _parse_usage_range(start, end)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+
+    result = get_api().get_usage_summary(start, end)
+    return JSONResponse(result)
+
+
+@router.get("/usage/series")
+def usage_series(
+    start: str = Query(...),
+    end: str = Query(...),
+    bucket: str | None = Query(None),
+    tz: str | None = Query(None),
+) -> JSONResponse:
+    """Token totals over time for a UTC range.
+
+    ``bucket`` is ``hour``, ``day``, ``week``, ``month``, or omitted to
+    choose from the span. ``tz`` is an IANA timezone used to align marks
+    with the viewer's calendar; omitted means UTC.
+    """
+    parsed = _parse_usage_range(start, end)
+    if isinstance(parsed, JSONResponse):
+        return parsed
+    if bucket not in (None, "", "auto") and bucket not in USAGE_BUCKETS:
+        return JSONResponse(
+            {"error": "Invalid bucket. Use hour, day, week, or month."},
+            status_code=400,
+        )
+    try:
+        result = get_api().get_usage_series(start, end, bucket or None, tz or None)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return JSONResponse(result)
+
+
+@router.get("/sessions")
+def list_sessions(
+    limit: int = Query(50),
+    offset: int = Query(0),
+) -> dict:
+    """Recent agent sessions with request, token, and time rollups."""
+    limit = min(max(limit, 1), 200)
+    offset = max(offset, 0)
+    return get_api().list_sessions(limit=limit, offset=offset)
+
+
+@router.get("/sessions/{session_id:path}")
+def get_session(session_id: str) -> JSONResponse:
+    """One session as chronological steps, cumulative tokens, and waste findings."""
+    session_id = session_id.strip().strip("/")
+    cleaned = clean_session_label(session_id, MAX_SESSION_ID_LEN)
+    if cleaned is None:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    result = get_api().get_session(cleaned)
+    if result is None:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
     return JSONResponse(result)

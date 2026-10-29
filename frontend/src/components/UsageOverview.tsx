@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useUsage, type UsagePeriod } from '../hooks/useUsage'
+import UsageChart from './UsageChart'
 import { Skeleton } from './ui'
 
 const PERIODS: { key: UsagePeriod; label: string }[] = [
@@ -32,7 +33,8 @@ const MODEL_COLORS = [
 
 export default function UsageOverview() {
   const [activePeriod, setActivePeriod] = useState<UsagePeriod>('today')
-  const { usage, loading } = useUsage(activePeriod)
+  const { usage, series, loading } = useUsage(activePeriod)
+  const hasSeries = !!series && series.points.some((point) => point.total_tokens > 0)
 
   return (
     <div style={{ padding: 'var(--space-4) 0' }}>
@@ -64,16 +66,19 @@ export default function UsageOverview() {
       </div>
 
       {loading ? (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-          {[0, 1, 2, 3].map((i) => (
-            <div key={i} style={{ background: 'var(--color-bg-surface)', border: '1px solid var(--color-border-default)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-4)' }}>
-              <Skeleton width="60%" height="10px" />
-              <div style={{ marginTop: 'var(--space-2)' }}>
-                <Skeleton width="80%" height="24px" />
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} style={{ background: 'var(--color-bg-surface)', border: '1px solid var(--color-border-default)', borderRadius: 'var(--radius-lg)', padding: 'var(--space-4)' }}>
+                <Skeleton width="60%" height="10px" />
+                <div style={{ marginTop: 'var(--space-2)' }}>
+                  <Skeleton width="80%" height="24px" />
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+          <Skeleton width="100%" height="220px" />
+        </>
       ) : usage ? (
         <>
           {/* Summary cards */}
@@ -104,6 +109,8 @@ export default function UsageOverview() {
               No requests with token data recorded for this period.
             </p>
           )}
+
+          {hasSeries && series && <UsageChart series={series} />}
 
           {/* Model breakdown */}
           {usage.models && usage.models.length > 0 && (

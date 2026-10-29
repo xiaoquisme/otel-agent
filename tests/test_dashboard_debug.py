@@ -2,6 +2,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -209,6 +210,35 @@ def test_debug_executes_native_gateway_and_telemetry(tmp_path, monkeypatch, mode
         assert "private-" not in response.text
         assert "authorization" not in response.headers
         assert len(seen) == 1
+
+        # Debug's native gateway calls must also feed main's session and usage APIs,
+        # including root inference when request-body storage is disabled.
+        listing = client.get("/api/sessions")
+        assert listing.status_code == 200
+        assert listing.json()["total"] == 1
+        session_id = listing.json()["data"][0]["session_id"]
+        assert session_id.startswith("inferred-")
+        trajectory = client.get(f"/api/sessions/{session_id}")
+        assert trajectory.status_code == 200
+        detail = trajectory.json()
+        assert detail["request_count"] == 1
+        assert detail["total_tokens"] == 5
+        assert detail["steps"][0]["cumulative_total_tokens"] == 5
+        request_detail = client.get(f'/api/requests/{detail["steps"][0]["id"]}')
+        assert request_detail.status_code == 200
+        assert request_detail.json()["session_id"] == session_id
+
+        now = datetime.now(timezone.utc)
+        interval = {"start": (now - timedelta(days=1)).isoformat(),
+                    "end": (now + timedelta(days=1)).isoformat()}
+        usage = client.get("/api/usage", params=interval)
+        assert usage.status_code == 200
+        assert usage.json()["total_tokens"] == 5
+        assert usage.json()["models"][0]["model_name"] == model
+        series = client.get("/api/usage/series", params={**interval, "bucket": "hour", "tz": "UTC"})
+        assert series.status_code == 200
+        assert sum(point["total_tokens"] for point in series.json()["points"]) == 5
+        assert len(seen) == 1  # dashboard reads do not make another upstream call
     with sqlite3.connect(db) as conn:
         row = conn.execute("SELECT url, request_body, format, input_tokens, output_tokens, response_status FROM requests").fetchone()
     assert row[0].endswith(endpoint)

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from otel_agent.dashboard.message_parser import parse_messages
+from otel_agent.sessions import MAX_SESSION_ID_LEN, MAX_SESSION_STEP_LEN, clean_session_label
 from otel_agent.storage import create_storage
 from otel_agent.storage.base import StorageBackend
 
@@ -111,6 +112,16 @@ class DashboardAPI:
         """Return an empty requests response."""
         return {"data": [], "total": 0, "cursor": cursor, "next_cursor": 0, "has_more": False}
 
+    def _empty_sessions(self, offset: int = 0, limit: int = 50) -> dict:
+        """Return an empty session list."""
+        return {
+            "data": [],
+            "total": 0,
+            "offset": offset,
+            "limit": limit,
+            "has_more": False,
+        }
+
     def _empty_usage(self, start: str, end: str) -> dict:
         """Return an empty usage response."""
         return {"start": start, "end": end, "total_tokens": 0, "input_tokens": 0,
@@ -166,6 +177,30 @@ class DashboardAPI:
             return []
         return self._get_storage().get_all_filtered(search, method, status)
 
+    def list_sessions(self, limit: int = 50, offset: int = 0) -> dict:
+        """Recent agent sessions, newest activity first.
+
+        Follows the same proxy-then-storage path as :meth:`get_requests`.
+        """
+        params = {"limit": limit, "offset": offset}
+        result = self._http_get("/api/sessions", params)
+        if result is not None:
+            return result
+        if self._proxy_port is not None or not self.db_path.exists():
+            return self._empty_sessions(offset, limit)
+        return self._get_storage().list_sessions(limit=limit, offset=offset)
+
+    def get_session(self, session_id: str) -> dict | None:
+        """One session trajectory, or None when that id was never logged."""
+        from urllib.parse import quote
+
+        result = self._http_get(f"/api/sessions/{quote(session_id, safe='')}")
+        if result is not None:
+            return result
+        if self._proxy_port is not None or not self.db_path.exists():
+            return None
+        return self._get_storage().get_session(session_id)
+
     def get_usage_summary(self, start: str, end: str) -> dict:
         """Return usage summary for the requested UTC range."""
         result = self._http_get("/api/usage", {"start": start, "end": end})
@@ -179,8 +214,72 @@ class DashboardAPI:
             return self._empty_usage(start, end)
         return self._get_storage().get_usage_summary(start, end)
 
+    def get_usage_series(
+        self,
+        start: str,
+        end: str,
+        bucket: str | None = None,
+        tz: str | None = None,
+    ) -> dict:
+        """Return bucketed token totals for the requested UTC range.
+
+        Follows the same proxy-then-storage path as :meth:`get_usage_summary`.
+        """
+        params: dict[str, str] = {"start": start, "end": end}
+        if bucket:
+            params["bucket"] = bucket
+        if tz:
+            params["tz"] = tz
+        result = self._http_get("/api/usage/series", params)
+        if result is not None:
+            return result
+
+        if self._proxy_port is not None or not self.db_path.exists():
+            return self._empty_usage_series(start, end, bucket, tz)
+        return self._get_storage().get_usage_series(start, end, bucket, tz)
+
+    def _empty_usage_series(
+        self,
+        start: str,
+        end: str,
+        bucket: str | None,
+        tz: str | None,
+    ) -> dict:
+        """Zero-filled series when the database cannot be read."""
+        from datetime import datetime, timezone
+
+        from otel_agent.usage_series import (
+            build_usage_series,
+            resolve_timezone,
+            select_bucket,
+        )
+
+        try:
+            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=timezone.utc)
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=timezone.utc)
+            zone = resolve_timezone(tz)
+            now = datetime.now(timezone.utc)
+            chosen = select_bucket(start_dt, end_dt, bucket, zone, now)
+        except (ValueError, TypeError, AttributeError):
+            return {
+                "start": start, "end": end, "bucket": "hour",
+                "timezone": "UTC", "points": [],
+            }
+        return build_usage_series(
+            start, end, start_dt, end_dt, chosen, [], zone, now=now,
+        )
+
     def get_structured_request(self, request_id: int) -> dict | None:
-        """Get a request with parsed structured messages for frontend rendering."""
+        """Get a request with parsed structured messages for frontend rendering.
+
+        ``session_id`` and ``session_step`` are always present. They are the
+        values stored on the row (headers, or an ``inferred-`` id). Blank
+        labels become null. This endpoint does not assign or remap a session.
+        """
         result = self.get_request(request_id)
         if result is None:
             return None
@@ -190,6 +289,8 @@ class DashboardAPI:
         parsed = parse_messages(req_body, resp_body, fmt)
         result["messages"] = parsed["messages"]
         result["metadata"] = parsed["metadata"]
+        result["session_id"] = clean_session_label(result.get("session_id"), MAX_SESSION_ID_LEN)
+        result["session_step"] = clean_session_label(result.get("session_step"), MAX_SESSION_STEP_LEN)
         return result
 
     def clear_cache(self) -> None:

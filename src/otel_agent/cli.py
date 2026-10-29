@@ -72,6 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     view_p.add_argument("-d", "--db", type=str, default="~/.otel-agent/telemetry.sqlite", help="Telemetry database path")
     view_p.add_argument("-f", "--filter", type=str, default="", help="Filter by upstream (substring match)")
     view_p.add_argument("-n", "--limit", type=int, default=20, help="Max rows to display (default: 20)")
+    view_p.add_argument("--sessions", action="store_true", help="List recent agent sessions")
+    view_p.add_argument("--session", type=str, default="", help="Show one session trajectory by id")
 
     # --- config ---
     config_p = sub.add_parser("config", help="Manage configuration")
@@ -102,6 +104,9 @@ def build_parser() -> argparse.ArgumentParser:
     logs_p = dash_sub.add_parser("logs", help="View dashboard logs")
     logs_p.add_argument("-F", "--follow", action="store_true", help="Stream logs in real-time")
     logs_p.add_argument("-n", "--lines", type=int, default=50, help="Number of recent lines (default: 50)")
+
+    # --- update ---
+    sub.add_parser("update", help="Upgrade the installed otel-agent tool")
 
     # --- auth ---
     auth_p = sub.add_parser("auth", help="Sign in to SuperGrok / xAI OAuth or Codex")
@@ -152,6 +157,9 @@ def main() -> None:
     elif args.command == "auth":
         from otel_agent.commands.auth_cmd import handle_auth
         handle_auth(args)
+    elif args.command == "update":
+        from otel_agent.commands.update import handle_update
+        handle_update(args)
     else:
         parser.print_help()
         sys.exit(1)

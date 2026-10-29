@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 
 from otel_agent import server
@@ -158,3 +159,293 @@ def test_usage_summary_counts_completed_records_without_usage_as_excluded(tmp_pa
     assert summary["total_tokens"] == 0
     assert summary["eligible_request_count"] == 0
     assert summary["excluded_request_count"] == 1
+
+
+def _log(logger: TelemetryLogger, **kwargs) -> None:
+    logger.log_request(
+        method="POST",
+        url="https://example.test/v1/chat/completions",
+        request_headers={},
+        request_body="",
+        response_status=kwargs.pop("response_status", 200),
+        response_headers={},
+        response_body="{}",
+        latency_ms=1.0,
+        **kwargs,
+    )
+
+
+def _points(series: dict) -> dict[str, dict]:
+    return {point["bucket_start"]: point for point in series["points"]}
+
+
+def test_usage_series_hourly_matches_summary_and_skips_gaps(tmp_path) -> None:
+    logger = TelemetryLogger(tmp_path / "series.sqlite")
+    start, end = "2026-03-02T00:00:00+00:00", "2026-03-03T00:00:00+00:00"
+    _log(logger, timestamp="2026-03-02T15:10:00+00:00", input_tokens=10, output_tokens=4, total_tokens=14)
+    _log(logger, timestamp="2026-03-02T15:40:00+00:00", input_tokens=1, output_tokens=1, total_tokens=2)
+    _log(logger, timestamp="2026-03-02T16:00:00Z", input_tokens=5, output_tokens=5, total_tokens=10)
+    _log(logger, timestamp="2026-03-02T15:05:00+00:00", response_status=500, input_tokens=100, output_tokens=100, total_tokens=200)
+    _log(logger, timestamp="2026-03-02T15:20:00+00:00")
+    _log(logger, timestamp="2026-03-01T23:00:00+00:00", input_tokens=50, output_tokens=50, total_tokens=100)
+
+    series = logger.storage.get_usage_series(start, end, bucket="hour")
+    summary = logger.storage.get_usage_summary(start, end)
+    logger.close()
+
+    assert series["bucket"] == "hour"
+    assert series["timezone"] == "UTC"
+    assert len(series["points"]) == 24
+    points = _points(series)
+    assert points["2026-03-02T15:00:00Z"]["input_tokens"] == 11
+    assert points["2026-03-02T15:00:00Z"]["output_tokens"] == 5
+    assert points["2026-03-02T15:00:00Z"]["total_tokens"] == 16
+    assert points["2026-03-02T15:00:00Z"]["request_count"] == 2
+    assert points["2026-03-02T16:00:00Z"]["total_tokens"] == 10
+    assert points["2026-03-02T14:00:00Z"]["total_tokens"] == 0
+    assert sum(point["total_tokens"] for point in series["points"]) == summary["total_tokens"] == 26
+    assert sum(point["input_tokens"] for point in series["points"]) == summary["input_tokens"]
+    assert sum(point["output_tokens"] for point in series["points"]) == summary["output_tokens"]
+
+
+def test_usage_series_week_buckets_start_on_monday(tmp_path) -> None:
+    logger = TelemetryLogger(tmp_path / "weeks.sqlite")
+    _log(logger, timestamp="2026-03-01T12:00:00+00:00", input_tokens=6, output_tokens=4, total_tokens=10)
+    _log(logger, timestamp="2026-03-02T08:00:00+00:00", input_tokens=5, output_tokens=2, total_tokens=7)
+    _log(logger, timestamp="2026-03-08T22:00:00+00:00", input_tokens=1, output_tokens=2, total_tokens=3)
+    series = logger.storage.get_usage_series(
+        "2026-02-23T00:00:00+00:00", "2026-03-16T00:00:00+00:00", bucket="week",
+    )
+    logger.close()
+
+    points = _points(series)
+    assert list(points) == [
+        "2026-02-23T00:00:00Z",
+        "2026-03-02T00:00:00Z",
+        "2026-03-09T00:00:00Z",
+    ]
+    assert points["2026-02-23T00:00:00Z"]["total_tokens"] == 10
+    assert points["2026-03-02T00:00:00Z"]["total_tokens"] == 10
+    assert points["2026-03-09T00:00:00Z"]["total_tokens"] == 0
+
+
+def test_usage_series_aligns_days_to_viewer_timezone(tmp_path) -> None:
+    """A UTC evening that is still the previous local day stays on that local day."""
+    logger = TelemetryLogger(tmp_path / "tz.sqlite")
+    _log(logger, timestamp="2026-03-03T07:30:00+00:00", input_tokens=8, output_tokens=2, total_tokens=10)
+    series = logger.storage.get_usage_series(
+        "2026-03-02T08:00:00+00:00",
+        "2026-03-03T08:00:00+00:00",
+        bucket="day",
+        tz="America/Los_Angeles",
+    )
+    hourly = logger.storage.get_usage_series(
+        "2026-03-02T08:00:00+00:00",
+        "2026-03-03T08:00:00+00:00",
+        bucket="hour",
+        tz="America/Los_Angeles",
+    )
+    logger.close()
+
+    assert series["timezone"] == "America/Los_Angeles"
+    assert len(series["points"]) == 1
+    assert _points(series)["2026-03-02T08:00:00Z"]["total_tokens"] == 10
+    assert len(hourly["points"]) == 24
+    assert _points(hourly)["2026-03-03T07:00:00Z"]["total_tokens"] == 10
+
+
+def test_usage_series_half_hour_offset_uses_local_hour(tmp_path) -> None:
+    logger = TelemetryLogger(tmp_path / "ist.sqlite")
+    _log(logger, timestamp="2026-03-02T18:45:00+00:00", input_tokens=3, output_tokens=1, total_tokens=4)
+    series = logger.storage.get_usage_series(
+        "2026-03-02T18:30:00+00:00",
+        "2026-03-03T18:30:00+00:00",
+        bucket="hour",
+        tz="Asia/Kolkata",
+    )
+    logger.close()
+
+    points = _points(series)
+    assert points["2026-03-02T18:30:00Z"]["total_tokens"] == 4
+    assert "2026-03-02T18:00:00Z" not in points
+    assert len(series["points"]) == 24
+
+
+def test_usage_series_auto_bucket_and_all_time_trim(tmp_path) -> None:
+    logger = TelemetryLogger(tmp_path / "auto.sqlite")
+    _log(logger, timestamp="2026-03-04T01:00:00+00:00", input_tokens=2, output_tokens=2, total_tokens=4)
+    day = logger.storage.get_usage_series("2026-03-02T00:00:00+00:00", "2026-03-03T00:00:00+00:00")
+    week = logger.storage.get_usage_series("2026-03-01T00:00:00+00:00", "2026-03-11T00:00:00+00:00")
+    coarse = logger.storage.get_usage_series(
+        "2026-03-01T00:00:00+00:00", "2026-03-21T00:00:00+00:00", bucket="hour",
+    )
+    all_time = logger.storage.get_usage_series("2000-01-01T00:00:00+00:00", "2100-01-01T00:00:00+00:00")
+    logger.close()
+
+    assert day["bucket"] == "hour"
+    assert len(day["points"]) == 24
+    assert week["bucket"] == "day"
+    assert len(week["points"]) == 10
+    assert coarse["bucket"] == "day"
+    assert len(coarse["points"]) == 20
+    assert all_time["bucket"] == "month"
+    assert all_time["points"][0]["bucket_start"] == "2026-03-01T00:00:00Z"
+    assert all_time["points"][0]["total_tokens"] == 4
+    assert all(point["bucket_start"] >= "2026-03-01T00:00:00Z" for point in all_time["points"])
+
+
+def test_usage_series_spring_forward_skips_missing_local_hour(tmp_path) -> None:
+    """A DST spring-forward local day has 23 hourly marks and skips 02:00."""
+    from zoneinfo import ZoneInfo
+
+    logger = TelemetryLogger(tmp_path / "dst.sqlite")
+    _log(logger, timestamp="2026-03-08T09:30:00+00:00", input_tokens=4, output_tokens=1, total_tokens=5)
+    series = logger.storage.get_usage_series(
+        "2026-03-08T08:00:00+00:00",
+        "2026-03-09T07:00:00+00:00",
+        bucket="hour",
+        tz="America/Los_Angeles",
+    )
+    logger.close()
+
+    la = ZoneInfo("America/Los_Angeles")
+    hours = [
+        datetime.strptime(point["bucket_start"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).astimezone(la).hour
+        for point in series["points"]
+    ]
+    assert len(series["points"]) == 23
+    assert hours[:3] == [0, 1, 3]
+    assert 2 not in hours
+    assert _points(series)["2026-03-08T09:00:00Z"]["total_tokens"] == 5
+
+
+def _select_plans(storage, fn) -> tuple[object, list[str]]:
+    """Run ``fn`` and return its result plus EXPLAIN plans for its SELECTs."""
+    conn = storage._get_conn()
+    statements: list[str] = []
+
+    def trace(sql: str) -> None:
+        if sql.lstrip().upper().startswith("SELECT"):
+            statements.append(sql)
+
+    conn.set_trace_callback(trace)
+    try:
+        result = fn()
+    finally:
+        conn.set_trace_callback(None)
+    plans = []
+    for sql in statements:
+        rows = conn.execute("EXPLAIN QUERY PLAN " + sql).fetchall()
+        plans.append(" | ".join(str(row[-1]) for row in rows))
+    return result, plans
+
+
+def test_usage_queries_read_token_index_not_bodies(tmp_path) -> None:
+    """Range aggregates stay correct and are answered from the covering index.
+
+    The pre-fix plan searched ``idx_requests_status``. Token columns sit
+    after the body columns, so every in-range row loaded request and
+    response overflow pages.
+    """
+    logger = TelemetryLogger(tmp_path / "covering.sqlite")
+    body = "x" * 8192
+    conn = logger.storage._get_conn()
+    rows = []
+    # ~30 days of completed calls, plus rows the aggregate must ignore.
+    for i in range(240):
+        day = 1 + (i % 28)
+        hour = i % 24
+        minute = i % 60
+        ts = f"2026-09-{day:02d}T{hour:02d}:{minute:02d}:00+00:00"
+        model = ("alpha", "beta", "gamma")[i % 3]
+        rows.append((
+            ts, "POST", "https://example.test/v1", "up", "{}",
+            body, 200, "{}", body, 5.0, model,
+            10, 4, 14, 2, 1 if i % 3 == 0 else None, "openai", None, None,
+        ))
+    rows.append((
+        "2026-09-15T12:00:00+00:00", "POST", "u", "up", "{}",
+        body, 200, "{}", body, 5.0, None,
+        None, None, None, None, None, None, None, None,
+    ))
+    rows.append((
+        "2026-09-15T12:05:00+00:00", "POST", "u", "up", "{}",
+        body, 500, "{}", body, 5.0, "alpha",
+        1000, 1000, 2000, 0, None, "openai", None, None,
+    ))
+    rows.append((
+        "2026-08-01T00:00:00+00:00", "POST", "u", "up", "{}",
+        body, 200, "{}", body, 5.0, "alpha",
+        50, 50, 100, 0, None, "openai", None, None,
+    ))
+    conn.executemany(
+        """INSERT INTO requests
+           (timestamp, method, url, upstream, request_headers, request_body,
+            response_status, response_headers, response_body, latency_ms, model_name,
+            input_tokens, output_tokens, total_tokens, cache_read_tokens,
+            cache_creation_tokens, format, session_id, session_step)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        rows,
+    )
+    conn.commit()
+
+    start, end = "2026-09-01T00:00:00+00:00", "2026-10-01T00:00:00+00:00"
+    wide = ("2020-01-01T00:00:00+00:00", "2026-10-19T00:00:00+00:00")
+    started = time.perf_counter()
+    summary, summary_plans = _select_plans(
+        logger.storage, lambda: logger.storage.get_usage_summary(start, end),
+    )
+    series, series_plans = _select_plans(
+        logger.storage,
+        lambda: logger.storage.get_usage_series(start, end, bucket="day", tz="UTC"),
+    )
+    all_summary, all_summary_plans = _select_plans(
+        logger.storage, lambda: logger.storage.get_usage_summary(*wide),
+    )
+    all_series, all_series_plans = _select_plans(
+        logger.storage,
+        lambda: logger.storage.get_usage_series(*wide, bucket="month", tz="America/Los_Angeles"),
+    )
+    elapsed = time.perf_counter() - started
+    logger.close()
+
+    # 240 in-range successes: 80 of each model. Anthropic-style (cache
+    # creation reported) is every third row, which is model alpha.
+    assert summary["total_tokens"] == 240 * 14
+    assert summary["input_tokens"] == 240 * 10
+    assert summary["output_tokens"] == 240 * 4
+    assert summary["eligible_request_count"] == 240
+    assert summary["excluded_request_count"] == 1
+    assert summary["cache_read_tokens"] == 240 * 2
+    by_model = {row["model_name"]: row for row in summary["models"]}
+    assert set(by_model) == {"alpha", "beta", "gamma"}
+    assert all(row["request_count"] == 80 for row in by_model.values())
+    assert all(row["total_tokens"] == 80 * 14 for row in by_model.values())
+    # alpha reports cache creation: cacheable = input + cache_read + creation.
+    # The other models leave creation null, so cacheable is input only.
+    assert by_model["alpha"]["cacheable_input_tokens"] == 80 * (10 + 2 + 1)
+    assert by_model["beta"]["cacheable_input_tokens"] == 80 * 10
+    assert by_model["gamma"]["cacheable_input_tokens"] == 80 * 10
+    assert sum(point["total_tokens"] for point in series["points"]) == summary["total_tokens"]
+    assert all_summary["total_tokens"] == summary["total_tokens"] + 100
+    assert sum(point["total_tokens"] for point in all_series["points"]) == all_summary["total_tokens"]
+
+    for plan in (*summary_plans, *series_plans, *all_summary_plans, *all_series_plans):
+        assert "COVERING INDEX idx_requests_usage" in plan, plan
+        assert "idx_requests_status" not in plan, plan
+    assert elapsed < 2.0
+
+
+def test_usage_series_rejects_unknown_timezone(tmp_path) -> None:
+    logger = TelemetryLogger(tmp_path / "bad-tz.sqlite")
+    try:
+        try:
+            logger.storage.get_usage_series(
+                "2026-03-02T00:00:00+00:00", "2026-03-03T00:00:00+00:00", tz="Not/AZone",
+            )
+        except ValueError as exc:
+            assert "Unknown timezone" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+    finally:
+        logger.close()
