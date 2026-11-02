@@ -27,6 +27,7 @@ class ModelCache:
         self._ttl = ttl
         self._cache: dict[str, list[dict[str, Any]]] = {}
         self._timestamps: dict[str, float] = {}
+        self._warnings: dict[str, str] = {}
         self._config_mtime: float = 0
 
     def _is_fresh(self, provider_name: str) -> bool:
@@ -45,16 +46,33 @@ class ModelCache:
             return self._cache.get(provider_name)
         return None
 
-    def put(self, provider_name: str, models: list[dict[str, Any]]) -> None:
+    def warning(self, provider_name: str) -> str | None:
+        """Safe summary recorded with a fresh cached catalog, if any."""
+        if self._is_fresh(provider_name):
+            return self._warnings.get(provider_name)
+        return None
+
+    def put(
+        self,
+        provider_name: str,
+        models: list[dict[str, Any]],
+        *,
+        warning: str | None = None,
+    ) -> None:
         """Store models for a provider in the cache."""
         self._cache[provider_name] = models
         self._timestamps[provider_name] = time.monotonic()
         self._config_mtime = self._config._mtime
+        if warning:
+            self._warnings[provider_name] = warning
+        else:
+            self._warnings.pop(provider_name, None)
 
     def invalidate(self) -> None:
         """Clear the entire cache."""
         self._cache.clear()
         self._timestamps.clear()
+        self._warnings.clear()
 
 
 async def fetch_provider_models(
@@ -63,6 +81,7 @@ async def fetch_provider_models(
     *,
     failures: dict[str, str] | None = None,
     discovery_errors: dict[str, str] | None = None,
+    discovery_warnings: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch model list from a single provider via GET /v1/models.
 
@@ -91,6 +110,9 @@ async def fetch_provider_models(
     tell the operator which provider is broken needs the distinction (KTD6).
     ``discovery_errors`` records non-credential failures using safe summaries,
     never upstream bodies or exception strings that could contain secrets.
+    A catalog that is not a list is a hard failure. Individual malformed
+    entries are dropped; when valid entries remain, ``discovery_warnings``
+    gets a count-only summary and those entries are still returned.
     """
     if provider.models:
         # Ids are stored unprefixed here and prefixed with the provider name
@@ -148,15 +170,28 @@ async def fetch_provider_models(
 
         data = resp.json()
         raw_models = data.get("data") if isinstance(data, dict) else None
-        if not isinstance(raw_models, list) or any(
-            not isinstance(model, dict) or not isinstance(model.get("id"), str) or not model["id"].strip()
-            for model in raw_models
-        ):
+        if not isinstance(raw_models, list):
             if discovery_errors is not None:
                 discovery_errors[provider.name] = "Models endpoint returned an invalid catalog"
             return []
 
-        return raw_models
+        valid = [model for model in raw_models if _usable_catalog_entry(model)]
+        dropped = len(raw_models) - len(valid)
+        if not dropped:
+            return valid
+        # Count only: entry bodies can carry credentials or other secrets.
+        summary = (
+            "Models endpoint omitted "
+            f"{dropped} invalid catalog {'entry' if dropped == 1 else 'entries'}"
+        )
+        logger.warning("Provider '%s': %s", provider.name, summary)
+        if not valid:
+            if discovery_errors is not None:
+                discovery_errors[provider.name] = "Models endpoint returned an invalid catalog"
+            return []
+        if discovery_warnings is not None:
+            discovery_warnings[provider.name] = summary
+        return valid
     except AuthError as e:
         logger.warning("Credential unavailable for provider '%s': %s", provider.name, e)
         if failures is not None:
@@ -172,6 +207,14 @@ async def fetch_provider_models(
         if discovery_errors is not None:
             discovery_errors[provider.name] = "Could not read models catalog"
         return []
+
+
+def _usable_catalog_entry(model: Any) -> bool:
+    """True when an entry has a non-blank string id and can be listed."""
+    if not isinstance(model, dict):
+        return False
+    model_id = model.get("id")
+    return isinstance(model_id, str) and bool(model_id.strip())
 
 
 def _entry_capabilities(model: dict[str, Any], entry_id: str) -> dict[str, Any]:
@@ -192,6 +235,7 @@ def aggregate_models(
     raw_models: dict[str, list[dict[str, Any]]],
     failures: dict[str, str] | None = None,
     discovery_errors: dict[str, str] | None = None,
+    discovery_warnings: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Aggregate model lists from multiple providers into OpenAI /v1/models format.
 
@@ -202,6 +246,8 @@ def aggregate_models(
     list is indistinguishable from one that was removed from the config, which
     is the silent absence KTD6 rules out. The aggregate itself still succeeds —
     the entries are additive, so a client reading ``data`` is unaffected.
+    ``discovery_warnings`` are partial catalogs: valid models stay in ``data``
+    and the count-only summary is reported beside hard discovery errors.
 
     This normalization exit is also the single production point of the four
     additive capability fields (``context_length``, ``max_output_tokens``,
@@ -232,6 +278,9 @@ def aggregate_models(
     ] + [
         {"provider": name, "message": message, "type": "model_discovery_error"}
         for name, message in sorted((discovery_errors or {}).items())
+    ] + [
+        {"provider": name, "message": message, "type": "model_discovery_warning"}
+        for name, message in sorted((discovery_warnings or {}).items())
     ]
     if errors:
         body["errors"] = errors

@@ -68,7 +68,7 @@ export default function DebugPage() {
       {discoveryError && <p role="alert" className="debug-error">{discoveryError} — use Refresh models to retry.</p>}
       {catalog && catalog.errors.length > 0 && (
         <section className="debug-notice" aria-label="Model discovery warnings">
-          <strong>Some providers could not be listed. Other models remain available.</strong>
+          <strong>Some providers reported discovery problems. Models that were listed remain available.</strong>
           <ul>{catalog.errors.map((error) => <li key={error.provider}>{error.provider}: {error.message} ({error.type})</li>)}</ul>
         </section>
       )}
@@ -101,6 +101,10 @@ export default function DebugPage() {
           <pre className="debug-answer">{result.answer || 'No text returned. See error / raw response for details.'}</pre>
           <h4>Usage (provider reported)</h4>
           {result.usage != null ? <pre>{pretty(result.usage)}</pre> : <p className="debug-muted">Usage not reported. No token estimate is made.</p>}
+          <details>
+            <summary>Raw request JSON</summary>
+            <pre>{pretty(result.request)}</pre>
+          </details>
           <details>
             <summary>Raw response {typeof result.raw === 'string' ? '(non-JSON)' : 'JSON'}</summary>
             <pre>{result.raw === null ? 'No response body received.' : pretty(result.raw)}</pre>

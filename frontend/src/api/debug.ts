@@ -21,6 +21,7 @@ export interface DebugResult {
   answer: string
   usage: unknown
   error: unknown
+  request: unknown
   raw: unknown
 }
 
@@ -62,7 +63,7 @@ export async function runDebug(model: DebugModel, prompt: string, fetcher: typeo
     throw new Error('Unsupported debug endpoint')
   }
   const body = model.endpoint === '/v1/responses'
-    ? { model: model.id, stream: false, instructions: '', input: [
+    ? { model: model.id, stream: false, input: [
       { role: 'user', content: [{ type: 'input_text', text: prompt }] },
     ] }
     : { model: model.id, stream: false,
@@ -71,7 +72,7 @@ export async function runDebug(model: DebugModel, prompt: string, fetcher: typeo
   const started = performance.now()
   const result: DebugResult = {
     model: model.id, endpoint: model.endpoint, httpStatus: null, elapsedMs: 0,
-    ok: false, answer: '', usage: null, error: null, raw: null,
+    ok: false, answer: '', usage: null, error: null, request: body, raw: null,
   }
   try {
     const response = await fetcher(model.endpoint, {

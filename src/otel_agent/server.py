@@ -510,17 +510,24 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         raw_models: dict[str, list] = {}
         failures: dict[str, str] = {}
         discovery_errors: dict[str, str] = {}
+        discovery_warnings: dict[str, str] = {}
         for name, prov in providers.items():
             cached = model_cache.get(name)
             if cached is not None:
                 raw_models[name] = cached
+                warning = model_cache.warning(name)
+                if warning:
+                    discovery_warnings[name] = warning
             else:
                 fetched = await fetch_provider_models(
                     client, prov, failures=failures, discovery_errors=discovery_errors,
+                    discovery_warnings=discovery_warnings,
                 )
                 # Failed catalogs must recover immediately, not after an empty-list TTL.
+                # A partial catalog is cached with its warning so the dropped-entry
+                # summary survives until the TTL, without hiding the valid models.
                 if name not in failures and name not in discovery_errors:
-                    model_cache.put(name, fetched)
+                    model_cache.put(name, fetched, warning=discovery_warnings.get(name))
                 raw_models[name] = fetched
 
         if provider is not None and provider in failures:
@@ -545,7 +552,9 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
                 status_code=502,
             )
 
-        return JSONResponse(aggregate_models(raw_models, failures, discovery_errors))
+        return JSONResponse(aggregate_models(
+            raw_models, failures, discovery_errors, discovery_warnings,
+        ))
 
     @app.get("/api/debug/models", response_model=None)
     async def debug_models(request: Request):
@@ -554,10 +563,30 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
         Execution stays on the real gateway routes: no second credential,
         upstream request, telemetry path, or status-masking response wrapper.
         """
-        listed = await list_models(request)
-        body = json.loads(listed.body)
+        # list_models only sees provider when the argument is passed; the
+        # query string is not injected on this direct call. An unknown or
+        # failed provider is an error envelope with no ``data``.
+        scoped = request.query_params.get("provider")
+        listed = await list_models(request, scoped or None)
+        try:
+            body = json.loads(listed.body)
+        except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        # A provider-scoped catalog failure is an error envelope with no ``data``.
+        if listed.status_code >= 400:
+            return JSONResponse(
+                body or {"error": {"message": "Model discovery failed", "type": "model_discovery_error"}},
+                status_code=listed.status_code,
+            )
         models = []
-        for model in body["data"]:
+        entries = body.get("data") or []
+        if not isinstance(entries, list):
+            entries = []
+        for model in entries:
+            if not isinstance(model, dict):
+                continue
             outputs = model.get("output_modalities")
             if outputs and "text" not in outputs:
                 continue

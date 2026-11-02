@@ -30,7 +30,9 @@ The browser posts a fixed single-turn body straight to that same-origin native `
 
 Chat omits optional generation parameters: forcing legacy `max_tokens` would exclude models that require a newer parameter. Anthropic requires `max_tokens`, so Debug supplies 1,024 there. Responses-only uses the gateway's existing stream-folding and parameter accommodations. The page warns about quota/charges, prompt logging and retained response telemetry.
 
-Discovery now distinguishes safe `model_discovery_error` summaries from existing `credential_error` failures. Neither is cached as an empty successful list. Aggregation keeps successful providers. A provider-specific failed catalog is HTTP 502; a credential failure retains HTTP 503. Catalog requests reuse `build_request_headers`; Anthropic also reuses the `/v1` URL normalization. GET removes the body-only Content-Type header to preserve the established header contract.
+Discovery now distinguishes safe `model_discovery_error` summaries from existing `credential_error` failures. Neither is cached as an empty successful list. Aggregation keeps successful providers. A provider-specific failed catalog is HTTP 502; a credential failure retains HTTP 503. A catalog that is not a list is still that hard failure, as is a list whose every entry lacks a usable id. Individual bad entries are dropped when valid siblings remain: those models stay in `/v1/models` and Debug, and a count-only `model_discovery_warning` is cached with them. The warning never includes entry bodies. Catalog requests reuse `build_request_headers`; Anthropic also reuses the `/v1` URL normalization. GET removes the body-only Content-Type header to preserve the established header contract.
+
+The Debug result keeps the fixed outbound JSON on `request` and renders it next to the raw response. Responses requests omit an empty `instructions` field. `GET /api/debug/models` forwards a non-success `/v1/models` envelope instead of assuming a `data` list.
 
 ## Verification
 

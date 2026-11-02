@@ -130,6 +130,69 @@ def test_debug_discovery_handles_provider_removed_during_fetch(tmp_path, monkeyp
         assert len(response.json()["data"]) == 3
 
 
+def test_debug_discovery_keeps_valid_catalog_entries(tmp_path, monkeypatch):
+    """One malformed object must not drop the provider's valid models."""
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"data": [
+            {"id": "kept", "output_modalities": ["text"]},
+            None,
+            {"id": "  "},
+            {"id": 12, "secret": "private-catalog-key"},
+            {"note": "private-catalog-key"},
+            "private-catalog-key",
+            {"id": "also-kept"},
+        ]})
+
+    extra = """  - name: catalog
+    base_url: https://catalog.test/v1
+    api_key: private-catalog-key
+"""
+    with debug_gateway(tmp_path, monkeypatch, handler, extra=extra) as (client, _):
+        response = client.get("/api/debug/models")
+        assert response.status_code == 200
+        body = response.json()
+        ids = {m["id"] for m in body["data"]}
+        assert "catalog/kept" in ids and "catalog/also-kept" in ids
+        warning = next(error for error in body["errors"] if error["provider"] == "catalog")
+        assert warning["type"] == "model_discovery_warning"
+        assert warning["message"] == "Models endpoint omitted 5 invalid catalog entries"
+        assert "private-" not in response.text
+
+        public = client.get("/v1/models")
+        assert public.status_code == 200
+        public_ids = {m["id"] for m in public.json()["data"]}
+        assert "catalog/kept" in public_ids and "catalog/also-kept" in public_ids
+        assert "private-" not in public.text
+        scoped = client.get("/v1/models?provider=catalog")
+        assert scoped.status_code == 200
+        assert {m["id"] for m in scoped.json()["data"]} == {"catalog/kept", "catalog/also-kept"}
+
+        again = client.get("/api/debug/models").json()
+        assert any(
+            error["provider"] == "catalog" and error["type"] == "model_discovery_warning"
+            for error in again["errors"]
+        )
+        assert len(calls) == 1  # valid entries are cached; the warning stays with them
+
+
+def test_debug_models_forwards_provider_scoped_catalog_failure(tmp_path, monkeypatch):
+    extra = """  - name: broken
+    base_url: https://broken.test/v1
+    api_key: private-broken-key
+"""
+    with debug_gateway(tmp_path, monkeypatch, lambda request: httpx.Response(429), extra=extra) as (client, _):
+        failed = client.get("/api/debug/models?provider=broken")
+        assert failed.status_code == 502
+        assert failed.json()["error"]["type"] == "model_discovery_error"
+        assert "private-" not in failed.text
+        unknown = client.get("/api/debug/models?provider=missing")
+        assert unknown.status_code == 400
+        assert unknown.json()["error"]["type"] == "invalid_request_error"
+
+
 def test_debug_discovery_filters_only_known_non_text_models(tmp_path, monkeypatch):
     def handler(request):
         return httpx.Response(200, json={"data": [
@@ -158,7 +221,7 @@ MODELS = [
 
 def text_request(model, endpoint):
     if endpoint == "/v1/responses":
-        return {"model": model, "stream": False, "instructions": "", "input": [
+        return {"model": model, "stream": False, "input": [
             {"role": "user", "content": [{"type": "input_text", "text": "hello debug"}]},
         ]}
     body = {"model": model, "stream": False,

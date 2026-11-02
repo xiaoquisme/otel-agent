@@ -11,17 +11,19 @@ const models = [
 for (const model of models) {
   test(`${model.endpoint}: sends only fixed text payload without credentials`, async () => {
     let calls = 0
+    let sent = null
     const mockFetch = async (url, init) => {
       calls++
       assert.equal(url, model.endpoint)
       assert.equal(init.method, 'POST')
       assert.deepEqual(init.headers, { 'Content-Type': 'application/json' })
       const body = JSON.parse(init.body)
+      sent = body
       assert.equal(body.model, model.id)
       assert.equal(body.stream, false)
       if (url === '/v1/responses') {
         assert.deepEqual(body.input, [{ role: 'user', content: [{ type: 'input_text', text: 'Hello' }] }])
-        assert.equal(body.instructions, '')
+        assert.equal(Object.hasOwn(body, 'instructions'), false)
         assert.equal(body.messages, undefined)
       } else {
         assert.deepEqual(body.messages, [{ role: 'user', content: 'Hello' }])
@@ -40,6 +42,7 @@ for (const model of models) {
     assert.equal(result.ok, true)
     assert.equal(result.httpStatus, 200)
     assert.equal(result.answer, 'answer')
+    assert.deepEqual(result.request, sent)
     assert.equal(result.usage.input_tokens, 3)
     assert.ok(result.elapsedMs >= 0)
     assert.equal(result.error, null)
@@ -51,6 +54,8 @@ for (const model of models) {
     assert.equal(result.ok, false)
     assert.equal(result.httpStatus, 404)
     assert.deepEqual(result.raw, raw)
+    assert.equal(result.request.model, model.id)
+    assert.equal(Object.hasOwn(result.request, 'instructions'), false)
     assert.deepEqual(result.error, raw.error)
     assert.equal(result.answer, '')
   })
@@ -81,6 +86,7 @@ test('network failures are distinct from HTTP failures', async () => {
   const result = await runDebug(models[0], 'Hello', async () => { throw new TypeError('offline') })
   assert.equal(result.httpStatus, null)
   assert.equal(result.error.type, 'network_error')
+  assert.equal(result.request.model, models[0].id)
   assert.equal(result.ok, false)
 })
 
