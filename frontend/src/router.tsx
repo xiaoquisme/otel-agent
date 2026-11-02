@@ -5,6 +5,7 @@ import DetailPage from './pages/DetailPage'
 import UsagePage from './pages/UsagePage'
 import SessionsPage from './pages/SessionsPage'
 import SessionPage from './pages/SessionPage'
+import DebugPage from './pages/DebugPage'
 
 const router = createBrowserRouter([
   {
@@ -16,6 +17,7 @@ const router = createBrowserRouter([
       { path: 'sessions', element: <SessionsPage /> },
       { path: 'sessions/*', element: <SessionPage /> },
       { path: 'usage', element: <UsagePage /> },
+      { path: 'debug', element: <DebugPage /> },
     ],
   },
 ])

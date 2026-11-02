@@ -714,11 +714,13 @@ def test_spa_serves_index_for_request_detail_path(tmp_path):
     assert "SPA" in resp.text
 
 
-def test_spa_serves_index_for_usage_path(tmp_path):
+def test_spa_serves_index_for_dashboard_paths(tmp_path):
     client = _spa_client(tmp_path)
-    resp = client.get("/usage")
-    assert resp.status_code == 200
-    assert "SPA" in resp.text
+    for path in ("/usage", "/sessions", "/sessions/run%2F1", "/debug"):
+        resp = client.get(path)
+        assert resp.status_code == 200, path
+        assert "text/html" in resp.headers["content-type"], path
+        assert "SPA" in resp.text, path
 
 
 def test_spa_does_not_shadow_api_routes(tmp_path):

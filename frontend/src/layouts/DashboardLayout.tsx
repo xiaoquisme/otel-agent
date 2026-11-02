@@ -73,6 +73,7 @@ export default function DashboardLayout() {
           <NavLink to="/" end style={navLinkStyle}>Requests</NavLink>
           <NavLink to="/sessions" style={navLinkStyle}>Sessions</NavLink>
           <NavLink to="/usage" style={navLinkStyle}>Usage</NavLink>
+          <NavLink to="/debug" style={navLinkStyle}>Debug</NavLink>
         </nav>
       </header>
 

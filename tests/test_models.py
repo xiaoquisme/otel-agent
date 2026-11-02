@@ -265,6 +265,104 @@ def test_declared_models_need_no_credential(tmp_path, monkeypatch):
     assert [m["id"] for m in models] == ["gpt-5.6-sol"]
 
 
+def test_upstream_catalog_keeps_valid_entries_when_some_are_malformed():
+    """A mixed list is not a total failure. Dropped entries are counted, not echoed."""
+    provider = Provider(
+        name="openai",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-a",
+        api_format="openai",
+    )
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {"data": [
+                {"id": "gpt-4o"},
+                None,
+                {"id": "gpt-4o-mini"},
+                {"id": ""},
+                {"id": "   "},
+                "sk-secret-value",
+                {"secret": "sk-secret-value"},
+            ]}
+
+    class _Client:
+        async def get(self, url, **kwargs):
+            return _Response()
+
+    warnings: dict[str, str] = {}
+    errors: dict[str, str] = {}
+    models = asyncio.run(fetch_provider_models(
+        _Client(), provider, discovery_errors=errors, discovery_warnings=warnings,
+    ))
+    assert [model["id"] for model in models] == ["gpt-4o", "gpt-4o-mini"]
+    assert errors == {}
+    assert warnings == {"openai": "Models endpoint omitted 5 invalid catalog entries"}
+    assert "sk-secret-value" not in warnings["openai"]
+
+
+def test_upstream_catalog_with_only_malformed_entries_is_a_hard_failure():
+    provider = Provider(
+        name="openai",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-a",
+        api_format="openai",
+    )
+
+    class _Response:
+        status_code = 200
+
+        def json(self):
+            return {"data": [None, {"id": ""}]}
+
+    class _Client:
+        async def get(self, url, **kwargs):
+            return _Response()
+
+    errors: dict[str, str] = {}
+    warnings: dict[str, str] = {}
+    models = asyncio.run(fetch_provider_models(
+        _Client(), provider, discovery_errors=errors, discovery_warnings=warnings,
+    ))
+    assert models == []
+    assert warnings == {}
+    assert errors == {"openai": "Models endpoint returned an invalid catalog"}
+
+
+def test_upstream_catalog_shape_failure_still_drops_the_provider():
+    provider = Provider(
+        name="openai",
+        base_url="https://api.openai.com/v1",
+        api_key="sk-a",
+        api_format="openai",
+    )
+
+    class _Response:
+        def __init__(self, payload):
+            self.status_code = 200
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def __init__(self, payload):
+            self._payload = payload
+
+        async def get(self, url, **kwargs):
+            return _Response(self._payload)
+
+    for payload in ({"data": {"not": "a list"}}, ["gpt-4o"], {"object": "list"}):
+        errors: dict[str, str] = {}
+        models = asyncio.run(fetch_provider_models(
+            _Client(payload), provider, discovery_errors=errors,
+        ))
+        assert models == []
+        assert errors == {"openai": "Models endpoint returned an invalid catalog"}
+
+
 def test_undeclared_provider_still_queries_upstream():
     provider = Provider(
         name="openai",

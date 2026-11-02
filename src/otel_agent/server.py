@@ -509,17 +509,25 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
 
         raw_models: dict[str, list] = {}
         failures: dict[str, str] = {}
+        discovery_errors: dict[str, str] = {}
+        discovery_warnings: dict[str, str] = {}
         for name, prov in providers.items():
             cached = model_cache.get(name)
             if cached is not None:
                 raw_models[name] = cached
+                warning = model_cache.warning(name)
+                if warning:
+                    discovery_warnings[name] = warning
             else:
-                fetched = await fetch_provider_models(client, prov, failures=failures)
-                # A credential failure is not cached: it would hold the empty
-                # list in place for a whole TTL after the operator re-adopts,
-                # which is the same silent absence in slower motion.
-                if name not in failures:
-                    model_cache.put(name, fetched)
+                fetched = await fetch_provider_models(
+                    client, prov, failures=failures, discovery_errors=discovery_errors,
+                    discovery_warnings=discovery_warnings,
+                )
+                # Failed catalogs must recover immediately, not after an empty-list TTL.
+                # A partial catalog is cached with its warning so the dropped-entry
+                # summary survives until the TTL, without hiding the valid models.
+                if name not in failures and name not in discovery_errors:
+                    model_cache.put(name, fetched, warning=discovery_warnings.get(name))
                 raw_models[name] = fetched
 
         if provider is not None and provider in failures:
@@ -538,7 +546,61 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
                 status_code=503,
             )
 
-        return JSONResponse(aggregate_models(raw_models, failures))
+        if provider is not None and provider in discovery_errors:
+            return JSONResponse(
+                {"error": {"message": discovery_errors[provider], "type": "model_discovery_error", "provider": provider}},
+                status_code=502,
+            )
+
+        return JSONResponse(aggregate_models(
+            raw_models, failures, discovery_errors, discovery_warnings,
+        ))
+
+    @app.get("/api/debug/models", response_model=None)
+    async def debug_models(request: Request):
+        """Project discovery into text-debug choices without exposing provider config.
+
+        Execution stays on the real gateway routes: no second credential,
+        upstream request, telemetry path, or status-masking response wrapper.
+        """
+        # list_models only sees provider when the argument is passed; the
+        # query string is not injected on this direct call. An unknown or
+        # failed provider is an error envelope with no ``data``.
+        scoped = request.query_params.get("provider")
+        listed = await list_models(request, scoped or None)
+        try:
+            body = json.loads(listed.body)
+        except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        # A provider-scoped catalog failure is an error envelope with no ``data``.
+        if listed.status_code >= 400:
+            return JSONResponse(
+                body or {"error": {"message": "Model discovery failed", "type": "model_discovery_error"}},
+                status_code=listed.status_code,
+            )
+        models = []
+        entries = body.get("data") or []
+        if not isinstance(entries, list):
+            entries = []
+        for model in entries:
+            if not isinstance(model, dict):
+                continue
+            outputs = model.get("output_modalities")
+            if outputs and "text" not in outputs:
+                continue
+            prov = config.get_provider(model["owned_by"])
+            if prov is None:  # Config may have reloaded while discovery was awaiting I/O.
+                continue
+            if serves_only_responses(prov):
+                endpoint = "/v1/responses"
+            elif prov.api_format == "anthropic":
+                endpoint = "/v1/messages"
+            else:
+                endpoint = "/v1/chat/completions"
+            models.append({"id": model["id"], "owned_by": model["owned_by"], "endpoint": endpoint})
+        return {"data": models, "errors": body.get("errors", []), "log_request_body": config.log_request_body}
 
     # ------------------------------------------------------------------
     # Health check
