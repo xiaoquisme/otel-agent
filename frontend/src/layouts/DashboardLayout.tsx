@@ -11,6 +11,8 @@ const navLinkStyle = ({ isActive }: { isActive: boolean }): React.CSSProperties 
   borderRadius: 'var(--radius-sm)',
   background: isActive ? 'var(--color-bg-overlay)' : 'transparent',
   transition: 'background var(--transition-fast), color var(--transition-fast)',
+  whiteSpace: 'nowrap',
+  flex: '0 0 auto',
 })
 
 export default function DashboardLayout() {
@@ -60,16 +62,23 @@ export default function DashboardLayout() {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
+          gap: 'var(--space-3)',
           flexShrink: 0,
+          minWidth: 0,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-          <ClockIcon size={16} />
-          <h1 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', margin: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flex: '0 0 auto', minWidth: 0 }}>
+          <span style={{ display: 'inline-flex', width: 16, height: 16, flex: 'none' }} aria-hidden="true">
+            <ClockIcon size={16} />
+          </span>
+          <h1 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', margin: 0, whiteSpace: 'nowrap' }}>
             otel-agent
           </h1>
         </div>
-        <nav style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }} aria-label="Main navigation">
+        <nav
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 'var(--space-1)', flex: '1 1 auto', minWidth: 0, overflowX: 'auto' }}
+          aria-label="Main navigation"
+        >
           <NavLink to="/" end style={navLinkStyle}>Requests</NavLink>
           <NavLink to="/sessions" style={navLinkStyle}>Sessions</NavLink>
           <NavLink to="/usage" style={navLinkStyle}>Usage</NavLink>
