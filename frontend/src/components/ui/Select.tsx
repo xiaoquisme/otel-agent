@@ -10,6 +10,8 @@ interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, 'siz
   placeholder?: string
   /** When true, shows a "none selected" state using the placeholder text */
   hasValue?: boolean
+  /** Stretch the control to the width of its container. */
+  fullWidth?: boolean
 }
 
 // ── Size tokens ──
@@ -42,6 +44,7 @@ export default function Select({
   size = 'md',
   placeholder,
   hasValue = true,
+  fullWidth = false,
   disabled = false,
   className = '',
   style,
@@ -66,6 +69,8 @@ export default function Select({
     backgroundRepeat: 'no-repeat',
     backgroundPosition: `right ${size === 'sm' ? '8px' : size === 'md' ? '10px' : '12px'} center`,
     transition: 'var(--transition-fast)',
+    width: fullWidth ? '100%' : undefined,
+    minWidth: fullWidth ? 0 : undefined,
     ...sizeStyles[size],
     ...(style || {}),
   }
@@ -73,7 +78,12 @@ export default function Select({
   return (
     <div
       className={`ui-select-wrapper ${className}`}
-      style={{ position: 'relative', display: 'inline-flex' }}
+      style={{
+        position: 'relative',
+        display: fullWidth ? 'flex' : 'inline-flex',
+        width: fullWidth ? '100%' : undefined,
+        minWidth: fullWidth ? 0 : undefined,
+      }}
     >
       <select
         ref={ref}
