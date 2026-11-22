@@ -538,6 +538,11 @@ def test_proxy_start_spawns_cursor_sidecar_when_cursor_provider(tmp_path, capsys
     monkeypatch.setattr(proxy_mod, "write_pid", lambda pid: written.setdefault("proxy_pid", pid))
     monkeypatch.setattr(proxy_mod, "LOG_FILE", tmp_path / "proxy.log")
     monkeypatch.setattr(proxy_mod, "PORT_FILE", tmp_path / "proxy.port")
+    from otel_agent import lifecycle as lifecycle_mod
+
+    # Judging the previous run reads and may append to the journal; keep
+    # that inside the test rather than in the operator's ~/.otel-agent.
+    monkeypatch.setattr(lifecycle_mod, "LIFECYCLE_FILE", tmp_path / "lifecycle.jsonl")
     monkeypatch.setattr(proxy_mod, "time", SimpleNamespace(sleep=lambda _s: None))
 
     class FakeProc:
@@ -583,6 +588,11 @@ def test_proxy_start_skips_sidecar_without_cursor_provider(tmp_path, capsys, mon
     monkeypatch.setattr(proxy_mod, "write_pid", lambda pid: None)
     monkeypatch.setattr(proxy_mod, "LOG_FILE", tmp_path / "proxy.log")
     monkeypatch.setattr(proxy_mod, "PORT_FILE", tmp_path / "proxy.port")
+    from otel_agent import lifecycle as lifecycle_mod
+
+    # Judging the previous run reads and may append to the journal; keep
+    # that inside the test rather than in the operator's ~/.otel-agent.
+    monkeypatch.setattr(lifecycle_mod, "LIFECYCLE_FILE", tmp_path / "lifecycle.jsonl")
     monkeypatch.setattr(proxy_mod, "time", SimpleNamespace(sleep=lambda _s: None))
 
     class FakeProc:
@@ -759,3 +769,23 @@ def test_doctor_flags_an_unfinished_last_run(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "no shutdown record" in out
     assert "--lifecycle" in out
+
+
+def test_doctor_does_not_flag_the_running_gateway(tmp_path, capsys, monkeypatch):
+    """An unfinished session belonging to the live gateway is the normal state."""
+    from otel_agent import lifecycle
+    from otel_agent.commands import doctor
+    from otel_agent import process
+
+    journal = tmp_path / "lifecycle.jsonl"
+    monkeypatch.setattr(lifecycle, "LIFECYCLE_FILE", journal)
+    lifecycle.append_event("start", journal=journal, port=45638)
+    monkeypatch.setattr(
+        process, "get_proxy_status", lambda: {"pid": __import__("os").getpid(), "port": 45638}
+    )
+
+    doctor._check_lifecycle()
+
+    out = capsys.readouterr().out
+    assert "no unexplained exit reported" in out
+    assert "no shutdown record" not in out

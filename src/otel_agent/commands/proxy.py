@@ -70,8 +70,14 @@ def _append_log_line(message: str) -> None:
 def _report_previous_session(previous: dict | None) -> None:
     """Conclude an unfinished session and make one readable line of it."""
     from otel_agent import lifecycle
+    from otel_agent.process import is_running
 
     if previous is None or previous.get("ended"):
+        return
+    pid = previous.get("pid")
+    if isinstance(pid, int) and is_running(pid):
+        # The session only looks unfinished because it is still going. A second
+        # start attempt must not bank that as an exit.
         return
     lifecycle.record_unclean_exit(previous)
     heartbeat = previous.get("last_heartbeat") or {}

@@ -69,7 +69,7 @@ def _make_args():
 
 def test_prepare_start_reports_unfinished_session(agent_paths):
     journal, log = agent_paths
-    lifecycle.append_event("start", journal=journal, port=45638)
+    lifecycle.append_event("start", journal=journal, port=45638, pid=999999999)
     lifecycle.append_event("heartbeat", journal=journal, uptime_seconds=120, rss_peak_mb=340.5)
 
     proxy_mod._prepare_start(_make_args())
@@ -77,7 +77,7 @@ def test_prepare_start_reports_unfinished_session(agent_paths):
     events = lifecycle.read_events(journal=journal)
     unclean = [event for event in events if event["event"] == "unclean_exit"]
     assert len(unclean) == 1
-    assert unclean[0]["previous_pid"] == os.getpid()
+    assert unclean[0]["previous_pid"] == 999999999
     assert unclean[0]["uptime_seconds"] == 120
     assert "without a shutdown record" in log.read_text()
 
@@ -193,3 +193,16 @@ def test_background_start_runs_child_unbuffered(agent_paths, monkeypatch, tmp_pa
     proxy_mod.handle_proxy_start(_make_args())
 
     assert captured["env"]["PYTHONUNBUFFERED"] == "1"
+
+
+def test_prepare_start_ignores_a_session_still_running(agent_paths, monkeypatch):
+    """A live gateway's unfinished session is not an exit just because a second
+    start attempt noticed it."""
+    journal, log = agent_paths
+    lifecycle.append_event("start", journal=journal, port=45638, pid=os.getpid())
+    monkeypatch.setattr(proxy_mod, "is_running", lambda pid: True)
+
+    proxy_mod._prepare_start(_make_args())
+
+    assert not [e for e in lifecycle.read_events(journal=journal) if e["event"] == "unclean_exit"]
+    assert not log.exists() or "without a shutdown record" not in log.read_text()

@@ -186,10 +186,18 @@ TELEMETRY_WARN_BYTES = 10 * 1024**3
 def _check_lifecycle() -> None:
     """Report gateway runs that ended without a shutdown record."""
     from otel_agent import lifecycle
+    from otel_agent.process import get_proxy_status
 
     total = lifecycle.count_events("unclean_exit", days=UNCLEAN_EXIT_WINDOW_DAYS)
     session = lifecycle.summarize_last_session()
-    pending = session is not None and not session.get("ended")
+    running = get_proxy_status()
+    # A gateway that is up right now has no `end` yet; that is the normal state,
+    # not an unexplained exit.
+    pending = (
+        session is not None
+        and not session.get("ended")
+        and (running is None or session.get("pid") != running.get("pid"))
+    )
     if total == 0 and not pending:
         print("  Gateway exits  ✅ no unexplained exit reported")
         return
