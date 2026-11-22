@@ -1,5 +1,6 @@
 """otel-agent doctor subcommand."""
 
+import shutil
 import socket
 import sys
 from datetime import datetime
@@ -163,8 +164,68 @@ def handle_doctor(args) -> None:
         print(f"  Port {port}  ⚠️ in use")
         print(f"    → Try: otel-agent proxy -p 9090")
 
+    _check_lifecycle()
+    _check_telemetry_size()
+
     print()
     if all_ok:
         print("All checks passed.")
     else:
         print("Some checks failed. Fix issues above.")
+
+
+#: A gateway that keeps disappearing is an operational fact worth naming, not a
+#: broken installation: it never sets `all_ok` to False.
+UNCLEAN_EXIT_WINDOW_DAYS = 7
+
+#: Above this the telemetry database is competing with everything else on the
+#: disk, and the next surprising failure will be blamed on the disk.
+TELEMETRY_WARN_BYTES = 10 * 1024**3
+
+
+def _check_lifecycle() -> None:
+    """Report gateway runs that ended without a shutdown record."""
+    from otel_agent import lifecycle
+
+    total = lifecycle.count_events("unclean_exit", days=UNCLEAN_EXIT_WINDOW_DAYS)
+    session = lifecycle.summarize_last_session()
+    pending = session is not None and not session.get("ended")
+    if total == 0 and not pending:
+        print("  Gateway exits  ✅ no unexplained exit reported")
+        return
+
+    if total:
+        print(
+            f"  Gateway exits  ⚠️ {total} unexplained exit(s) in the last "
+            f"{UNCLEAN_EXIT_WINDOW_DAYS} days"
+        )
+    else:
+        print("  Gateway exits  ⚠️ the last run has no shutdown record")
+    if pending:
+        print(
+            f"    → last run PID {session.get('pid')}, last heartbeat "
+            f"{session.get('last_heartbeat_at') or 'never'}"
+        )
+    print("    → otel-agent proxy logs --lifecycle")
+
+
+def _check_telemetry_size() -> None:
+    """Warn when the telemetry database has grown past a sane size."""
+    from otel_agent.process import AGENT_DIR
+
+    db_path = AGENT_DIR / "telemetry.sqlite"
+    total = 0
+    for path in (db_path, db_path.with_name(db_path.name + "-wal")):
+        try:
+            total += path.stat().st_size
+        except OSError:
+            continue
+    if total == 0:
+        return
+    gib = total / 1024**3
+    if total < TELEMETRY_WARN_BYTES:
+        print(f"  Telemetry db   ✅ {gib:.1f} GiB")
+        return
+    free = shutil.disk_usage(str(db_path.parent)).free / 1024**3
+    print(f"  Telemetry db   ⚠️ {gib:.1f} GiB ({free:.1f} GiB free on disk)")
+    print("    → retention is manual: the gateway never prunes this file")

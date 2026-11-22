@@ -654,3 +654,108 @@ def test_start_cursor_sidecar_skips_missing_provider(tmp_path):
         "    api_format: openai\n"
     )
     assert start_cursor_sidecar(Config(cfg)) is None
+
+
+# ------------------------------------------------------------------
+# Doctor: lifecycle and telemetry-size signals
+# ------------------------------------------------------------------
+
+def test_doctor_reports_unclean_exits(tmp_path, capsys, monkeypatch):
+    from otel_agent import lifecycle
+    from otel_agent.commands import doctor
+
+    journal = tmp_path / "lifecycle.jsonl"
+    monkeypatch.setattr(lifecycle, "LIFECYCLE_FILE", journal)
+    lifecycle.append_event("start", journal=journal)
+    lifecycle.append_event("unclean_exit", journal=journal, previous_pid=11)
+    lifecycle.append_event("start", journal=journal)
+    lifecycle.append_event("unclean_exit", journal=journal, previous_pid=12)
+
+    doctor._check_lifecycle()
+
+    out = capsys.readouterr().out
+    assert "2 unexplained exit(s)" in out
+    assert "--lifecycle" in out
+
+
+def test_doctor_ignores_old_unclean_exits(tmp_path, capsys, monkeypatch):
+    import json
+
+    from otel_agent import lifecycle
+    from otel_agent.commands import doctor
+
+    journal = tmp_path / "lifecycle.jsonl"
+    monkeypatch.setattr(lifecycle, "LIFECYCLE_FILE", journal)
+    journal.write_text(
+        json.dumps({"ts": "2000-01-01T00:00:00Z", "event": "unclean_exit", "pid": 1}) + "\n"
+    )
+
+    doctor._check_lifecycle()
+
+    out = capsys.readouterr().out
+    assert "no unexplained exit reported" in out
+    assert "unexplained exit(s)" not in out
+
+
+def test_doctor_warns_when_telemetry_db_is_large(tmp_path, capsys, monkeypatch):
+    from otel_agent import process
+    from otel_agent.commands import doctor
+
+    (tmp_path / "telemetry.sqlite").write_bytes(b"0" * 64)
+    monkeypatch.setattr(process, "AGENT_DIR", tmp_path)
+    monkeypatch.setattr(doctor, "TELEMETRY_WARN_BYTES", 32)
+
+    doctor._check_telemetry_size()
+
+    out = capsys.readouterr().out
+    assert "Telemetry db" in out
+    assert "retention is manual" in out
+
+
+def test_doctor_skips_telemetry_check_without_db(tmp_path, capsys, monkeypatch):
+    from otel_agent import process
+    from otel_agent.commands import doctor
+
+    monkeypatch.setattr(process, "AGENT_DIR", tmp_path)
+
+    doctor._check_telemetry_size()
+
+    assert "Telemetry db" not in capsys.readouterr().out
+
+
+def test_handle_doctor_wires_lifecycle_checks(tmp_path, capsys, monkeypatch):
+    import argparse
+
+    from otel_agent import lifecycle
+    from otel_agent.commands.doctor import handle_doctor
+
+    journal = tmp_path / "lifecycle.jsonl"
+    monkeypatch.setattr(lifecycle, "LIFECYCLE_FILE", journal)
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("""
+providers:
+  - name: openai
+    base_url: https://api.openai.com/v1
+    api_key: sk-a
+    api_format: openai
+""")
+    handle_doctor(argparse.Namespace(config=str(config_file), port=18766))
+
+    out = capsys.readouterr().out
+    assert "Gateway exits" in out
+
+
+def test_doctor_flags_an_unfinished_last_run(tmp_path, capsys, monkeypatch):
+    from otel_agent import lifecycle
+    from otel_agent.commands import doctor
+
+    journal = tmp_path / "lifecycle.jsonl"
+    monkeypatch.setattr(lifecycle, "LIFECYCLE_FILE", journal)
+    lifecycle.append_event("start", journal=journal, port=45638)
+
+    doctor._check_lifecycle()
+
+    out = capsys.readouterr().out
+    assert "no shutdown record" in out
+    assert "--lifecycle" in out

@@ -1,9 +1,10 @@
 """FastAPI-based LLM API gateway with model-name-based routing."""
 
 from __future__ import annotations
-
+import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -26,6 +27,7 @@ from otel_agent.converter import (
     openai_to_anthropic_response,
 )
 from otel_agent.body_elide import elide_body
+from otel_agent.lifecycle import LifecycleSession, install_signal_journal
 from otel_agent.logger import TelemetryLogger, redact_sensitive_headers
 from otel_agent.sessions import session_fields_from_request
 from otel_agent.models import ModelCache, aggregate_models, fetch_provider_models
@@ -105,9 +107,19 @@ from otel_agent.provider_utils import (
 )
 
 
-def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
-    """Create the FastAPI application with all routes."""
+def create_app(
+    config: Config,
+    telemetry: TelemetryLogger,
+    lifecycle_session: LifecycleSession | None = None,
+) -> FastAPI:
+    """Create the FastAPI application with all routes.
+
+    `lifecycle_session` is optional so the test suite drives the app without
+    appending to the operator's real journal; the gateway always passes one.
+    """
     app = FastAPI(title="otel-agent", version="0.1.0")
+    app.state.lifecycle_session = lifecycle_session
+    app.state.started_monotonic = time.monotonic()
     client = httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0))
     model_cache = ModelCache(config)
     # ------------------------------------------------------------------
@@ -121,8 +133,26 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     set_dashboard_api(dashboard_api)
     app.include_router(dashboard_router)
 
+    @app.on_event("startup")
+    async def lifecycle_startup() -> None:
+        if lifecycle_session is None:
+            return
+        lifecycle_session.record_ready()
+        app.state.restore_signal_handlers = install_signal_journal(lifecycle_session)
+        app.state.heartbeat_task = asyncio.create_task(
+            lifecycle_session.heartbeat_loop()
+        )
+
     @app.on_event("shutdown")
     async def shutdown() -> None:
+        task = getattr(app.state, "heartbeat_task", None)
+        if task is not None:
+            task.cancel()
+        if lifecycle_session is not None:
+            lifecycle_session.record_end("shutdown")
+        restore = getattr(app.state, "restore_signal_handlers", None)
+        if restore is not None:
+            restore()
         await client.aclose()
         dashboard_api.close()
         telemetry.close()
@@ -607,7 +637,24 @@ def create_app(config: Config, telemetry: TelemetryLogger) -> FastAPI:
     # ------------------------------------------------------------------
     @app.get("/health")
     async def health() -> dict:
-        return {"status": "ok"}
+        # `status` stays first and unchanged: existing probes read it, and the
+        # rest of the payload is only there to answer "which process, since
+        # when, and was it still alive a moment ago".
+        from otel_agent import get_version
+
+        session = app.state.lifecycle_session
+        uptime = (
+            session.uptime_seconds
+            if session is not None
+            else round(time.monotonic() - app.state.started_monotonic, 1)
+        )
+        return {
+            "status": "ok",
+            "pid": os.getpid(),
+            "uptime_seconds": uptime,
+            "version": get_version(),
+            "last_heartbeat": getattr(session, "last_heartbeat_at", None),
+        }
 
     # SPA catch-all must be last so GET /v1/models and /health stay JSON.
     _pkg_dir = Path(__file__).parent

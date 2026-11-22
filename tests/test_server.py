@@ -852,7 +852,9 @@ def test_v1_models_is_json_not_spa_html(tmp_path):
         assert not any(item.get("id") == "auto" for item in body["data"])
 
         health = client.get("/health")
-        assert health.json() == {"status": "ok"}
+        # The payload grew (process identity, uptime, last heartbeat); the
+        # probe contract is that `status` still says ok.
+        assert health.json()["status"] == "ok"
     telemetry.close()
 
 
@@ -1607,7 +1609,9 @@ async def test_responses_route_normalizes_request_without_rewriting_semantics(tm
 
         # Regression: the new route must not disturb the JSON endpoints.
         assert health.headers["content-type"].startswith("application/json")
-        assert health.json() == {"status": "ok"}
+        # The payload grew (process identity, uptime, last heartbeat); the
+        # probe contract is that `status` still says ok.
+        assert health.json()["status"] == "ok"
 
 
 @pytest.mark.anyio
@@ -2762,3 +2766,65 @@ async def test_models_route_omits_capability_fields_when_the_catalog_is_down(tmp
     assert "errors" not in body
     for entry in body["data"]:
         assert set(entry) == {"id", "object", "created", "owned_by"}
+
+
+# ------------------------------------------------------------------
+# Health payload and lifecycle wiring
+# ------------------------------------------------------------------
+
+import os
+
+from starlette.testclient import TestClient
+
+from otel_agent import lifecycle as lifecycle_mod
+
+
+def test_health_keeps_status_and_adds_process_identity():
+    with tempfile.TemporaryDirectory() as td:
+        config = _make_test_config(td)
+        telemetry = TelemetryLogger(Path(td) / "health.sqlite")
+        app = create_app(config, telemetry)
+
+        with TestClient(app) as client:
+            body = client.get("/health").json()
+
+        assert body["status"] == "ok"
+        assert body["pid"] == os.getpid()
+        assert body["uptime_seconds"] >= 0
+        assert body["version"]
+        assert body["last_heartbeat"] is None
+
+
+def test_lifespan_journals_ready_and_single_shutdown(tmp_path):
+    journal = tmp_path / "lifecycle.jsonl"
+    session = lifecycle_mod.LifecycleSession(journal=journal, heartbeat_interval=3600)
+    config = _make_test_config(str(tmp_path))
+    telemetry = TelemetryLogger(tmp_path / "life.sqlite")
+    session.record_start()
+    app = create_app(config, telemetry, lifecycle_session=session)
+
+    with TestClient(app) as client:
+        session.record_heartbeat()
+        assert client.get("/health").json()["last_heartbeat"] == session.last_heartbeat_at
+
+    events = lifecycle_mod.read_events(journal=journal)
+    names = [event["event"] for event in events]
+    assert names[0] == "start"
+    assert names[1] == "ready"
+    assert names.count("heartbeat") == 1
+    ends = [event for event in events if event["event"] == "end"]
+    assert len(ends) == 1
+    assert ends[0]["reason"] == "shutdown"
+
+
+def test_app_without_session_never_touches_the_journal(tmp_path, monkeypatch):
+    journal = tmp_path / "lifecycle.jsonl"
+    monkeypatch.setattr(lifecycle_mod, "LIFECYCLE_FILE", journal)
+    config = _make_test_config(str(tmp_path))
+    telemetry = TelemetryLogger(tmp_path / "quiet.sqlite")
+    app = create_app(config, telemetry)
+
+    with TestClient(app) as client:
+        client.get("/health")
+
+    assert journal.exists() is False
