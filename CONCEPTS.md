@@ -28,3 +28,6 @@ A deterministic note attached to an Agent Session trajectory. It has a rule id, 
 
 ### Model Capability Metadata
 The four optional fields on each `/v1/models` entry — `context_length`, `max_output_tokens` (numbers), `input_modalities`, `output_modalities` (string arrays) — sourced in order: upstream passthrough, then OpenRouter public-catalog backfill (whole-catalog cache, normalized exact id match, stale-on-error), then omission. Never guessed and never hand-declared in config — a missing value means the field is absent, not zero.
+
+### Lifecycle Journal
+Append-only JSONL at `~/.otel-agent/lifecycle.jsonl` recording each gateway run: a `start` (pid, port, version, config, argv), a `heartbeat` every 60s (uptime, peak RSS, threads), and one terminal event — `end` with a reason, or `unclean_exit` concluded by the next start. It exists because a process that dies without a shutdown record leaves nothing in `proxy.log` to explain it. `proxy status`, `proxy logs --lifecycle`, and `doctor` read it; nothing else does.

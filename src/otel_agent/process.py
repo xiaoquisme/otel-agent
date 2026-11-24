@@ -11,6 +11,14 @@ PID_FILE = AGENT_DIR / "proxy.pid"
 PORT_FILE = AGENT_DIR / "proxy.port"
 LOG_FILE = AGENT_DIR / "proxy.log"
 
+#: Append-only record of gateway starts, heartbeats, and exits. Kept beside the
+#: PID file rather than inside `proxy.log` so a rotated or truncated log never
+#: takes the exit record with it.
+LIFECYCLE_FILE = AGENT_DIR / "lifecycle.jsonl"
+
+#: Python tracebacks from native crashes (faulthandler) and uncaught exceptions.
+LIFECYCLE_CRASH_FILE = AGENT_DIR / "lifecycle-crash.log"
+
 DASHBOARD_PID_FILE = AGENT_DIR / "dashboard.pid"
 DASHBOARD_PORT_FILE = AGENT_DIR / "dashboard.port"
 DASHBOARD_LOG_FILE = AGENT_DIR / "dashboard.log"

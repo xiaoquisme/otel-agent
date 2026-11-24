@@ -59,6 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
     logs_p = proxy_sub.add_parser("logs", help="View proxy logs")
     logs_p.add_argument("-F", "--follow", action="store_true", help="Stream logs in real-time")
     logs_p.add_argument("-n", "--lines", type=int, default=50, help="Number of recent lines (default: 50)")
+    logs_p.add_argument(
+        "--lifecycle",
+        action="store_true",
+        help="Show gateway start/heartbeat/exit events instead of request logs",
+    )
     logs_p.add_argument("-c", "--config", type=str, default="~/.otel-agent/config.yaml", help="Config file path")
 
     # Also support `otel-agent proxy` with no subcommand (default to start)
